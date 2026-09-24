@@ -2,7 +2,8 @@
 
 // Una sola interfaz de wallet para las vistas:
 //   - Pollar (por defecto): login, dirección, trustline y firma.
-//       * wallet custodial (internal): signAndSubmitTx(xdr) firma y envía en el servidor de Pollar.
+//       * wallet custodial (internal): getClient().signTx(xdr) firma en el servidor de Pollar y
+//         devuelve un fee-bump patrocinado por la app; el frontend lo envía al RPC.
 //       * wallet externa (Freighter, Albedo… conectada por Pollar): signTx + envío al RPC.
 //   - Freighter (NEXT_PUBLIC_WALLET=freighter): respaldo; la extensión firma deposit y
 //     client_release. Si hay sesión de Pollar con la misma dirección, Pollar activa la trustline.
@@ -10,6 +11,7 @@
 
 import * as freighter from "@stellar/freighter-api";
 import { usePollar } from "@pollar/react";
+import { FeeBumpTransaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import { useSyncExternalStore } from "react";
 
 import { NETWORK_PASSPHRASE, POLLAR_API_KEY, USDC, WALLET_MODE } from "@/lib/config";
@@ -96,17 +98,27 @@ function usePollarWallet(): Wallet {
     signAndSend: async (xdr) => {
       if (!pollar.isAuthenticated || !pAddress) throw new ChainError("Inicia sesión con Pollar primero.");
       if (!pollar.verified) throw new ChainError("La sesión de Pollar todavía se está confirmando; intenta en unos segundos.");
+      // Las wallets custodiales de Pollar no tienen XLM (Pollar patrocina sus reservas). El
+      // client.signTx de @pollar/core firma en el servidor y, con el patrocinio del dashboard,
+      // devuelve un fee-bump pagado por la gas wallet de la app; aquí solo se envía al RPC.
+      // (signAndSubmitTx no aplicó el patrocinio y la red respondió txInsufficientBalance.)
+      const signed = custody === "external" ? await pollar.signTx(xdr) : await pollar.getClient().signTx(xdr);
+      if (signed.status !== "signed") {
+        throw new ChainError(`Pollar no firmó: ${signed.message ?? signed.details ?? signed.code ?? "error"}`);
+      }
+      const feeBump = TransactionBuilder.fromXDR(signed.signedXdr, NETWORK_PASSPHRASE) instanceof FeeBumpTransaction;
+      console.info("[cumpleycobra] firma de Pollar", { custody, sponsored: signed.sponsored ?? null, feeBump });
       let hash: string;
-      if (custody === "external") {
-        const signed = await pollar.signTx(xdr);
-        if (signed.status !== "signed") throw new ChainError(`Pollar no firmó: ${signed.message ?? signed.details ?? "error"}`);
+      try {
         hash = await submitSigned(signed.signedXdr);
-      } else {
-        const out = await pollar.signAndSubmitTx(xdr);
-        if (out.status === "error" || !out.hash) {
-          throw new ChainError(`Pollar no firmó o no envió: ${out.status === "error" ? (out.message ?? out.details ?? out.code ?? "error") : "sin hash"}`);
+      } catch (e) {
+        if (!feeBump && /InsufficientBalance/.test(String(e))) {
+          throw new ChainError(
+            `Pollar firmó sin patrocinar la comisión (sponsored=${signed.sponsored ?? "sin dato"}) y la wallet no tiene XLM. ` +
+              "Activa el patrocinio en el dashboard (Treasury → Sponsorship) o fondea la wallet con XLM.",
+          );
         }
-        hash = out.hash;
+        throw e;
       }
       await waitForSuccess(hash);
       return hash;

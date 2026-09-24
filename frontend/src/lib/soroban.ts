@@ -45,7 +45,7 @@ function explain(e: unknown): ChainError {
 async function prepared(source: string, op: ReturnType<Contract["call"]>): Promise<string> {
   try {
     const account = await server.getAccount(source);
-    const tx = new TransactionBuilder(account, { fee: "1000000", networkPassphrase: NETWORK_PASSPHRASE })
+    const tx = new TransactionBuilder(account, { fee: "100000", networkPassphrase: NETWORK_PASSPHRASE })
       .addOperation(op)
       .setTimeout(120)
       .build();
@@ -122,7 +122,10 @@ export async function usdcStatus(address: string): Promise<UsdcStatus> {
 export async function submitSigned(signedXdr: string): Promise<string> {
   const tx: Transaction | FeeBumpTransaction = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
   const sent = await server.sendTransaction(tx);
-  if (sent.status === "ERROR") throw new ChainError("La red rechazó la transacción al enviarla.");
+  if (sent.status === "ERROR") {
+    const code = sent.errorResult?.result.type ?? "desconocido";
+    throw new ChainError(`La red rechazó la transacción al enviarla (${code}).`);
+  }
   return sent.hash;
 }
 

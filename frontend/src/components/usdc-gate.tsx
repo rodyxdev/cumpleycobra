@@ -104,7 +104,7 @@ export function UsdcGate({ role, children }: { role: "cliente" | "programador"; 
 
   return (
     <>
-      <div className="text-xs text-muted-foreground" data-testid="saldo-usdc">
+      <div className="text-xs text-muted-foreground" data-testid="saldo-usdc" data-address={wallet.address} data-units={status.units}>
         Wallet {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)} · saldo {formatUsdc(status.units)}
       </div>
       {children(status)}

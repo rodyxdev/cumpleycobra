@@ -18,6 +18,8 @@ MVP para GOYA HACK (reto Stellar BAF + pool de Pollar). Una sola persona constru
 
 - Contrato propio, extendiendo el escrow de la guía: https://github.com/CriptoUNAM-Team/Stellar-Guide (`contracts/escrow`, soroban-sdk 25, target `wasm32v1-none`). Trustless Work solo es plan B.
 - Pollar firma la invocación de `deposit` (confirmado). Freighter solo como respaldo.
+  - Verificado en la fase 3: `getClient().signTx(xdr)` de `@pollar/core` firma en el servidor y, con Treasury → Sponsorship activo, devuelve un fee-bump pagado por la gas wallet de la app; el frontend lo envía al RPC. `signAndSubmitTx` no aplicó el patrocinio.
+  - Wallets custodiales de Pollar (`internal`, G…) con 0 XLM: reservas patrocinadas por Pollar. Las `smart` (C…) no sirven para este flujo.
 - USDC de testnet disponible en el faucet de Circle (confirmado).
 - Pollar es prioridad: el reto reparte un pool de 200 USD a quien lo integre. Nunca se recorta por completo.
 - Estado del backend persistido en `backend/state.json` (no es base de datos). El backend corre **local** en la demo.

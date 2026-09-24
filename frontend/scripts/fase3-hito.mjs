@@ -10,6 +10,7 @@
 // Uso (desde frontend/, con backend en :8000 y frontend en :3000):
 //   node scripts/fase3-hito.mjs
 
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,22 +39,38 @@ async function shot(page, name) {
   log("captura", `docs/fases/img/${name}`);
 }
 
-async function open(role, x) {
-  const browser = await puppeteer.launch({
-    executablePath: CHROME,
-    headless: false,
-    userDataDir: path.join(PERFILES, role),
-    defaultViewport: { width: 1180, height: 900 },
-    args: [`--window-position=${x},0`, "--window-size=1200,1000", "--lang=es-MX"],
-    protocolTimeout: 600000,
-  });
-  const [page] = await browser.pages();
+// Chrome normal (sin banderas de automatización) con perfil propio y puerto de depuración; el
+// script solo se conecta. Las ventanas lanzadas por puppeteer se quedaban en negro o se cerraban.
+async function open(role, x, port) {
+  const proc = spawn(CHROME, [
+    `--user-data-dir=${path.join(PERFILES, role)}`,
+    `--remote-debugging-port=${port}`,
+    `--window-position=${x},0`,
+    "--window-size=960,1000",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--lang=es-MX",
+    `${APP}/cliente`,
+  ], { detached: true, stdio: "ignore" });
+  proc.unref();
+  for (let i = 0; i < 60; i++) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (r.ok) break;
+    } catch { /* todavía arrancando */ }
+    await sleep(500);
+  }
+  const browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${port}`, defaultViewport: null, protocolTimeout: 600000 });
+  const pages = await browser.pages();
+  const page = pages.find((pg) => pg.url().startsWith(APP)) ?? pages[0] ?? (await browser.newPage());
   page.on("pageerror", (e) => log(`[${role}] error en la página:`, e.message));
+  page.on("close", () => log(`[${role}] se cerró la pestaña`));
   return { browser, page };
 }
 
 /** Espera a que la wallet esté lista: sesión iniciada y trustline de USDC (la activa si falta). */
 async function walletReady(page, role) {
+  await page.bringToFront();
   log(`[${role}] esperando inicio de sesión en Pollar (hazlo en la ventana "${role}")…`);
   await wait(page, () => document.querySelector('[data-testid="saldo-usdc"],[data-testid="activar-usdc"]'), 900000);
   if (await page.$('[data-testid="activar-usdc"]')) {
@@ -61,9 +78,11 @@ async function walletReady(page, role) {
     await clickText(page, "button", "Activar USDC");
     await wait(page, () => document.querySelector('[data-testid="saldo-usdc"]'), 120000);
   }
-  const saldo = await page.$eval('[data-testid="saldo-usdc"]', (e) => e.textContent);
-  log(`[${role}] ${saldo}`);
-  return saldo;
+  const info = await page.$eval('[data-testid="saldo-usdc"]', (e) => ({
+    text: e.textContent, address: e.getAttribute("data-address"), units: Number(e.getAttribute("data-units")),
+  }));
+  log(`[${role}] ${info.text}`);
+  return info;
 }
 
 async function createAndDeposit(page) {
@@ -99,14 +118,24 @@ async function acceptAndSend(page, invite, caseLabel) {
   return { tx: terminal.match(/Transacción ([0-9a-f]{64})/)?.[1] ?? null, terminal };
 }
 
-const cliente = await open("cliente", 0);
-const programador = await open("programador", 700);
+const cliente = await open("cliente", 0, 9331);
+const programador = await open("programador", 960, 9332);
 const summary = {};
 try {
-  await cliente.page.goto(`${APP}/cliente`, { waitUntil: "load" });
-  await programador.page.goto(`${APP}/cliente`, { waitUntil: "load" }); // solo para iniciar sesión
-  summary.saldo_cliente = await walletReady(cliente.page, "cliente");
-  summary.saldo_programador = await walletReady(programador.page, "programador");
+  const wc = await walletReady(cliente.page, "cliente");
+  const wp = await walletReady(programador.page, "programador");
+  if (wc.address === wp.address) throw new Error("Cliente y programador tienen la misma wallet: usa dos cuentas distintas.");
+  summary.cliente = wc.address;
+  summary.programador = wp.address;
+  // Dos tareas de 1 USDC: si el cliente tiene menos de 2 USDC, se fondea desde cyc-client.
+  if (wc.units < 20_000_000) {
+    const falta = ((20_000_000 - wc.units) / 10_000_000).toFixed(7).replace(/0+$/, "").replace(/[.]$/, "");
+    log(`[cliente] fondeando ${falta} USDC desde cyc-client`);
+    const out = execFileSync("bash", ["scripts/fondear.sh", wc.address, falta], { cwd: ROOT, encoding: "utf8" });
+    summary.fondeo = out.match(/Transacción: ([0-9a-f]{64})/)?.[1];
+    log("fondeo", summary.fondeo);
+    await wait(cliente.page, () => Number(document.querySelector('[data-testid="saldo-usdc"]')?.getAttribute("data-units")) >= 20_000_000, 60000);
+  }
 
   // ----- Tarea 1: caso A pagado --------------------------------------------------------------
   const t1 = await createAndDeposit(cliente.page);
@@ -135,6 +164,6 @@ try {
 } finally {
   writeFileSync(path.join(ROOT, "scripts", ".logs", "fase3-hito.json"), JSON.stringify(summary, null, 1));
   console.log(JSON.stringify(summary, null, 1));
-  await cliente.browser.close();
-  await programador.browser.close();
+  await cliente.browser.disconnect(); // las ventanas quedan abiertas
+  await programador.browser.disconnect();
 }

@@ -47,6 +47,28 @@ backend/.venv/Scripts/python -m uvicorn backend.main:app --port 8000
 cd frontend && npm install && npm run build && npx next start -p 3000
 ```
 
+## Wallet: Pollar (y respaldos)
+
+La app usa [Pollar](https://pollar.xyz) para iniciar sesión, obtener la wallet, activar USDC y firmar `deposit` y `client_release`. Las transacciones se arman en el navegador con `@stellar/stellar-sdk` y se preparan contra el RPC. Pollar las firma en su servidor y las envuelve en un fee-bump pagado por la app, así que las wallets no necesitan XLM. La app las envía al RPC y consulta hasta `SUCCESS`.
+
+Configuración del dashboard de Pollar (https://dashboard.pollar.xyz) para desarrollo local:
+
+| Sección | Qué configurar |
+| --- | --- |
+| Build → API Keys | Clave publicable de testnet (`pub_testnet_…`) en `frontend/.env.local` como `NEXT_PUBLIC_POLLAR_API_KEY` |
+| Build → Domains | `http://localhost:3000` (sin él, la API responde `403 ORIGIN_NOT_ALLOWED`) |
+| Autenticación | Correo (OTP). Google necesita además URIs de redirección (sin ellas: `APPLICATION_HAS_NO_REDIRECT_URIS`) |
+| Treasury → Tokens & Trustlines | `USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` |
+| Treasury → Auth Policy | El contrato `CAWAZODOFP67HETHN4NLYOECPCJACGLUTCLARVGLBZ7TJDLT4KLQRATQ` |
+| Treasury → Sponsorship | Activo para contratos y transferencias (sin él, la red responde `txInsufficientBalance`) |
+
+Si la firma con Pollar falla, hay dos respaldos:
+
+- **Plan B:** `NEXT_PUBLIC_WALLET=freighter`. La extensión Freighter firma `deposit` y `client_release`, y Pollar se queda para iniciar sesión, la wallet y la trustline.
+- **Plan C:** `bash scripts/deposit.sh TASK_ID MONTO PLAZO_S RULES_HASH` deposita con la Stellar CLI.
+
+Para la demo, `bash scripts/fondear.sh DIRECCION_G MONTO_USDC` manda USDC de testnet desde `cyc-client` a una wallet que ya activó USDC.
+
 ## Hashes verificables
 
 Todos los hashes usan SHA-256 sobre JSON canónico:
