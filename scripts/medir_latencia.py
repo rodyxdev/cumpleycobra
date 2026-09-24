@@ -30,7 +30,14 @@ async def una_llamada(client, model, code):
     config = gemini.build_config()
     prompt = gemini.build_prompt(DEMO_SPEC, code)
     t0 = time.monotonic()
-    resp = await client.aio.models.generate_content(model=model, contents=prompt, config=config)
+    try:
+        resp = await asyncio.wait_for(
+            client.aio.models.generate_content(model=model, contents=prompt, config=config),
+            timeout=gemini.GEMINI_TIMEOUT_SECS)
+    except Exception as exc:  # noqa: BLE001 - se reporta como intento fallido
+        return {"segundos": round(time.monotonic() - t0, 2), "approved_final": None,
+                "error": f"{type(exc).__name__} {getattr(exc, 'code', '')}".strip(), "security_flags": None, "trace": None, "logic": None,
+                "tokens_razonamiento": None, "tokens_salida": None, "reason": None, "comparison": None}
     secs = time.monotonic() - t0
     v = gemini._parse(resp.text, len(DEMO_SPEC["criteria"]))
     um = resp.usage_metadata
@@ -47,6 +54,7 @@ async def una_llamada(client, model, code):
         "tokens_razonamiento": um.thoughts_token_count if um else None,
         "tokens_salida": um.candidates_token_count if um else None,
         "reason": v.reason if v else None,
+        "comparison": v.comparison if v else None,
     }
 
 
@@ -69,15 +77,16 @@ async def main(label: str, n: int):
                   f"razonamiento={r['tokens_razonamiento']} salida={r['tokens_salida']}")
         resultados[caso] = corridas
 
-    print(f"\n| Caso | Mediana (s) | Máximo (s) | Tokens de razonamiento (mediana) | Tokens de salida (mediana) | Veredictos correctos |")
-    print("| --- | --- | --- | --- | --- | --- |")
+    print(f"\n| Caso | Mediana (s) | Máximo (s) | Tokens de razonamiento (mediana) | Tokens de salida (mediana) | Veredictos correctos | Intentos > 20 s o fallidos |")
+    print("| --- | --- | --- | --- | --- | --- | --- |")
     for caso, corridas in resultados.items():
         t = [c["segundos"] for c in corridas]
+        fallos = sum(1 for c in corridas if c.get("error"))
         th = [c["tokens_razonamiento"] or 0 for c in corridas]
         out = [c["tokens_salida"] or 0 for c in corridas]
         ok = sum(1 for c in corridas if c["approved_final"] == ESPERADO[caso])
         print(f"| {caso} | {statistics.median(t):.1f} | {max(t):.1f} | {statistics.median(th):.0f} | "
-              f"{statistics.median(out):.0f} | {ok}/{len(corridas)} |")
+              f"{statistics.median(out):.0f} | {ok}/{len(corridas)} | {fallos} |")
     out_file = ROOT / "scripts/.logs" / f"latencia-{label}.json"
     out_file.parent.mkdir(parents=True, exist_ok=True)
     out_file.write_text(json.dumps(resultados, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -64,7 +64,9 @@ Procedimiento, en este orden:
 2. logic: describe la lógica del código. Máximo 5 entradas, breves (una línea cada una).
 3. comparison: compara contra CADA criterio acordado, en el mismo orden, exactamente una \
 entrada por criterio. Cada entrada empieza con "✓ " si el criterio se cumple o con "✗ " si \
-no, seguido de "Criterio N: " y la razón concreta.
+no, seguido de "Criterio N: " y la razón concreta. En comparison describe si se cumple cada \
+criterio en términos de comportamiento observable; no cites código, nombres de variables ni \
+funciones internas.
 4. Veredicto: approved = true solo si TODOS los criterios se cumplen y security_flags está \
 vacío. Si no puedes confirmar un criterio con el código, márcalo con ✗ y rechaza.
 
@@ -148,7 +150,7 @@ async def evaluate(client: genai.Client, model: str, spec: dict, clean_code: str
         try:
             resp = await asyncio.wait_for(
                 client.aio.models.generate_content(model=model, contents=prompt, config=config),
-                timeout=GEMINI_TIMEOUT_SECS + 5,
+                timeout=GEMINI_TIMEOUT_SECS,  # tope duro por intento
             )
         except Exception as exc:  # noqa: BLE001 - se clasifica abajo
             log.warning("Gemini: intento %d falló tras %.1f s (%s)", attempt,

@@ -177,7 +177,7 @@ def test_antes_de_reintentar_gemini_revisa_el_plazo(api):
     chain = FakeChain(NOW + 130, ok_release)
 
     async def timeout(**_):
-        chain.now = NOW + 60  # quedan 70 s: no alcanza para otro intento (45 s) + release (30 s)
+        chain.now = NOW + 90  # quedan 40 s: no alcanza para otro intento (20 s) + release (30 s)
         raise httpx.ReadTimeout("timeout")
 
     evaluate, used, _ = api(chain)

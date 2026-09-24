@@ -319,8 +319,8 @@ Si falla: `stage = "deterministic"`, no se llama a Gemini. Argumento para la def
 - Respuesta fuera de esquema → un reintento, luego `ENGINE_UNAVAILABLE` y no se paga.
 - Caché por `task_id` + `code_hash`.
 - Reintentos solo ante errores transitorios (timeout, 429, 5xx): 2 reintentos, backoff 1 s y 3 s.
-- Timeout de Gemini: 45 s. Llamadas a Gemini y al RPC sin bloquear el event loop (cliente asíncrono o `run_in_threadpool`).
-- Márgenes de tiempo (plazo on-chain): 120 s para entrar a `/evaluate`; 75 s antes de cada reintento a Gemini (45 s del intento + 30 s del release); 30 s antes de firmar el release. Si no alcanza, se responde sin contar el envío.
+- Tope por intento a Gemini: 20 s. Llamadas a Gemini y al RPC sin bloquear el event loop (cliente asíncrono o `run_in_threadpool`).
+- Márgenes de tiempo (plazo on-chain): 120 s para entrar a `/evaluate`; 50 s antes de cada reintento a Gemini (20 s del intento + 30 s del release); 30 s antes de firmar el release. Si no alcanza, se responde sin contar el envío.
 - `release` que devuelve #9 (`DeadlinePassed`): no se reintenta; `approved: true`, `transaction_hash: null`. #6 (`NotFunded`) con la tarea `Released` para ese programador: éxito con el hash guardado. Si falla por falta de trustline, no se marca como reintentable por red.
 
 **`release` desde el backend:** armar la invocación, `prepare_transaction` en el RPC, firmar con la llave del árbitro, enviar y consultar hasta `SUCCESS` o `FAILED`. Guardar el hash en `state.json`.

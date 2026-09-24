@@ -13,7 +13,7 @@ load_dotenv(BACKEND_DIR / ".env")
 
 # Presupuesto de tiempo (segundos de plazo on-chain que deben quedar).
 MIN_SECONDS_TO_EVALUATE = 120   # /evaluate rechaza con DEADLINE_TOO_CLOSE por debajo
-GEMINI_TIMEOUT_SECS = 45
+GEMINI_TIMEOUT_SECS = 20     # tope por intento a Gemini
 RELEASE_BUDGET_SECS = 30        # preparar, firmar, enviar y confirmar el release
 # Antes de cada intento a Gemini debe alcanzar para el intento y para el release.
 GEMINI_ATTEMPT_BUDGET_SECS = GEMINI_TIMEOUT_SECS + RELEASE_BUDGET_SECS
