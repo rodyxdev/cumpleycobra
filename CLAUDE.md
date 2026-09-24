@@ -239,6 +239,8 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | `POST /evaluate` | `task_id`, `freelancer_address`, `code`, `video_url` + header `X-Freelancer-Token` | Veredicto |
 | `POST /tasks/{task_id}/consent` | header `X-Freelancer-Token` | Permite al cliente ver el código tras un rechazo |
 | `GET /tasks/{task_id}/delivery` | header `X-Client-Token` | Código + video; solo si `Released` o con consentimiento |
+| `GET /tasks/{task_id}/verdicts` | header `X-Client-Token` | Veredictos para la vista del cliente: `approved`, `stage`, `reason`, `comparison`, `transaction_hash` (nunca `trace`, `logic` ni código) |
+| `GET /demo` | — | Plantilla fija y casos A–D (fuente única: `backend/plantilla.py` y `backend/casos/`) |
 | `GET /fx/usd-mxn` | — | `rate`, `as_of`, `source` |
 | `GET /health` | — | `{"ok": true}` |
 

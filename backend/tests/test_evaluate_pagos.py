@@ -248,3 +248,23 @@ def test_release_por_red_con_trustline_si_es_reintentable(api):
     assert r["transaction_hash"] is None and "red" in r["reason"]
     r2 = evaluate().json()
     assert r2["stage"] == "cache" and r2["transaction_hash"] == "aa" * 32 and used() == 1
+
+
+def test_verdicts_del_cliente_sin_trace_logic_ni_codigo(api):
+    evaluate, _, task_id = api(FakeChain(NOW + 600, ok_release))
+    evaluate()
+    client = TestClient(main.app)
+    ct = main.app.state.store.tasks[task_id]["client_token"]
+    assert client.get(f"/tasks/{task_id}/verdicts").status_code == 403
+    body = client.get(f"/tasks/{task_id}/verdicts", headers={"X-Client-Token": ct}).json()
+    v = body["verdicts"][0]
+    assert set(v) == {"code_hash", "approved", "stage", "reason", "comparison", "transaction_hash"}
+    texto = json.dumps(body, ensure_ascii=False)
+    assert "paso" not in texto and "lógica" not in texto and "aplicar_descuento(precios" not in texto
+
+
+def test_demo_expone_plantilla_y_casos():
+    body = TestClient(main.app).get("/demo").json()
+    assert body["spec"] == DEMO_SPEC
+    assert [c["id"] for c in body["casos"]] == ["A", "B", "C", "D"]
+    assert [c["principal"] for c in body["casos"]] == [True, True, True, False]

@@ -6,6 +6,7 @@ el modelo es manipulación: va a security_flags y se rechaza.
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 
@@ -18,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from .config import GEMINI_TIMEOUT_SECS, Settings
 
 BACKOFF_SECS = (1, 3)  # 2 reintentos ante errores transitorios
+log = logging.getLogger("cumpleycobra.gemini")
 
 # gemini-3.5-flash razona internamente por defecto (usage_metadata.thoughts_token_count > 0).
 # ThinkingConfig.thinking_level (enum ThinkingLevel del SDK instalado) lo acota.
@@ -142,12 +144,15 @@ async def evaluate(client: genai.Client, model: str, spec: dict, clean_code: str
         if attempt > 0 and not await time_ok():
             raise OutOfTime()
         attempt += 1
+        t0 = time.monotonic()
         try:
             resp = await asyncio.wait_for(
                 client.aio.models.generate_content(model=model, contents=prompt, config=config),
                 timeout=GEMINI_TIMEOUT_SECS + 5,
             )
         except Exception as exc:  # noqa: BLE001 - se clasifica abajo
+            log.warning("Gemini: intento %d falló tras %.1f s (%s)", attempt,
+                        time.monotonic() - t0, type(exc).__name__)
             if _is_transient(exc) and transient_retries < len(BACKOFF_SECS):
                 await asyncio.sleep(BACKOFF_SECS[transient_retries])
                 transient_retries += 1
@@ -157,6 +162,7 @@ async def evaluate(client: genai.Client, model: str, spec: dict, clean_code: str
         verdict = _parse(resp.text, len(spec["criteria"]))
         if verdict is not None:
             return verdict, time.monotonic() - started
+        log.warning("Gemini: intento %d fuera de esquema tras %.1f s", attempt, time.monotonic() - t0)
         if schema_retries < 1:  # respuesta fuera de esquema: un reintento
             schema_retries += 1
             continue

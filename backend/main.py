@@ -9,6 +9,7 @@ import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import anyio.from_thread
 from fastapi import FastAPI, Header, Request
@@ -30,6 +31,7 @@ from .config import (
 )
 from .deterministic import analyze
 from .hashing import code_hash, rules_hash, verdict_hash
+from .plantilla import DEMO_RAW_REQUEST, DEMO_SPEC
 from .state import StateStore
 from .stellar_client import (
     ERR_DEADLINE_PASSED,
@@ -288,6 +290,44 @@ async def accept(task_id: str, body: AcceptIn):
             task["accepted_at"] = int(time.time())
             store().save()
         return {"freelancer_token": task["freelancer_token"]}
+
+
+CASOS_DIR = Path(__file__).resolve().parent / "casos"
+CASOS = [  # mismos archivos que usa scripts/fase1-curl.sh
+    {"id": "A", "nombre": "Caso A: implementación correcta", "archivo": "a_feliz.py", "principal": True},
+    {"id": "B", "nombre": "Caso B: bucle sin incremento", "archivo": "b_calidad.py", "principal": True},
+    {"id": "C", "nombre": "Caso C: inyección en el docstring", "archivo": "c_inyeccion.py", "principal": True},
+    {"id": "D", "nombre": "Caso D: lectura de secretos", "archivo": "d_secretos.py", "principal": False},
+]
+
+
+@app.get("/demo")
+async def demo():
+    """Plantilla fija y casos de la demo (fuente única: backend/plantilla.py y backend/casos/)."""
+    return {
+        "raw_request": DEMO_RAW_REQUEST,
+        "spec": DEMO_SPEC,
+        "casos": [{"id": c["id"], "nombre": c["nombre"], "principal": c["principal"],
+                   "codigo": (CASOS_DIR / c["archivo"]).read_text(encoding="utf-8")} for c in CASOS],
+    }
+
+
+@app.get("/tasks/{task_id}/verdicts")
+async def verdicts(task_id: str, x_client_token: str | None = Header(default=None)):
+    """Veredictos para la vista del cliente: solo reason y comparison (nunca trace, logic ni código)."""
+    task = get_task_or_404(task_id)
+    if not token_ok(task["client_token"], x_client_token):
+        raise err(403, "INVALID_TOKEN", "Token de cliente inválido")
+    return {
+        "task_id": task_id,
+        "submissions_used": len(task["submissions"]),
+        "verdicts": [
+            {"code_hash": r["code_hash"], "approved": r["approved"], "stage": r["stage"],
+             "reason": r["reason"], "comparison": r["comparison"],
+             "transaction_hash": r["transaction_hash"]}
+            for r in task["cache"].values()
+        ],
+    }
 
 
 @app.get("/tasks/{task_id}/delivery")
