@@ -7,12 +7,11 @@ import { StatusCard } from "@/components/status-card";
 import { Terminal, useTerminal } from "@/components/terminal";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
+import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type Caso, type TaskView } from "@/lib/api";
-import { isStellarAddress } from "@/lib/format";
 import { keys, store, useStored, type FreelancerTask } from "@/lib/store";
 
 const MIN_SECONDS = 120; // mismo margen que el backend (DEADLINE_TOO_CLOSE)
@@ -28,13 +27,16 @@ export default function TareaPage({
   const { invitacion } = use(searchParams);
   const { task, error, secondsLeft, refresh } = useTask(id);
   const mine = useStored<FreelancerTask>(keys.freelancerTask(id));
+  const wallet = useWallet();
 
   if (!task) {
     return <p className="text-sm text-muted-foreground">{error ? error.message : "Cargando la tarea…"}</p>;
   }
 
-  const accepted = mine && task.freelancer_address === mine.freelancer_address;
-  const takenByOther = task.freelancer_address && !accepted;
+  // Aceptada por esta wallet: el token guardado es de la dirección amarrada y de la wallet conectada.
+  const accepted =
+    mine && task.freelancer_address === mine.freelancer_address && wallet.address === mine.freelancer_address;
+  const takenByOther = task.freelancer_address && task.freelancer_address !== wallet.address;
 
   return (
     <div className="space-y-6">
@@ -45,16 +47,24 @@ export default function TareaPage({
         </p>
       </div>
       <StatusCard task={task} secondsLeft={secondsLeft} />
-      <CriteriaCard spec={task} />
-      {accepted ? (
-        <SubmitPanel task={task} mine={mine} secondsLeft={secondsLeft} onDone={refresh} />
-      ) : takenByOther ? (
-        <Card>
-          <CardContent className="text-sm text-muted-foreground">Esta tarea ya la aceptó otro programador.</CardContent>
-        </Card>
-      ) : (
-        <AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} />
-      )}
+      <UsdcGate role="programador">
+        {() => (
+          <>
+            <CriteriaCard spec={task} />
+            {accepted ? (
+              <SubmitPanel task={task} mine={mine} secondsLeft={secondsLeft} onDone={refresh} />
+            ) : takenByOther ? (
+              <Card>
+                <CardContent className="text-sm text-muted-foreground">
+                  Esta tarea ya la aceptó otra wallet. Solo esa wallet puede entregar y cobrar.
+                </CardContent>
+              </Card>
+            ) : (
+              <AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} />
+            )}
+          </>
+        )}
+      </UsdcGate>
     </div>
   );
 }
@@ -63,20 +73,18 @@ export default function TareaPage({
 // Aceptar criterios
 // ---------------------------------------------------------------------------
 function AcceptPanel({ taskId, invite, onAccepted }: { taskId: string; invite: string | null; onAccepted: () => void }) {
-  const stored = useStored<string>(keys.lastAddress("programador"));
-  const [address, setAddress] = useState<string | null>(null);
+  const wallet = useWallet();
   const [error, setError] = useState<ApiError | null>(null);
   const [sending, setSending] = useState(false);
-  const addr = (address ?? stored ?? "").trim();
+  const addr = wallet.address ?? "";
 
   async function accept() {
-    if (!invite) return;
+    if (!invite || !addr) return;
     setSending(true);
     setError(null);
     try {
       const { freelancer_token } = await api.accept(taskId, addr, invite);
       store.saveFreelancerTask({ task_id: taskId, freelancer_token, freelancer_address: addr });
-      store.saveLastAddress("programador", addr);
       onAccepted();
     } catch (e) {
       setError(e instanceof ApiError ? e : new ApiError(0, "ERROR", String(e)));
@@ -90,19 +98,14 @@ function AcceptPanel({ taskId, invite, onAccepted }: { taskId: string; invite: s
       <CardHeader>
         <CardTitle>Aceptar los criterios</CardTitle>
         <CardDescription>
-          Al aceptar, la tarea queda amarrada a tu dirección: el pago solo puede ir a ella. La conexión con la wallet
-          llega en la siguiente fase; por ahora escribe tu dirección.
+          Al aceptar, la tarea queda amarrada a la dirección de tu wallet ({addr.slice(0, 6)}…{addr.slice(-4)}): el
+          pago solo puede ir a ella.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {!invite && (
           <p className="text-sm text-red-600">Necesitas el enlace de invitación que te compartió el cliente.</p>
         )}
-        <div className="space-y-1.5">
-          <Label htmlFor="programador">Tu dirección de Stellar (G…)</Label>
-          <Input id="programador" value={addr} placeholder="G…" className="font-mono text-xs"
-            onChange={(e) => setAddress(e.target.value)} />
-        </div>
         {error?.code === "NO_USDC_TRUSTLINE" ? (
           <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
             <div className="font-medium">Activa USDC antes de continuar</div>
@@ -111,7 +114,7 @@ function AcceptPanel({ taskId, invite, onAccepted }: { taskId: string; invite: s
         ) : error ? (
           <p className="text-sm text-red-600">{error.message}</p>
         ) : null}
-        <Button disabled={!invite || !isStellarAddress(addr) || sending} onClick={accept}>
+        <Button disabled={!invite || !addr || sending} onClick={accept} data-testid="aceptar">
           {sending ? "Aceptando…" : "Acepto los criterios"}
         </Button>
       </CardContent>

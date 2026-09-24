@@ -8,14 +8,18 @@ import { ComparisonList } from "@/components/comparison-list";
 import { CopyField } from "@/components/copy-field";
 import { CriteriaCard } from "@/components/criteria-card";
 import { StatusCard } from "@/components/status-card";
+import { TxResult, type TxState } from "@/components/tx-result";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
+import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type ClientVerdict, type Demo } from "@/lib/api";
-import { explorerTx, formatUsdc, isStellarAddress, parseUsdc, shortHash } from "@/lib/format";
+import { explorerTx, formatUsdc, parseUsdc, shortHash } from "@/lib/format";
+import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
 import { keys, store, useStored, type ClientTask } from "@/lib/store";
 
 export default function ClientePage({ searchParams }: { searchParams: Promise<{ tarea?: string }> }) {
@@ -30,7 +34,9 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
           Crea la tarea, comparte la invitación con tu programador y deposita el monto en el contrato.
         </p>
       </div>
-      {tarea ? <ClientTaskPanel taskId={tarea} /> : <CreateTaskForm />}
+      <UsdcGate role="cliente">
+        {(usdc) => (tarea ? <ClientTaskPanel taskId={tarea} usdc={usdc} /> : <CreateTaskForm />)}
+      </UsdcGate>
       {ids.length > 0 && (
         <div className="space-y-2">
           <div className="text-xs font-medium text-muted-foreground">Tareas creadas en este navegador</div>
@@ -54,13 +60,12 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
 }
 
 // ---------------------------------------------------------------------------
-// Crear tarea con la plantilla fija
+// Crear tarea con la plantilla fija (la dirección es la de la wallet conectada)
 // ---------------------------------------------------------------------------
 function CreateTaskForm() {
   const router = useRouter();
-  const storedAddress = useStored<string>(keys.lastAddress("cliente"));
+  const wallet = useWallet();
   const [demo, setDemo] = useState<Demo | null>(null);
-  const [address, setAddress] = useState<string | null>(null);
   const [amount, setAmount] = useState("1");
   const [minutes, setMinutes] = useState("10");
   const [error, setError] = useState<string | null>(null);
@@ -70,30 +75,23 @@ function CreateTaskForm() {
     api.demo().then(setDemo, (e: ApiError) => setError(e.message));
   }, []);
 
-  const clientAddress = (address ?? storedAddress ?? "").trim();
   const units = parseUsdc(amount);
   const mins = /^\d+$/.test(minutes) ? Number(minutes) : NaN;
-  const valid = demo && isStellarAddress(clientAddress) && units !== null && mins > 0;
+  const valid = demo && wallet.address && units !== null && mins > 0;
 
   async function create() {
-    if (!demo || units === null) return;
+    if (!demo || units === null || !wallet.address) return;
     setSending(true);
     setError(null);
     try {
       const created = await api.createTask({
-        client_address: clientAddress,
+        client_address: wallet.address,
         raw_request: demo.raw_request,
         ...demo.spec,
         amount: units,
         deadline_minutes: mins,
       });
-      store.saveClientTask({
-        ...created,
-        amount: units,
-        deadline_minutes: mins,
-        client_address: clientAddress,
-      });
-      store.saveLastAddress("cliente", clientAddress);
+      store.saveClientTask({ ...created, amount: units, deadline_minutes: mins, client_address: wallet.address });
       router.replace(`/cliente?tarea=${encodeURIComponent(created.task_id)}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -116,11 +114,6 @@ function CreateTaskForm() {
           <CardDescription>Los criterios de la plantilla quedan fijos y se firman con su hash.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="cliente">Tu dirección de Stellar (G…)</Label>
-            <Input id="cliente" value={clientAddress} placeholder="G…" className="font-mono text-xs"
-              onChange={(e) => setAddress(e.target.value)} />
-          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="monto">Monto (USDC)</Label>
@@ -145,10 +138,13 @@ function CreateTaskForm() {
 // ---------------------------------------------------------------------------
 // Panel de una tarea creada
 // ---------------------------------------------------------------------------
-function ClientTaskPanel({ taskId }: { taskId: string }) {
+function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus }) {
+  const wallet = useWallet();
   const ct = useStored<ClientTask>(keys.clientTask(taskId));
-  const { task, error, secondsLeft } = useTask(taskId);
+  const { task, error, secondsLeft, refresh } = useTask(taskId);
   const verdicts = useVerdicts(taskId, ct?.client_token ?? null);
+  const [deposit, setDeposit] = useState<TxState>({ phase: "idle" });
+  const [manual, setManual] = useState<TxState>({ phase: "idle" });
 
   if (!ct) {
     return (
@@ -160,16 +156,37 @@ function ClientTaskPanel({ taskId }: { taskId: string }) {
     );
   }
 
+  const sameWallet = wallet.address === ct.client_address;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const invite = `${origin}/tarea/${encodeURIComponent(taskId)}?invitacion=${encodeURIComponent(ct.invite_token)}`;
   const depositCmd = `bash scripts/deposit.sh ${taskId} ${ct.amount} ${ct.deadline_minutes * 60} ${ct.rules_hash}`;
-  const paid = verdicts.find((v) => v.transaction_hash);
+  const status = task?.onchain?.status;
+  const rejected = verdicts.some((v) => !v.approved);
+  const expired = status === "Funded" && secondsLeft !== null && secondsLeft <= 0;
+  const canApprove = status === "Funded" && !!task?.freelancer_address && (rejected || expired);
+  const walletLabel = wallet.mode === "pollar" ? "Pollar" : "Freighter";
+
+  async function run(set: (s: TxState) => void, build: () => Promise<string>) {
+    set({ phase: "signing" });
+    try {
+      const hash = await wallet.signAndSend(await build());
+      set({ phase: "done", hash });
+      refresh();
+    } catch (e) {
+      set({ phase: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }
 
   return (
     <div className="space-y-6">
       {task ? <StatusCard task={task} secondsLeft={secondsLeft} /> : error ? (
         <p className="text-sm text-red-600">{error.message}</p>
       ) : null}
+      {!sameWallet && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Esta tarea se creó con la wallet {shortHash(ct.client_address, 6)}; conecta esa wallet para depositar o aprobar.
+        </p>
+      )}
 
       <Card>
         <CardHeader>
@@ -179,8 +196,42 @@ function ClientTaskPanel({ taskId }: { taskId: string }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <CopyField label="Enlace de invitación para tu programador" value={invite} />
-          <CopyField label="Depósito (por ahora con la Stellar CLI y la identidad cyc-client)" value={depositCmd} />
+          <CopyField label="Enlace de invitación para tu programador" value={invite} secret />
+          {!task?.onchain && (
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">Depósito</div>
+              {usdc.units < ct.amount && (
+                <p className="text-sm text-amber-700">
+                  Tu saldo ({formatUsdc(usdc.units)}) no alcanza para el depósito. Para la demo:{" "}
+                  <code className="font-mono text-xs">bash scripts/fondear.sh {wallet.address} {formatUsdc(ct.amount - usdc.units).replace(" USDC", "")}</code>
+                </p>
+              )}
+              <Button
+                data-testid="depositar"
+                disabled={!sameWallet || deposit.phase === "signing" || usdc.units < ct.amount}
+                onClick={() =>
+                  run(setDeposit, () =>
+                    buildDeposit({
+                      client: ct.client_address,
+                      taskId,
+                      amount: ct.amount,
+                      deadlineSecs: ct.deadline_minutes * 60,
+                      rulesHash: ct.rules_hash,
+                    }),
+                  )
+                }
+              >
+                {deposit.phase === "signing" ? "Firmando y enviando…" : `Depositar ${formatUsdc(ct.amount)} con ${walletLabel}`}
+              </Button>
+            </div>
+          )}
+          <TxResult state={deposit} label="Depósito" />
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">Plan C: depositar con la Stellar CLI</summary>
+            <div className="mt-2">
+              <CopyField label="Comando" value={depositCmd} />
+            </div>
+          </details>
           <div className="text-xs text-muted-foreground">
             rules_hash <span className="font-mono">{ct.rules_hash}</span>
           </div>
@@ -216,7 +267,37 @@ function ClientTaskPanel({ taskId }: { taskId: string }) {
         </CardContent>
       </Card>
 
-      {task?.onchain?.status === "Released" && paid && <Delivery taskId={taskId} clientToken={ct.client_token} />}
+      {(canApprove || manual.phase !== "idle") && (
+        <Card data-testid="aprobar-manual">
+          <CardHeader>
+            <CardTitle>Aprobar manualmente</CardTitle>
+            <CardDescription>
+              {expired
+                ? "Venció el plazo. Puedes pagar al programador de todos modos; si no, cualquiera puede reembolsarte."
+                : "El motor rechazó la entrega. Si aun así la aceptas, el contrato le paga al programador."}{" "}
+              El pago va a {task?.freelancer_address ? shortHash(task.freelancer_address, 6) : "la wallet del programador"}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {canApprove && (
+              <Button
+                variant="outline"
+                disabled={!sameWallet || manual.phase === "signing"}
+                onClick={() =>
+                  run(setManual, () =>
+                    buildClientRelease({ client: ct.client_address, taskId, freelancer: task!.freelancer_address! }),
+                  )
+                }
+              >
+                {manual.phase === "signing" ? "Firmando y enviando…" : `Aprobar manualmente con ${walletLabel}`}
+              </Button>
+            )}
+            <TxResult state={manual} label="Aprobación manual" />
+          </CardContent>
+        </Card>
+      )}
+
+      {status === "Released" && <Delivery taskId={taskId} clientToken={ct.client_token} />}
     </div>
   );
 }

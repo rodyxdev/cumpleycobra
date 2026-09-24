@@ -356,6 +356,7 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `CONTRACT_ID`, `USDC_SAC_ID`, `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE` | backend |
 | `FRONTEND_ORIGIN`, `STATE_FILE` (por defecto `backend/state.json`) | backend |
 | `NEXT_PUBLIC_POLLAR_API_KEY`, `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_API_URL` | frontend |
+| `NEXT_PUBLIC_WALLET` (`pollar` por defecto, `freighter` de respaldo), `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_USDC_ASSET` (`CÓDIGO:EMISOR`) | frontend |
 
 `.env` y `state.json` nunca se suben al repositorio; mantener un `.env.example`.
 

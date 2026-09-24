@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { WalletConnect } from "@/components/wallet-connect";
+
 export function SiteHeader() {
   return (
     <header className="border-b bg-background">
@@ -12,6 +14,7 @@ export function SiteHeader() {
             Soy cliente
           </Link>
           <span className="hidden sm:inline">Testnet de Stellar</span>
+          <WalletConnect />
         </nav>
       </div>
     </header>
