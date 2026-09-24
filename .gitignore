@@ -19,3 +19,4 @@ __pycache__/
 .env.local
 backend/state.json
 scripts/.testnet.env
+.stellar/
