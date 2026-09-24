@@ -74,11 +74,11 @@ El contrato es la fuente de verdad del dinero. El frontend nunca toca llaves pri
 2. **Invitar:** el cliente comparte con su programador el enlace `/tarea/{task_id}?invitacion={invite_token}`.
 3. **Depositar:** el frontend arma `deposit` y Pollar lo firma. `rules_hash` queda on-chain.
 4. **Aceptar:** el programador conecta su wallet; si no tiene trustline de USDC, se bloquea todo hasta activarla. Pulsa "Acepto los criterios": `POST /tasks/{task_id}/accept` amarra la tarea a su dirección y devuelve `freelancer_token`.
-5. **Guardias** (en `/evaluate`): `freelancer_token` válido; tarea `Funded` en el contrato; `rules_hash`, monto y cliente on-chain coinciden con lo guardado; menos de 3 envíos; revisar caché por hash del código.
+5. **Guardias** (en `/evaluate`): `freelancer_token` válido; tarea `Funded` en el contrato; `rules_hash`, monto y cliente on-chain coinciden con lo guardado; quedan al menos 120 s de plazo on-chain (si no, `409 DEADLINE_TOO_CLOSE`); menos de 3 envíos; revisar caché por hash del código.
 6. **Sanitizar:** tamaño máximo 10 KB (bytes UTF-8, antes de limpiar); quitar comentarios con `tokenize`.
 7. **Capa determinista:** `ast` (sintaxis, imports permitidos, llamadas prohibidas). Si falla, se rechaza sin llamar a Gemini.
 8. **Analizar:** Gemini con salida estructurada.
-9. **Liberar:** si `approved`, `release` al programador amarrado, con reintentos; el contrato es idempotente.
+9. **Liberar:** si `approved`, `release` al programador amarrado, con reintentos; el contrato es idempotente. Si el plazo venció entre la guardia y el `release`, el contrato responde `DeadlinePassed` (#9): no se paga y quedan `client_release` o `timeout_refund`.
 10. **Responder:** JSON de la API con el hash de la transacción.
 11. **Rechazo:** el cliente puede aprobar manualmente con `client_release`.
 
@@ -166,7 +166,7 @@ Detalles de implementación:
 ```mermaid
 stateDiagram-v2
   [*] --> Funded: deposit
-  Funded --> Released: release (árbitro)
+  Funded --> Released: release (árbitro, antes del plazo)
   Funded --> Released: client_release (cliente)
   Funded --> Refunded: timeout_refund (tras plazo)
   Released --> [*]
@@ -177,12 +177,14 @@ stateDiagram-v2
 | --- | --- | --- |
 | `initialize(arbiter, token)` | Despliegue | Una sola vez (se mantiene `AlreadyInitialized`) |
 | `deposit(client, task_id, amount, deadline_secs, rules_hash)` | Cliente | Rechaza `task_id` repetido y `amount <= 0`; transfiere al contrato; plazo = timestamp del ledger + `deadline_secs` |
-| `release(task_id, freelancer, code_hash, verdict_hash)` | Árbitro | Solo desde `Funded`; cambia estado y luego transfiere; evento con hashes |
-| `client_release(task_id, freelancer)` | Cliente de esa tarea | Solo desde `Funded` |
+| `release(task_id, freelancer, code_hash, verdict_hash)` | Árbitro | Solo desde `Funded` y con timestamp < plazo (si no, `DeadlinePassed`); cambia estado y luego transfiere; evento con hashes |
+| `client_release(task_id, freelancer)` | Cliente de esa tarea | Solo desde `Funded`; permitido también después del plazo |
 | `timeout_refund(task_id)` | Nadie (sin auth) | Solo desde `Funded` y con timestamp ≥ plazo; paga siempre al cliente |
 | `get_task(task_id)` | Lectura | Cliente, freelancer (opcional), monto, plazo, `rules_hash`, estado |
 
-Errores: `NotInitialized`, `AlreadyInitialized`, `InvalidAmount`, `AlreadyExists`, `NotFound`, `NotFunded`, `DeadlineNotReached`, `InvalidDeadline`.
+Errores (número fijo, `Error(Contract, #N)`): 1 `NotInitialized`, 2 `AlreadyInitialized`, 3 `InvalidAmount`, 4 `AlreadyExists`, 5 `NotFound`, 6 `NotFunded`, 7 `DeadlineNotReached`, 8 `InvalidDeadline`, 9 `DeadlinePassed`. Nunca se renumeran.
+
+Regla del plazo: el árbitro solo puede hacer `release` antes del plazo. Tras el plazo, la única salida es `timeout_refund` (o `client_release` si el cliente decide pagar), así que no hay carrera entre un `release` tardío y el reembolso.
 
 Idempotencia: un segundo `release` falla con `NotFunded`; el backend lo trata como éxito si la tarea ya está `Released` para ese freelancer y devuelve el `transaction_hash` guardado en `state.json`.
 
@@ -196,6 +198,9 @@ Idempotencia: un segundo `release` falla con `NotFunded`; el backend lo trata co
 - [ ] `timeout_refund` después de `release` falla, y viceversa
 - [ ] `deposit` con `task_id` repetido falla
 - [ ] `client_release` firmado por alguien que no es el cliente falla
+- [ ] `release` exactamente en el plazo falla con `DeadlinePassed` y no mueve fondos
+- [ ] `release` un segundo antes del plazo funciona
+- [ ] `client_release` después del plazo funciona
 
 ### Comandos
 
@@ -260,6 +265,7 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
   - `TASK_NOT_FUNDED` 409
   - `TASK_MISMATCH` 409 (monto, cliente o `rules_hash` on-chain distintos a lo guardado)
   - `CRITERIA_NOT_ACCEPTED` 409
+  - `DEADLINE_TOO_CLOSE` 409 (quedan menos de 120 s de plazo on-chain)
   - `TOO_MANY_SUBMISSIONS` 429
   - `ENGINE_UNAVAILABLE` 502
 - `comparison` debe traer una entrada por criterio acordado, en el mismo orden.
@@ -309,7 +315,7 @@ Límite honesto: no se ejecuta código; se detectan patrones evidentes de bucles
 - **Programador:** abrir el enlace de invitación, conectar con Pollar; si falta la trustline de USDC, bloque "Activar USDC" antes de todo; aceptar criterios; elegir caso; adjuntar enlace de Drive del video; enviar; terminal y resultado con enlace al explorador de testnet.
 - El monto que ve el programador es el leído del contrato, no el que reporta el backend.
 - **Terminal honesta:** mientras espera, estado real con contador ("Enviando al motor de análisis… 3.2 s"); al responder, imprime línea por línea `analysis` y termina con veredicto y hash. Nada de mensajes falsos.
-- La UI desactiva el envío si quedan menos de 60 s de plazo. Plazo de la demo: 5 minutos.
+- La UI desactiva el envío si quedan menos de 120 s de plazo, y el backend lo rechaza con el mismo margen (`DEADLINE_TOO_CLOSE`). Plazo de la demo: 10 minutos.
 
 Requisito de la demo: `aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]`, cada precio con el descuento aplicado, redondeado a 2 decimales, sin dependencias externas.
 

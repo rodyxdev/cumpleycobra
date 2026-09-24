@@ -93,6 +93,7 @@ pub enum Error {
     NotFunded = 6,
     DeadlineNotReached = 7,
     InvalidDeadline = 8,
+    DeadlinePassed = 9,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +264,14 @@ impl CumpleYCobraContract {
         let key = DataKey::Task(task_id.clone());
         let mut task = Self::funded_task(&env, &key)?;
 
+        // Solo antes del plazo. Si el timestamp del ledger ya alcanzó el plazo,
+        // el árbitro ya no puede pagar: tras el plazo la única salida (además de
+        // la aprobación manual del cliente) es `timeout_refund`, así que no hay
+        // carrera entre un `release` tardío y el reembolso.
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+
         // Efectos antes de la transferencia (checks-effects-interactions).
         task.status = TaskStatus::Released;
         task.freelancer = Some(freelancer.clone());
@@ -283,7 +292,8 @@ impl CumpleYCobraContract {
     }
 
     // Aprobación manual: el cliente de la tarea decide pagar al programador
-    // aunque la IA haya rechazado la entrega.
+    // aunque la IA haya rechazado la entrega. Se permite incluso después del
+    // plazo: es el propio cliente quien renuncia a su reembolso.
     pub fn client_release(env: Env, task_id: String, freelancer: Address) -> Result<(), Error> {
         // Primero se carga la tarea para saber quién es su cliente.
         let key = DataKey::Task(task_id.clone());

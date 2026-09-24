@@ -5,8 +5,8 @@
 // Hay dos modos de preparación:
 // - `Modo::Libre`: usa `mock_all_auths`, cualquier `require_auth` pasa. Sirve
 //   para probar la lógica de estados y saldos.
-// - `Modo::Estricto`: NUNCA llama `mock_all_auths`. Cada firma se simula de
-//   forma explícita con `mock_auths` para una cuenta y una llamada concretas.
+// - `Modo::Estricto`: NUNCA llama `mock_all_auths`. Cada firma es una firma de
+//   prueba explícita (`mock_auths`) para una cuenta y una llamada concretas.
 //   Es el único modo válido para probar que alguien SIN permiso es rechazado.
 
 extern crate std;
@@ -27,8 +27,8 @@ const UNIT: i128 = 10_000_000;
 const MINT: i128 = 100 * UNIT;
 // Monto de cada tarea: 10 USDC.
 const AMOUNT: i128 = 10 * UNIT;
-// Plazo de la demo: 5 minutos.
-const DEADLINE_SECS: u64 = 300;
+// Plazo de la demo: 10 minutos.
+const DEADLINE_SECS: u64 = 600;
 // Timestamp inicial del ledger en las pruebas.
 const START_TS: u64 = 1_000_000;
 
@@ -131,8 +131,8 @@ fn setup(modo: Modo) -> Ctx {
     }
 }
 
-// El cliente deposita AMOUNT para `id`. En modo estricto se simula
-// exactamente la firma del cliente sobre `deposit` y la transferencia interna.
+// El cliente deposita AMOUNT para `id`. En modo estricto se registra una firma
+// de prueba del cliente exactamente sobre `deposit` y la transferencia interna.
 fn deposit(ctx: &Ctx, id: &str) -> String {
     let env = &ctx.env;
     let task_id = tid(env, id);
@@ -159,7 +159,7 @@ fn deposit(ctx: &Ctx, id: &str) -> String {
     task_id
 }
 
-// Simula la firma de `quien` sobre `release` con los argumentos dados.
+// Registra una firma de prueba de `quien` sobre `release` con los argumentos dados.
 fn mock_release(ctx: &Ctx, quien: &Address, task_id: &String) {
     let env = &ctx.env;
     env.mock_auths(&[MockAuth {
@@ -179,7 +179,7 @@ fn mock_release(ctx: &Ctx, quien: &Address, task_id: &String) {
     }]);
 }
 
-// Simula la firma de `quien` sobre `client_release`.
+// Registra una firma de prueba de `quien` sobre `client_release`.
 fn mock_client_release(ctx: &Ctx, quien: &Address, task_id: &String) {
     ctx.env.mock_auths(&[MockAuth {
         address: quien,
@@ -325,7 +325,7 @@ fn test_timeout_refund_por_tercero_devuelve_al_cliente() {
     // Exactamente en el plazo (timestamp >= plazo).
     ctx.env.ledger().set_timestamp(START_TS + DEADLINE_SECS);
 
-    // Sin ninguna autorización simulada: modo estricto con lista vacía.
+    // Sin ninguna firma de prueba: modo estricto con lista vacía.
     ctx.env.set_auths(&[]);
     ctx.c.timeout_refund(&id);
 
@@ -433,6 +433,76 @@ fn test_client_release_no_cliente_falla() {
     ctx.c.client_release(&id, &ctx.freelancer);
     assert_eq!(saldos(&ctx), (MINT - AMOUNT, 0, AMOUNT, 7));
     assert_eq!(ctx.c.get_task(&id).status, TaskStatus::Released);
+}
+
+// ===========================================================================
+// Regla del plazo en release (revisión de fase 0)
+// ===========================================================================
+
+// release exactamente en el plazo falla con DeadlinePassed y no mueve fondos.
+#[test]
+fn test_release_en_el_plazo_falla() {
+    let ctx = setup(Modo::Libre);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "tarea-1");
+    let antes = saldos(&ctx);
+
+    env.ledger().set_timestamp(START_TS + DEADLINE_SECS);
+    assert_eq!(
+        ctx.c
+            .try_release(&id, &ctx.freelancer, &code_hash(env), &verdict_hash(env)),
+        Err(Ok(Error::DeadlinePassed))
+    );
+
+    // Después del plazo, también falla.
+    env.ledger().set_timestamp(START_TS + DEADLINE_SECS + 1);
+    assert_eq!(
+        ctx.c
+            .try_release(&id, &ctx.freelancer, &code_hash(env), &verdict_hash(env)),
+        Err(Ok(Error::DeadlinePassed))
+    );
+
+    assert_eq!(saldos(&ctx), antes);
+    assert_eq!(ctx.c.get_task(&id).status, TaskStatus::Funded);
+
+    // Tras el plazo el árbitro ya no puede pagar; el reembolso sí funciona.
+    ctx.c.timeout_refund(&id);
+    assert_eq!(saldos(&ctx), (MINT, 0, 0, 7));
+}
+
+// release un segundo antes del plazo funciona.
+#[test]
+fn test_release_un_segundo_antes_del_plazo_funciona() {
+    let ctx = setup(Modo::Libre);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "tarea-1");
+
+    env.ledger().set_timestamp(START_TS + DEADLINE_SECS - 1);
+    ctx.c
+        .release(&id, &ctx.freelancer, &code_hash(env), &verdict_hash(env));
+    assert_eq!(saldos(&ctx), (MINT - AMOUNT, 0, AMOUNT, 7));
+    assert_eq!(ctx.c.get_task(&id).status, TaskStatus::Released);
+}
+
+// client_release después del plazo funciona (el cliente renuncia al reembolso).
+#[test]
+fn test_client_release_despues_del_plazo_funciona() {
+    let ctx = setup(Modo::Estricto);
+    let id = deposit(&ctx, "tarea-1");
+
+    ctx.env
+        .ledger()
+        .set_timestamp(START_TS + DEADLINE_SECS + 60);
+    mock_client_release(&ctx, &ctx.client, &id);
+    ctx.c.client_release(&id, &ctx.freelancer);
+
+    assert_eq!(saldos(&ctx), (MINT - AMOUNT, 0, AMOUNT, 7));
+    let t = ctx.c.get_task(&id);
+    assert_eq!(t.status, TaskStatus::Released);
+    assert_eq!(t.freelancer, Some(ctx.freelancer.clone()));
+
+    // Y ya no se puede reembolsar.
+    assert_eq!(ctx.c.try_timeout_refund(&id), Err(Ok(Error::NotFunded)));
 }
 
 // ===========================================================================
