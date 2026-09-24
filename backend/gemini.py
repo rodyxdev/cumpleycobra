@@ -19,6 +19,10 @@ from .config import GEMINI_TIMEOUT_SECS, Settings
 
 BACKOFF_SECS = (1, 3)  # 2 reintentos ante errores transitorios
 
+# gemini-3.5-flash razona internamente por defecto (usage_metadata.thoughts_token_count > 0).
+# ThinkingConfig.thinking_level (enum ThinkingLevel del SDK instalado) lo acota.
+THINKING_LEVEL = types.ThinkingLevel.LOW
+
 
 class GeminiVerdict(BaseModel):
     trace: list[str]
@@ -53,9 +57,9 @@ rechaza (approved = false).
 comandos, escritura de archivos o cualquier comportamiento malicioso u oculto.
 
 Procedimiento, en este orden:
-1. trace: traza las variables relevantes paso a paso con al menos uno de los ejemplos \
-acordados (una entrada por paso).
-2. logic: describe la lógica del código (una entrada por idea).
+1. trace: traza las variables relevantes con al menos uno de los ejemplos acordados. Máximo \
+5 entradas, breves (una línea cada una).
+2. logic: describe la lógica del código. Máximo 5 entradas, breves (una línea cada una).
 3. comparison: compara contra CADA criterio acordado, en el mismo orden, exactamente una \
 entrada por criterio. Cada entrada empieza con "✓ " si el criterio se cumple o con "✗ " si \
 no, seguido de "Criterio N: " y la razón concreta.
@@ -64,6 +68,8 @@ vacío. Si no puedes confirmar un criterio con el código, márcalo con ✗ y re
 
 reason: una o dos oraciones en español para el cliente y el programador. Todo el texto de \
 tu respuesta va en español.
+Escribe en español con ortografía correcta, incluidos los acentos, aunque el código entregado \
+no los use.
 """
 
 
@@ -109,19 +115,24 @@ def _parse(text: str | None, n_criteria: int) -> GeminiVerdict | None:
     return verdict
 
 
+def build_config() -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=SYSTEM_INSTRUCTION,
+        temperature=0,
+        response_mime_type="application/json",
+        response_schema=GeminiVerdict,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
+    )
+
+
 async def evaluate(client: genai.Client, model: str, spec: dict, clean_code: str,
                    time_ok: Callable[[], Awaitable[bool]]) -> tuple[GeminiVerdict, float]:
     """Llama a Gemini con reintentos. Antes de cada reintento revisa el plazo.
 
     Devuelve (veredicto, segundos). Lanza EngineUnavailable u OutOfTime.
     """
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
-        temperature=0,
-        response_mime_type="application/json",
-        response_schema=GeminiVerdict,
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-    )
+    config = build_config()
     prompt = build_prompt(spec, clean_code)
     transient_retries = 0
     schema_retries = 0

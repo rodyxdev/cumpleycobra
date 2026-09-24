@@ -274,6 +274,14 @@ async def accept(task_id: str, body: AcceptIn):
         bound = task["freelancer_address"]
         if bound and bound != body.freelancer_address:
             raise err(409, "TASK_TAKEN", "Esta tarea ya la aceptó otro programador")
+        # Sin trustline de USDC el release fallaría: se bloquea antes de aceptar.
+        try:
+            has_trustline = await run_in_threadpool(chain().has_usdc_trustline, body.freelancer_address)
+        except StellarUnavailable as exc:
+            raise err(502, "CHAIN_UNAVAILABLE", f"No se pudo revisar la trustline ({exc})") from exc
+        if not has_trustline:
+            raise err(409, "NO_USDC_TRUSTLINE",
+                      "Tu cuenta no tiene trustline de USDC. Actívala antes de aceptar la tarea.")
         if not bound:
             task["freelancer_address"] = body.freelancer_address
             task["freelancer_token"] = secrets.token_urlsafe(32)
@@ -305,6 +313,10 @@ REASON_DEADLINE_PASSED = (
     "El código cumple los criterios acordados, pero el plazo del contrato venció antes de "
     "liberar el pago, así que no se pagó automáticamente. El cliente aún puede aprobarlo "
     "manualmente."
+)
+REASON_NO_TRUSTLINE = (
+    "El pago no se liberó: la dirección del programador no tiene trustline de USDC. Cuando la "
+    "active, el cliente puede aprobar el pago manualmente."
 )
 REASON_NO_TIME_TO_RELEASE = (
     "El código cumple los criterios acordados, pero no queda plazo suficiente para liberar el "
@@ -465,10 +477,16 @@ async def try_payment(task: dict, result: dict) -> None:
         if exc.code == ERR_NOT_FUNDED:
             await settle_not_funded(task, result)
             return
+        if await trustline_missing(freelancer):
+            no_trustline(result)
+            return
         result["reason"] = f"{result['verdict_reason']} El pago no se liberó (error del contrato #{exc.code})."
         result["payment_retryable"] = False
         return
     except StellarUnavailable:
+        if await trustline_missing(freelancer):
+            no_trustline(result)
+            return
         result["reason"] = (f"{result['verdict_reason']} El pago no se pudo enviar por un problema de red; "
                             "reenvía el mismo código para reintentarlo (no cuenta como envío).")
         result["payment_retryable"] = True
@@ -498,6 +516,23 @@ async def settle_not_funded(task: dict, result: dict) -> None:
         result["payment_retryable"] = False
         return
     state = onchain["status"] if onchain else "desconocido"
+    if state == "Funded" and await trustline_missing(task["freelancer_address"]):
+        no_trustline(result)
+        return
     result["reason"] = (f"{result['verdict_reason']} El pago no se liberó: la tarea on-chain está en "
                         f"estado {state}.")
     result["payment_retryable"] = state == "Funded"
+
+
+async def trustline_missing(address: str) -> bool:
+    """True solo si se pudo confirmar que falta la trustline (un error de red no cuenta)."""
+    try:
+        return not await run_in_threadpool(chain().has_usdc_trustline, address)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def no_trustline(result: dict) -> None:
+    """Falta la trustline: no es un fallo de red, así que no se marca como reintentable."""
+    result["reason"] = f"{result['verdict_reason']} {REASON_NO_TRUSTLINE}"
+    result["payment_retryable"] = False

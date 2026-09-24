@@ -235,7 +235,7 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | `POST /tasks/draft/review` | `criteria[]` | Criterios marcados como vagos, con sugerencia |
 | `POST /tasks` | `client_address`, `raw_request`, `description`, `criteria[]`, `language`, `allowed_deps[]`, `examples[]`, `amount` (entero, unidades), `deadline_minutes` (entero) | `task_id`, `rules_hash`, `client_token`, `invite_token` |
 | `GET /tasks/{task_id}` | — | Pedido + criterios + estado y monto leídos del contrato |
-| `POST /tasks/{task_id}/accept` | `freelancer_address`, `invite_token` | `freelancer_token` |
+| `POST /tasks/{task_id}/accept` | `freelancer_address`, `invite_token` | `freelancer_token` (exige trustline de USDC: si falta, `409 NO_USDC_TRUSTLINE`) |
 | `POST /evaluate` | `task_id`, `freelancer_address`, `code`, `video_url` + header `X-Freelancer-Token` | Veredicto |
 | `POST /tasks/{task_id}/consent` | header `X-Freelancer-Token` | Permite al cliente ver el código tras un rechazo |
 | `GET /tasks/{task_id}/delivery` | header `X-Client-Token` | Código + video; solo si `Released` o con consentimiento |
@@ -253,23 +253,36 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
   "stage": "deterministic | llm | cache",
   "analysis": ["string"],
   "comparison": ["string"],
-  "code_hash": "string"
+  "code_hash": "string",
+  "verdict_hash": "string",
+  "security_flags": ["string"],
+  "submissions_used": 0
 }
 ```
+
+- Campos extra (aceptados en la revisión de la fase 1): `verdict_hash` (el que viaja en el evento de `release`), `security_flags` y `submissions_used`.
+- Si el veredicto es aprobado pero no hubo pago (#9, sin tiempo para el release, falta de trustline), `reason` explica el motivo; el `verdict_hash` se calcula sobre el `reason` original del veredicto.
 
 - `transaction_hash` es `null` si no hubo pago, nunca cadena vacía.
 - `freelancer_address` en `/evaluate` debe coincidir con la dirección amarrada; si no, `403 INVALID_TOKEN`.
 - Errores: `{"error": "CODIGO", "message": "..."}` con HTTP 400/403/404/409/429/502:
+  - `INVALID_REQUEST` 400 (validación, `float` en montos, JSON inválido)
   - `INVALID_TOKEN` 403
+  - `TASK_NOT_FOUND` 404
+  - `NO_DELIVERY` 404 (no hay código entregado)
   - `TASK_TAKEN` 409
   - `TASK_NOT_FUNDED` 409
   - `TASK_MISMATCH` 409 (monto, cliente o `rules_hash` on-chain distintos a lo guardado)
   - `CRITERIA_NOT_ACCEPTED` 409
-  - `DEADLINE_TOO_CLOSE` 409 (quedan menos de 120 s de plazo on-chain)
+  - `DEADLINE_TOO_CLOSE` 409 (quedan menos de 120 s de plazo on-chain, o no alcanza para reintentar)
+  - `NO_USDC_TRUSTLINE` 409 (el programador no tiene trustline de USDC)
+  - `TASK_NOT_RELEASED` 409 (`/delivery` antes de que el programador cobre)
   - `TOO_MANY_SUBMISSIONS` 429
-  - `ENGINE_UNAVAILABLE` 502
+  - `ENGINE_UNAVAILABLE` 502 (el motor de análisis no respondió)
+  - `CHAIN_UNAVAILABLE` 502 (el RPC de Stellar no respondió)
 - `comparison` debe traer una entrada por criterio acordado, en el mismo orden.
-- Máximo 3 envíos por tarea; un acierto de caché no cuenta como envío.
+- Máximo 3 envíos por tarea; un acierto de caché no cuenta como envío. La caché se revisa antes del límite.
+- La vista del cliente nunca recibe `trace` ni `logic` ni el código antes de `Released`: solo `comparison` y `reason`.
 - CORS solo para `FRONTEND_ORIGIN`.
 
 ## Motor de análisis (cuatro capas)
@@ -290,7 +303,7 @@ def strip_comments(src: str) -> str:
 **Capa 2, determinista con `ast`.** Error de sintaxis = rechazo. Todo import debe estar en `allowed_deps`. Prohibidos: `eval`, `exec`, `compile`, `__import__`, `os.system`, `os.environ`, `getenv`, `subprocess`, `socket`, `open` en escritura. Además, contra evasiones:
 
 - Cualquier nombre o atributo con doble guion bajo al inicio y al final, salvo `__name__`, `__main__` e `__init__` (bloquea `__builtins__`, `__class__`, `__subclasses__`, `__globals__`).
-- `getattr`, `setattr`, `delattr` cuando el nombre no es un literal.
+- `getattr`, `setattr`, `delattr` cuando el nombre no es un literal; con literal, el nombre se revisa igual que un atributo (prohibidos, prefijos `exec`/`spawn` y dunder).
 - `globals`, `vars`, `breakpoint`.
 
 Si falla: `stage = "deterministic"`, no se llama a Gemini. Argumento para la defensa: el servidor nunca ejecuta el código; esta capa protege al cliente que lo va a correr.
@@ -300,10 +313,13 @@ Si falla: `stage = "deterministic"`, no se llama a Gemini. Argumento para la def
 **Capa 4, regla final del backend.**
 
 - `security_flags` no vacío → `approved = false`.
+- Un ✗ = rechazo: si algún elemento de `comparison` empieza con ✗, `approved = false` aunque Gemini diga lo contrario.
 - Respuesta fuera de esquema → un reintento, luego `ENGINE_UNAVAILABLE` y no se paga.
 - Caché por `task_id` + `code_hash`.
 - Reintentos solo ante errores transitorios (timeout, 429, 5xx): 2 reintentos, backoff 1 s y 3 s.
 - Timeout de Gemini: 45 s. Llamadas a Gemini y al RPC sin bloquear el event loop (cliente asíncrono o `run_in_threadpool`).
+- Márgenes de tiempo (plazo on-chain): 120 s para entrar a `/evaluate`; 75 s antes de cada reintento a Gemini (45 s del intento + 30 s del release); 30 s antes de firmar el release. Si no alcanza, se responde sin contar el envío.
+- `release` que devuelve #9 (`DeadlinePassed`): no se reintenta; `approved: true`, `transaction_hash: null`. #6 (`NotFunded`) con la tarea `Released` para ese programador: éxito con el hash guardado. Si falla por falta de trustline, no se marca como reintentable por red.
 
 **`release` desde el backend:** armar la invocación, `prepare_transaction` en el RPC, firmar con la llave del árbitro, enviar y consultar hasta `SUCCESS` o `FAILED`. Guardar el hash en `state.json`.
 
@@ -332,7 +348,8 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 
 | Variable | Dónde |
 | --- | --- |
-| `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_MODEL` | backend |
+| `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GEMINI_MODEL` | backend (Vertex AI con credenciales de gcloud) |
+| `GEMINI_API_KEY` | backend (alternativa a Vertex: API key de AI Studio, si `GOOGLE_GENAI_USE_VERTEXAI` no es `true`) |
 | `ARBITER_SECRET_KEY` (nunca sale del backend) | backend |
 | `CONTRACT_ID`, `USDC_SAC_ID`, `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE` | backend |
 | `FRONTEND_ORIGIN`, `STATE_FILE` (por defecto `backend/state.json`) | backend |
@@ -369,6 +386,7 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 10. Commits pequeños y frecuentes (al menos uno por hora de trabajo y uno por hito) con mensajes claros; el historial puede contar como evidencia de participación.
 11. Ante un bloqueo de más de 45 minutos, detenerse y reportar la causa y dos alternativas.
 12. No inventar APIs de librerías (Pollar, `stellar-sdk`, `google-genai`, soroban-sdk): leer la documentación o el código de la versión instalada; si algo no existe, detenerse y reportarlo.
+13. No leer archivos fuera del repositorio sin preguntarle a Rodrigo.
 
 ### Reporte de fase
 

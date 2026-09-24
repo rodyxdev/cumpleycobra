@@ -87,6 +87,12 @@ class _Checker(ast.NodeVisitor):
             if func.id in DYNAMIC_ATTR_FUNCS:
                 if (len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)
                         and isinstance(node.args[1].value, str)):
+                    # Con nombre literal se revisa igual que un atributo: getattr(os, "system")
+                    # equivale a os.system.
+                    name = node.args[1].value
+                    if (name in FORBIDDEN_ATTRS or name.startswith(FORBIDDEN_ATTR_PREFIXES)
+                            or _is_dunder(name)):
+                        self.add(node, f"{func.id} con el atributo prohibido '{name}'")
                     self._ok_names.add(id(func))
                 else:
                     self.add(node, f"{func.id} con un nombre que no es literal")

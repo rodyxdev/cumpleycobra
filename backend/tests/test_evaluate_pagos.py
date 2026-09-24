@@ -13,7 +13,7 @@ from backend import gemini, main
 from backend.hashing import rules_hash
 from backend.plantilla import DEMO_SPEC
 from backend.state import StateStore
-from backend.stellar_client import ContractError, ReleaseOutcome
+from backend.stellar_client import ContractError, ReleaseOutcome, StellarUnavailable
 
 CLIENT = "GCJUXZSMNWHTRXRCRH5PIZU7USEMYAM4GGJRGF7FLZBNMO3R2WZY6CAB"
 FREELANCER = "GDOEMEMACZEM77IREHP6UTOMOJ5MZAKGA4KVPG2CPIKMGT5R5WDPHPNK"
@@ -36,6 +36,10 @@ class FakeChain:
         self.deadline = deadline
         self._release = release
         self.release_calls = 0
+        self.trustline = True
+
+    def has_usdc_trustline(self, address):
+        return self.trustline
 
     def ledger_time(self):
         return self.now
@@ -201,3 +205,46 @@ def test_security_flags_fuerza_rechazo_aunque_gemini_apruebe(api):
     evaluate, _, _ = api(chain, [json.dumps(con_flag)])
     r = evaluate().json()
     assert r["approved"] is False and chain.release_calls == 0
+
+
+def test_accept_sin_trustline_es_409_no_usdc_trustline(tmp_path):
+    chain = FakeChain(NOW + 600, ok_release)
+    chain.trustline = False
+    main.app.state.store = StateStore(tmp_path / "state.json")
+    main.app.state.chain = chain
+    client = TestClient(main.app)
+    r = client.post("/tasks", json={"client_address": CLIENT, **DEMO_SPEC,
+                                    "amount": AMOUNT, "deadline_minutes": 10}).json()
+    resp = client.post(f"/tasks/{r['task_id']}/accept",
+                       json={"freelancer_address": FREELANCER, "invite_token": r["invite_token"]})
+    assert resp.status_code == 409 and resp.json()["error"] == "NO_USDC_TRUSTLINE"
+    assert main.app.state.store.tasks[r["task_id"]]["freelancer_address"] is None
+
+
+@pytest.mark.parametrize("falla", [ContractError(13), StellarUnavailable("red")])
+def test_release_sin_trustline_no_es_reintentable(api, falla):
+    def release(chain, on_signed):
+        chain.trustline = False  # la quitó después de aceptar
+        raise falla
+    chain = FakeChain(NOW + 600, release)
+    evaluate, _, task_id = api(chain)
+    r = evaluate().json()
+    assert r["approved"] is True and r["transaction_hash"] is None
+    assert "trustline" in r["reason"]
+    cached = main.app.state.store.tasks[task_id]["cache"][r["code_hash"]]
+    assert cached["payment_retryable"] is False
+    # El reenvío es caché y no reintenta el release.
+    assert evaluate().json()["stage"] == "cache" and chain.release_calls == 1
+
+
+def test_release_por_red_con_trustline_si_es_reintentable(api):
+    def release(chain, on_signed):
+        if chain.release_calls == 1:
+            raise StellarUnavailable("red")
+        return ok_release(chain, on_signed)
+    chain = FakeChain(NOW + 600, release)
+    evaluate, used, _ = api(chain)
+    r = evaluate().json()
+    assert r["transaction_hash"] is None and "red" in r["reason"]
+    r2 = evaluate().json()
+    assert r2["stage"] == "cache" and r2["transaction_hash"] == "aa" * 32 and used() == 1

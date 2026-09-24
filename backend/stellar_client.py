@@ -9,7 +9,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from stellar_sdk import Keypair, SorobanServer, TransactionBuilder, scval
+from stellar_sdk import Asset, Keypair, SorobanServer, TransactionBuilder, scval
+from stellar_sdk import xdr as stellar_xdr
 from stellar_sdk.address import Address
 from stellar_sdk.exceptions import (
     BadResponseError,
@@ -93,6 +94,8 @@ class StellarClient:
         self._keypair = Keypair.from_secret(settings.arbiter_secret)
         self.arbiter_address = self._keypair.public_key
         self.contract_id = settings.contract_id
+        self.usdc_sac_id = settings.usdc_sac_id
+        self._usdc_asset: Asset | None = None
         self.passphrase = settings.network_passphrase
         self.server = SorobanServer(settings.rpc_url)
 
@@ -104,11 +107,11 @@ class StellarClient:
         """Timestamp (Unix, s) del último ledger cerrado: el reloj del contrato."""
         return _with_retries(lambda: self.server.get_latest_ledger().close_time)
 
-    def _build(self, function: str, params: list):
+    def _build(self, function: str, params: list, contract_id: str | None = None):
         account = _with_retries(lambda: self.server.load_account(self.arbiter_address))
         return (
             TransactionBuilder(account, self.passphrase, base_fee=100_000)
-            .append_invoke_contract_function_op(self.contract_id, function, params)
+            .append_invoke_contract_function_op(contract_id or self.contract_id, function, params)
             .set_timeout(60)
             .build()
         )
@@ -129,6 +132,31 @@ class StellarClient:
         status = task.get("status")
         task["status"] = status[0] if isinstance(status, list) else status
         return task
+
+    def usdc_asset(self) -> Asset:
+        """Activo clásico detrás del SAC, leído del propio SAC (name() = "CÓDIGO:EMISOR")."""
+        if self._usdc_asset is None:
+            tx = self._build("name", [], contract_id=self.usdc_sac_id)
+            sim = _with_retries(lambda: self.server.simulate_transaction(tx))
+            if sim.error or not sim.results:
+                raise StellarUnavailable("no se pudo leer name() del SAC de USDC")
+            name = scval.to_native(sim.results[0].xdr)
+            code, issuer = name.split(":")
+            self._usdc_asset = Asset(code, issuer)
+        return self._usdc_asset
+
+    def has_usdc_trustline(self, address: str) -> bool:
+        """True si la cuenta tiene trustline del USDC del contrato (getLedgerEntries)."""
+        asset = self.usdc_asset()
+        key = stellar_xdr.LedgerKey(
+            stellar_xdr.LedgerEntryType.TRUSTLINE,
+            trust_line=stellar_xdr.LedgerKeyTrustLine(
+                account_id=Keypair.from_public_key(address).xdr_account_id(),
+                asset=asset.to_trust_line_asset_xdr_object(),
+            ),
+        )
+        resp = _with_retries(lambda: self.server.get_ledger_entries([key]))
+        return bool(resp.entries)
 
     # --- release ---------------------------------------------------------------
     def release(self, task_id: str, freelancer: str, code_hash_hex: str,
