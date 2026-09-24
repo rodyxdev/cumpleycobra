@@ -6,7 +6,7 @@ Hito de CLAUDE.md: "Un clic en el navegador termina en un hash en pantalla (dep�
 
 El trabajo va en dos commits:
 
-- **Parte A** (`935aef1`): ajustes de la revisión de la fase 1.
+- **Parte A** (`282d1f0`): ajustes de la revisión de la fase 1.
 - **Parte B** (este commit): el frontend.
 
 ## Parte A: ajustes de la revisión de la fase 1
