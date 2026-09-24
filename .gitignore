@@ -20,3 +20,8 @@ __pycache__/
 backend/state.json
 scripts/.testnet.env
 .stellar/
+
+# Fase 1
+backend/state.json.tmp
+scripts/.logs/
+.pytest_cache/
