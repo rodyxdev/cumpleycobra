@@ -1,0 +1,21 @@
+# Rust / Soroban
+target/
+**/*.wasm
+**/test_snapshots/
+
+# Node
+node_modules/
+.next/
+*.log
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Estado y secretos (nunca al repositorio)
+.env
+.env.local
+backend/state.json
+scripts/.testnet.env
