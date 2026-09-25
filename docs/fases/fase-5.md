@@ -156,3 +156,34 @@ $ stellar contract invoke … -- timeout_refund --task_id '"_HpAjUOhwnT6cxLU"'
 Sin `TASK_MISMATCH`: el motor evaluó y respondió con la capa determinista. Una tarea creada en el primer intento (`XjMrxYujvjZU-0-h`) no se depositó (el `bash` de WSL no tenía la CLI) y solo existe en `state.json`.
 
 Pendiente de la checklist: **grabar el video de respaldo** de la demo completa.
+
+## 7. README final
+
+[`README.md`](../../README.md) reescrito:
+
+- qué es (los cinco pasos, del pedido asistido al pago);
+- arquitectura en mermaid;
+- contrato, SAC de USDC y árbitro con enlaces al explorador;
+- cómo verificar un pago;
+- instalación desde un clon limpio y cómo correrlo, con los respaldos;
+- resumen del motor medido;
+- límites honestos: no ejecuta código, solo patrones evidentes de bucles, el token no prueba la propiedad de la wallet, alcance de la medición, video y pesos;
+- estructura y créditos.
+
+**Nuevo `scripts/verificar_pago.py`.** Lee el evento `release` del RPC de testnet (con `SorobanServer.get_transaction` y `xdr.ContractEvent` de `stellar-sdk` 16), recalcula `code_hash` desde el código entregado y `verdict_hash` desde el veredicto público, y compara los tres valores con el evento. En un veredicto pagado, el `reason` de la API es el mismo sobre el que se calculó el hash (`verdict_reason` solo difiere cuando el pago no se liberó, y entonces no hay evento `release`). Prueba con el pago de la fase 3:
+
+```text
+$ backend/.venv/Scripts/python scripts/verificar_pago.py 678054fa6f29d55756f1d558d28a1107b06cfb3a1b3e17fd542f8009bf3cc4a0 --veredicto veredicto.json --codigo entrega.py
+Evento release: tarea GgdBDlp6pwxyAfrQ, 10000000 unidades a GA7MXQO3OL6IMISROP3JJM3NBGOEDHPPK7B5Q2ASNIBNVAPVCE6FBEVJ
+  code_hash    on-chain  c9b846f4cafc89920593d805ffa0fd7a087b9b29d928e00d835bdc782334e534
+  verdict_hash on-chain  6615bcb81b317b6750897016502850231b8bb98bdb962cdbc9634b602ce20782
+  code_hash    recalculado c9b846f4cafc89920593d805ffa0fd7a087b9b29d928e00d835bdc782334e534
+  verdict_hash recalculado 6615bcb81b317b6750897016502850231b8bb98bdb962cdbc9634b602ce20782
+✓ task_id
+✓ code_hash del código entregado
+✓ code_hash del veredicto
+✓ verdict_hash
+exit 0
+```
+
+`veredicto.json` y `entrega.py` se extrajeron de `backend/state.json`, sin tokens, a una carpeta temporal fuera del repositorio.
