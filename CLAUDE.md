@@ -235,7 +235,7 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | --- | --- | --- |
 | `POST /tasks/draft` | `raw_request` | `description`, `criteria[]`, `language`, `allowed_deps[]`, `examples[]` |
 | `POST /tasks/draft/review` | `criteria[]` | Criterios marcados como vagos, con sugerencia |
-| `POST /tasks` | `client_address`, `raw_request`, `description`, `criteria[]`, `language`, `allowed_deps[]`, `examples[]`, `amount` (entero, unidades), `deadline_minutes` (entero) | `task_id`, `rules_hash`, `client_token`, `invite_token` |
+| `POST /tasks` | `client_address`, `raw_request`, `description` (máx. 2000), `criteria[]` (1 a 8, máx. 300 c/u), `language`, `allowed_deps[]` (máx. 10), `examples[]` (máx. 8, cada campo máx. 300), `amount` (entero, unidades), `deadline_minutes` (entero, máximo 10080 = 7 días, lejos del TTL de 30 días del contrato) | `task_id`, `rules_hash`, `client_token`, `invite_token` |
 | `GET /tasks/{task_id}` | — | Pedido + criterios + estado y monto leídos del contrato |
 | `POST /tasks/{task_id}/accept` | `freelancer_address`, `invite_token` | `freelancer_token` (exige trustline de USDC: si falta, `409 NO_USDC_TRUSTLINE`) |
 | `POST /evaluate` | `task_id`, `freelancer_address`, `code`, `video_url` + header `X-Freelancer-Token` | Veredicto |
@@ -260,11 +260,13 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
   "code_hash": "string",
   "verdict_hash": "string",
   "security_flags": ["string"],
+  "video_url": "string | null",
   "submissions_used": 0
 }
 ```
 
-- Campos extra (aceptados en la revisión de la fase 1): `verdict_hash` (el que viaja en el evento de `release`), `security_flags` y `submissions_used`.
+- Campos extra (aceptados en la revisión de la fase 1): `verdict_hash` (el que viaja en el evento de `release`), `security_flags` y `submissions_used`. `video_url` (correcciones): el enlace de Drive normalizado (`…/preview`) o `null`, el mismo valor que entra al `verdict_hash`, para que la respuesta de `/evaluate` baste para recalcularlo.
+- El mismo código con otro video devuelve el veredicto en caché (con el video original): la caché es por `task_id` + `code_hash`, y un video nuevo no cambia el veredicto ni su hash. Decisión documentada: el video es evidencia de apoyo, no parte de lo evaluado.
 - Si el veredicto es aprobado pero no hubo pago (#9, sin tiempo para el release, falta de trustline), `reason` explica el motivo; el `verdict_hash` se calcula sobre el `reason` original del veredicto.
 
 - `transaction_hash` es `null` si no hubo pago, nunca cadena vacía.
@@ -305,7 +307,7 @@ def strip_comments(src: str) -> str:
 
 `tokenize.TokenError`, `IndentationError` y `SyntaxError` se capturan y son rechazo determinista (`stage = "deterministic"`), nunca un error 500. Los docstrings no se quitan: el caso C depende de que lleguen a Gemini.
 
-**Capa 2, determinista con `ast`.** Error de sintaxis = rechazo. Todo import debe estar en `allowed_deps`. Prohibidos: `eval`, `exec`, `compile`, `__import__`, `os.system`, `os.environ`, `getenv`, `subprocess`, `socket`, `open` en escritura. Además, contra evasiones:
+**Capa 2, determinista con `ast`.** Error de sintaxis = rechazo. Todo import debe estar en `allowed_deps`, salvo `subprocess` y `socket`, que se rechazan **siempre**, aunque el cliente los ponga en `allowed_deps`. Prohibidos: `eval`, `exec`, `compile`, `__import__`, `os.system`, `os.environ`, `getenv`, `subprocess`, `socket`, `open` en escritura (y `open` con `*args` o `**kwargs`, porque el modo no se puede leer). Cada nombre de `from X import Y` se revisa igual que un atributo (`from os import system` equivale a `os.system`), y `from X import *` se rechaza. Un código anidado tan hondo que `ast` o el visitante agotan la recursión (`RecursionError`, `MemoryError`) es rechazo determinista. Además, contra evasiones:
 
 - Cualquier nombre o atributo con doble guion bajo al inicio y al final, salvo `__name__`, `__main__` e `__init__` (bloquea `__builtins__`, `__class__`, `__subclasses__`, `__globals__`).
 - `getattr`, `setattr`, `delattr` cuando el nombre no es un literal; con literal, el nombre se revisa igual que un atributo (prohibidos, prefijos `exec`/`spawn` y dunder).

@@ -51,8 +51,22 @@ backend/.venv/Scripts/python scripts/verificar_pago.py TX_HASH --veredicto vered
 ```
 
 - `TX_HASH`: la transacción del pago (aparece en la terminal del programador y en la vista del cliente).
-- `veredicto.json`: la respuesta de `POST /evaluate` o el elemento de `GET /tasks/{id}/verdicts` (con `task_id` agregado). Usa la primera respuesta, no la de caché (`stage: "cache"`).
+- `veredicto.json` puede ser cualquiera de estos:
+  - la respuesta de `POST /evaluate` (la tiene el programador; incluye `task_id` y `video_url`);
+  - la respuesta completa de `GET /tasks/{id}/verdicts` (la tiene el cliente); el script toma el veredicto cuyo `code_hash` es el del evento;
+  - un solo elemento de `/verdicts`, con `--tarea TASK_ID` porque el elemento no trae el `task_id`.
+
+  Una respuesta de caché (`stage: "cache"`) también sirve: un veredicto pagado siempre viene de Gemini, y el script usa `stage: "llm"`.
 - `entrega.py`: el código tal como se entregó (`GET /tasks/{id}/delivery`).
+
+Desde la vista del cliente, con su `client_token`:
+
+```bash
+curl -s -H "X-Client-Token: $CLIENT_TOKEN" localhost:8000/tasks/$TASK_ID/verdicts > veredicto.json
+curl -s -H "X-Client-Token: $CLIENT_TOKEN" localhost:8000/tasks/$TASK_ID/delivery | jq -j .code > entrega.py
+```
+
+Usa `jq -j .code`, no `jq -r`: `-r` agrega un salto de línea al final, y un solo byte de más cambia el `code_hash`.
 
 El script lee el evento del RPC de testnet y compara:
 
