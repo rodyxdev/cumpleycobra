@@ -963,6 +963,10 @@ async def accept_proposal(proposal_id: str, authorization: str | None = Header(d
         if proposal["estado"] == "rechazada":
             raise err(409, "PROPOSAL_REJECTED", "No se puede aceptar una propuesta rechazada")
         task = get_task_or_404(task_id)
+        if proposal["estado"] == "aceptada" and task["freelancer_address"] == proposal["programador"]:
+            # Repetir la aceptación (otro navegador, respuesta perdida) devuelve el mismo token,
+            # igual que /accept con la invitación: la sesión ya probó que es el destinatario.
+            return {**public_proposal(proposal), "freelancer_token": task["freelancer_token"]}
         if task["freelancer_address"]:
             raise err(409, "TASK_TAKEN", "Esta tarea ya fue aceptada")
         # Misma función que atiende /accept: mantiene trustline, token, bloqueo y persistencia.

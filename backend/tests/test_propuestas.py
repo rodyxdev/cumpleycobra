@@ -162,11 +162,20 @@ def test_tarea_tomada_por_invitacion_no_admite_propuestas_ni_decisiones(world, b
     assert_error(decision(world, proposal, "rechazar"), 409, "TASK_TAKEN")
 
 
-def test_propuesta_aceptada_no_se_puede_rechazar_ni_aceptar_de_nuevo(world):
-    proposal = send(world, create_task(world)).json()
-    assert decision(world, proposal).status_code == 200
-    assert_error(decision(world, proposal), 409, "TASK_TAKEN")
+def test_propuesta_aceptada_no_se_puede_rechazar_y_aceptar_de_nuevo_devuelve_el_mismo_token(world):
+    task = create_task(world)
+    proposal, other = send(world, task).json(), send(world, task, P2).json()
+    first = decision(world, proposal)
+    assert first.status_code == 200
+    # Otro navegador o respuesta perdida: el destinatario recupera el mismo token sin reamarrar.
+    again = decision(world, proposal)
+    assert again.status_code == 200 and again.json() == first.json()
+    assert main.store().tasks[task["task_id"]]["freelancer_token"] == first.json()["freelancer_token"]
     assert_error(decision(world, proposal, "rechazar"), 409, "TASK_TAKEN")
+    assert main.store().proposals[proposal["id"]]["estado"] == "aceptada"
+    # Nadie más obtiene el token: otra dirección con esta propuesta, ni otro destinatario con la suya.
+    assert_error(decision(world, proposal, address=P2), 403, "NOT_PROPOSAL_RECIPIENT")
+    assert_error(decision(world, other, address=P2), 409, "TASK_TAKEN")
 
 
 @pytest.mark.parametrize("failure,status,code", [(False, 409, "NO_USDC_TRUSTLINE"), ("network", 502, "CHAIN_UNAVAILABLE")])
