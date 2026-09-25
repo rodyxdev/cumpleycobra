@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ArrowRight } from "lucide-react";
 
+import { dropSessionIfRejected, useIdentity, VerifyIdentityButton } from "@/components/identity";
 import { StarPicker, Stars } from "@/components/stars";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,15 +12,21 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError, type Rating } from "@/lib/api";
 import { MAX_COMMENT, ratingProblem } from "@/lib/reputation";
+import { shortHash } from "@/lib/format";
+import { useWallet } from "@/hooks/use-wallet";
 
 /** El cliente califica una vez, con la tarea Pagada en el contrato. La calificación es pública. */
-export function RatingCard({ taskId, clientToken, freelancer, rating, onRated }: {
+export function RatingCard({ taskId, clientToken, clientAddress, freelancer, rating, onRated }: {
   taskId: string;
   clientToken: string;
+  /** Cliente on-chain de la tarea: la calificación exige su identidad verificada (SEP-10). */
+  clientAddress: string;
   freelancer: string | null;
   rating: Rating | null | undefined;
   onRated: () => void;
 }) {
+  const wallet = useWallet();
+  const { session } = useIdentity(clientAddress);
   const [stars, setStars] = useState(0);
   const [comment, setComment] = useState("");
   const [sending, setSending] = useState(false);
@@ -29,13 +36,15 @@ export function RatingCard({ taskId, clientToken, freelancer, rating, onRated }:
   const problem = stars ? ratingProblem(stars, comment) : null;
 
   async function send() {
+    if (!session) return;
     setSending(true);
     setError(null);
     try {
-      const r = await api.rateTask(taskId, clientToken, stars, comment.trim() || null);
+      const r = await api.rateTask(taskId, clientToken, stars, comment.trim() || null, session.token);
       setSaved({ estrellas: r.estrellas, comentario: r.comentario });
       onRated();
     } catch (e) {
+      dropSessionIfRejected(clientAddress, e);
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setSending(false);
@@ -67,6 +76,15 @@ export function RatingCard({ taskId, clientToken, freelancer, rating, onRated }:
               <span className="text-base">Calificaste con {done.estrellas} de 5 estrellas.</span>
             </div>
             {done.comentario && <p className="text-base text-muted-foreground">«{done.comentario}»</p>}
+          </div>
+        ) : !session ? (
+          <div className="space-y-3" data-testid="calificar-requiere-identidad">
+            <p className="text-base">
+              Para calificar, verifica tu identidad con la wallet del cliente de esta tarea: así nadie más puede calificar en tu nombre.
+            </p>
+            {wallet.address === clientAddress
+              ? <VerifyIdentityButton address={clientAddress} size="default" />
+              : <p className="text-sm text-muted-foreground">Conecta la wallet {shortHash(clientAddress, 6)} para verificarla.</p>}
           </div>
         ) : (
           <>

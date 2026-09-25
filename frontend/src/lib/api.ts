@@ -58,7 +58,15 @@ export type ProgrammerSummary = {
   distinct_clients: number;
   rating_average: number | null;
   rating_count: number;
+  /** Solo si el dueño publicó su perfil con identidad verificada (SEP-10). */
+  nombre?: string | null;
+  habilidades?: string[];
+  bio?: string | null;
+  identidad_verificada?: boolean;
 };
+
+export type Challenge = { transaction: string; network_passphrase: string; home_domain: string; web_auth_domain: string; expires_in: number };
+export type ProfileFields = { nombre: string | null; habilidades: string[]; bio: string | null };
 
 export type PaidTask = {
   task_id: string;
@@ -133,9 +141,19 @@ export const api = {
   fx: () => request<Fx>("/fx/usd-mxn"),
   programmers: () => request<{ programmers: ProgrammerSummary[] }>("/programadores"),
   programmer: (address: string) => request<ProgrammerProfile>(`/programadores/${encodeURIComponent(address)}`),
-  rateTask: (id: string, clientToken: string, estrellas: number, comentario: string | null) =>
+  rateTask: (id: string, clientToken: string, estrellas: number, comentario: string | null, sessionToken: string) =>
     request<{ task_id: string } & Rating>(`/tasks/${encodeURIComponent(id)}/calificacion`, {
-      method: "POST", headers: { "X-Client-Token": clientToken }, body: JSON.stringify({ estrellas, comentario }),
+      method: "POST", headers: { "X-Client-Token": clientToken, Authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ estrellas, comentario }),
+    }),
+  authChallenge: (address: string) => request<Challenge>(`/auth/challenge?address=${encodeURIComponent(address)}`),
+  authToken: (transaction: string) =>
+    request<{ token: string; address: string; expires_at: number }>("/auth/token", {
+      method: "POST", body: JSON.stringify({ transaction }),
+    }),
+  putProfile: (sessionToken: string, profile: ProfileFields) =>
+    request<{ address: string } & ProfileFields>("/perfil", {
+      method: "PUT", headers: { Authorization: `Bearer ${sessionToken}` }, body: JSON.stringify(profile),
     }),
   consent: (id: string, token: string, code_hash: string) =>
     request<{ consented: boolean; code_hash: string }>(`/tasks/${encodeURIComponent(id)}/consent`, {

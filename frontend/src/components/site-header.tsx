@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { HeaderIdentity } from "@/components/identity";
 import { WalletConnect } from "@/components/wallet-connect";
 
 export function SiteHeader() {
@@ -17,6 +18,7 @@ export function SiteHeader() {
             Programadores
           </Link>
           <span className="hidden border-l pl-6 text-sm lg:inline">Testnet de Stellar</span>
+          <HeaderIdentity />
           <WalletConnect />
         </nav>
       </div>

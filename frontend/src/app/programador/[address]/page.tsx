@@ -5,7 +5,10 @@ import { use, useEffect, useState } from "react";
 import { ArrowUpRight, ShieldCheck } from "lucide-react";
 
 import { Money } from "@/components/money";
+import { IdentityBadge } from "@/components/identity";
+import { ProfileEditor } from "@/components/profile-editor";
 import { ProgrammerMetrics } from "@/components/programmer-metrics";
+import { SkillTags } from "@/components/skill-tags";
 import { Stars } from "@/components/stars";
 import { Card, CardContent } from "@/components/ui/card";
 import { api, ApiError, type ProgrammerProfile } from "@/lib/api";
@@ -30,8 +33,15 @@ export default function ProgramadorPage({ params }: { params: Promise<{ address:
     <div className="space-y-8">
       <div className="page-heading">
         <p className="eyebrow">Perfil del programador</p>
-        <h1 className="break-all font-mono text-2xl sm:text-3xl" title={address}>{shortHash(address, 10)}</h1>
+        {profile?.nombre ? (
+          <h1 data-testid="perfil-nombre">{profile.nombre}</h1>
+        ) : (
+          <h1 className="break-all font-mono text-2xl sm:text-3xl" title={address}>{shortHash(address, 10)}</h1>
+        )}
         <p className="break-all font-mono text-sm text-muted-foreground">{address}</p>
+        {profile?.identidad_verificada && <div><IdentityBadge /></div>}
+        {!!profile?.habilidades?.length && <SkillTags skills={profile.habilidades} />}
+        {profile?.bio && <p className="text-base" data-testid="perfil-bio">{profile.bio}</p>}
       </div>
 
       {error && <p role="alert" className="text-base text-[var(--alert-foreground)]">{error}</p>}
@@ -39,6 +49,9 @@ export default function ProgramadorPage({ params }: { params: Promise<{ address:
 
       {profile && (
         <>
+          <ProfileEditor address={address}
+            initial={{ nombre: profile.nombre ?? null, habilidades: profile.habilidades ?? [], bio: profile.bio ?? null }}
+            onSaved={(p) => setProfile({ ...profile, ...p, identidad_verificada: true })} />
           <Card>
             <CardContent className="space-y-6">
               <ProgrammerMetrics p={profile} />

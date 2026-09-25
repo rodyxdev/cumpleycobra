@@ -233,7 +233,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
       {(status === "Released" || verdicts.some((v) => v.consented)) && <Delivery taskId={taskId} clientToken={ct.client_token} paid={status === "Released"} />}
 
       {status === "Released" && (
-        <RatingCard taskId={taskId} clientToken={ct.client_token} rating={task?.rating} onRated={refresh}
+        <RatingCard taskId={taskId} clientToken={ct.client_token} clientAddress={task?.onchain?.client ?? ct.client_address} rating={task?.rating} onRated={refresh}
           freelancer={task?.onchain?.freelancer ?? task?.freelancer_address ?? null} />
       )}
     </div>

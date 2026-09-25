@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowRight } from "lucide-react";
 
+import { IdentityBadge } from "@/components/identity";
 import { ProgrammerMetrics } from "@/components/programmer-metrics";
+import { SkillTags } from "@/components/skill-tags";
 import { Card, CardContent } from "@/components/ui/card";
 import { api, ApiError, type ProgrammerSummary } from "@/lib/api";
 import { shortHash } from "@/lib/format";
@@ -45,12 +47,19 @@ export default function ProgramadoresPage() {
             <li key={p.address}>
               <Card>
                 <CardContent className="space-y-5">
-                  <Link href={`/programador/${p.address}`}
-                    className="group inline-flex items-center gap-2 font-mono text-lg font-medium text-primary underline-offset-4 hover:underline"
-                    title={p.address}>
-                    {shortHash(p.address, 10)}
-                    <ArrowRight className="size-4" aria-hidden="true" />
-                  </Link>
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Link href={`/programador/${p.address}`}
+                        className={`group inline-flex items-center gap-2 text-lg font-medium text-primary underline-offset-4 hover:underline ${p.nombre ? "" : "font-mono"}`}
+                        title={p.address}>
+                        {p.nombre ?? shortHash(p.address, 10)}
+                        <ArrowRight className="size-4" aria-hidden="true" />
+                      </Link>
+                      {p.identidad_verificada && <IdentityBadge />}
+                    </div>
+                    {p.nombre && <p className="font-mono text-sm text-muted-foreground">{shortHash(p.address, 10)}</p>}
+                    {!!p.habilidades?.length && <SkillTags skills={p.habilidades} />}
+                  </div>
                   <ProgrammerMetrics p={p} compact />
                 </CardContent>
               </Card>

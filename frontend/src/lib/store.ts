@@ -85,6 +85,8 @@ export const keys = {
   clientTaskIds: "cliente:tareas",
   freelancerTask: (id: string) => `programador:${id}`,
   lastAddress: (role: "cliente" | "programador") => `direccion:${role}`,
+  /** Sesión SEP-10 por dirección. «Limpiar lista» no la borra (no es una llave de tarea). */
+  session: (address: string) => `sesion:${address}`,
 };
 
 export const store = {
@@ -96,6 +98,15 @@ export const store = {
   saveFreelancerTask: (t: FreelancerTask) => write(keys.freelancerTask(t.task_id), t),
   saveLastAddress: (role: "cliente" | "programador", addr: string) => write(keys.lastAddress(role), addr),
   clientTask: (id: string) => read<ClientTask>(keys.clientTask(id)),
+  saveSession: (s: { token: string; address: string; expires_at: number }) => write(keys.session(s.address), s),
+  clearSession: (address: string) => {
+    try {
+      window.localStorage.removeItem(`${PREFIX}:${keys.session(address)}`);
+    } catch {
+      // Sin almacenamiento: no hay nada que borrar.
+    }
+    window.dispatchEvent(new Event(EVENT));
+  },
   /** Borra solo las llaves de tareas (task-keys.ts); la sesión de Pollar queda intacta. */
   clearTasks: (): number => {
     let removed = 0;
