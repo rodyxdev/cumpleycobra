@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -30,7 +30,7 @@ class FxReference:
                         data = response.json()
                         rate = Decimal(str(data["rate"]))
                         as_of = date.fromisoformat(data["date"])
-                        if (not rate.is_finite() or not 0 < rate < 1000 or as_of > date.today()
+                        if (not rate.is_finite() or not 0 < rate < 1000 or as_of > datetime.now(timezone.utc).date()
                                 or data.get("base") != "USD" or data.get("quote") != "MXN"):
                             raise ValueError("Referencia inválida")
                         self.value = {"rate": str(rate), "as_of": as_of.isoformat(), "source": "Frankfurter", "fallback": False}

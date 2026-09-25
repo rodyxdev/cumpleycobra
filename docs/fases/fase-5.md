@@ -187,3 +187,100 @@ exit 0
 ```
 
 `veredicto.json` y `entrega.py` se extrajeron de `backend/state.json`, sin tokens, a una carpeta temporal fuera del repositorio.
+
+## 8. Ensayo completo en el navegador
+
+`frontend/scripts/fase5-ensayo.mjs` sigue los pasos de [`docs/demo.md`](../demo.md) con las dos wallets Pollar y el pedido asistido: pedido → mejorar con IA → revisar criterios → crear → depositar → aceptar → caso C rechazado → caso A pagado. Usa pestañas nuevas y visibles (ver el punto 2) y cronometra cada paso desde el clic hasta que la pantalla muestra el resultado.
+
+```bash
+cd frontend && node scripts/fase5-ensayo.mjs
+```
+
+| Paso | Segundos |
+| --- | --- |
+| Pedido asistido: «Pídele a la IA que mejore tu pedido» (Gemini) | 5.4 |
+| Revisar criterios con «Que sea rápido» agregado (Gemini) | 4.7 |
+| Crear tarea (20 MXN, 10 minutos) | 0.6 |
+| Depositar con Pollar: firma, envío y confirmación | 7.0 |
+| Programador: abrir invitación y aceptar criterios | 1.6 |
+| Caso C enviado → rechazado por seguridad (Gemini) | 12.4 |
+| Caso A con video enviado → aprobado y pagado (Gemini + `release`) | 11.3 |
+| Cliente: estado «Pagada» y código entregado | 1.6 |
+| **Total** | **45.9** |
+
+| Dato | Valor |
+| --- | --- |
+| Tarea | `pEK6BPUCe1YvYSDZ`, 20 MXN = 11 406 736 unidades (1.1406736 USDC), `rules_hash` `f7d7b95e72786fd6d498c6d254465c8a91a6d9fc53df552dc71b6582305aa963` |
+| Borrador | 4 criterios; «Que sea rápido» se marcó vago con la sugerencia «Procesa cada elemento de la lista de entrada en una sola pasada, sin recorridos anidados sobre esa misma lista» y se quitó sin aplicarla. El `rules_hash` coincide con los borradores 3 a 5 de la fase 4a (temperatura 0) |
+| Depósito (Pollar, fee-bump patrocinado) | [`f29286bd…a2be`](https://stellar.expert/explorer/testnet/tx/f29286bd70060fbfb00f689028141130fd4e6316b48bd499af83c87a5d47a2be) |
+| Caso C | Rechazado, alerta de seguridad por instrucciones en el docstring, sin pago |
+| Caso A | Aprobado, ✓ en los 4 criterios, video `…/1jg-nMazcC4Cln9eSSia5be0RsHSFizM9/preview` |
+| `release` | [`aabe42e1…2225`](https://stellar.expert/explorer/testnet/tx/aabe42e135b2bb74807ac22233c8eed30b6bbaa70924166b22b24ae1cf042225); `verdict_hash` `d07803cb07ffbc19292323ee565dac15a38b744de2da917ef166861aac824aef` |
+
+Verificación del pago con el script del punto 7:
+
+```text
+$ backend/.venv/Scripts/python scripts/verificar_pago.py aabe42e135b2bb74807ac22233c8eed30b6bbaa70924166b22b24ae1cf042225 --veredicto veredicto.json --codigo entrega.py
+Evento release: tarea pEK6BPUCe1YvYSDZ, 11406736 unidades a GA7MXQO3OL6IMISROP3JJM3NBGOEDHPPK7B5Q2ASNIBNVAPVCE6FBEVJ
+  code_hash    on-chain  c9b846f4cafc89920593d805ffa0fd7a087b9b29d928e00d835bdc782334e534
+  verdict_hash on-chain  d07803cb07ffbc19292323ee565dac15a38b744de2da917ef166861aac824aef
+  code_hash    recalculado c9b846f4cafc89920593d805ffa0fd7a087b9b29d928e00d835bdc782334e534
+  verdict_hash recalculado d07803cb07ffbc19292323ee565dac15a38b744de2da917ef166861aac824aef
+✓ task_id
+✓ code_hash del código entregado
+✓ code_hash del veredicto
+✓ verdict_hash
+```
+
+**Revisión de criterios: el criterio vago marcado, con su sugerencia.**
+
+![Revisión de criterios](img/fase-5-01-revision-criterio-vago.png)
+
+**Programador: caso A aprobado y pagado.**
+
+![Programador pagado](img/fase-5-02-programador-caso-a-pagado.png)
+
+**Resultado final, vista del cliente:** «Pagada», veredictos de C (rechazado) y A (aprobado, con enlace al pago), y el código entregado.
+
+![Cliente: resultado final](img/fase-5-03-cliente-pagada.png)
+
+Ninguna captura muestra tokens: la invitación aparece enmascarada.
+
+**Corridas previas del ensayo:**
+
+- `Ls7uohcYkyKdtszk`: el script leyó el enlace de invitación antes de que se renderizara; la tarea no se depositó.
+- `icxqDVrVMsVEEyBi`: el flujo completo funcionó y el caso A se pagó ([`f772376a…b661`](https://stellar.expert/explorer/testnet/tx/f772376a8ba33d108879652382543ab55509bf129c3f109c84b45e6422d7b661)). El cronómetro del caso A falló porque el script esperaba que la terminal creciera, y la terminal se reinicia en cada envío. Se corrigió la espera y se repitió el ensayo completo.
+
+### Hallazgo del ensayo: el tipo de cambio caía al respaldo cada noche
+
+La vista mostraba «Frankfurter. Se está usando un valor de respaldo» aunque Frankfurter respondía 200. La causa: Frankfurter fecha la cotización en UTC (`"date":"2026-09-25"`) y `backend/fx.py` la rechazaba como «futura» al compararla con `date.today()`, que es la fecha local (`2026-09-24`). De 18:00 a 24:00, hora de México, toda cotización real se descartaba y se mostraba el último valor bueno marcado como respaldo (o 17.50). Una demo en la noche habría mostrado siempre el aviso de respaldo.
+
+- **Corrección:** comparar con la fecha UTC (`datetime.now(timezone.utc).date()`).
+- **Test nuevo:** `test_fx_fecha_utc_no_se_toma_como_futura`.
+
+```text
+$ backend/.venv/Scripts/python -m pytest backend/tests -q
+127 passed, 2 warnings in 6.92s
+
+$ curl -s localhost:8000/fx/usd-mxn        # tras reiniciar el backend
+{"rate":"17.5427","as_of":"2026-09-25","source":"Frankfurter","fallback":false}
+```
+
+Las capturas del ensayo se tomaron antes de la corrección; por eso muestran el aviso de respaldo, con la última tasa buena (17.5335).
+
+### Saldos finales
+
+| Cuenta | USDC |
+| --- | --- |
+| Pollar cliente `GBGK4N…D4FL` | 2.7186528 (5 − 2 × 1.1406736 de los dos ensayos pagados) |
+| Pollar programador `GA7MXQ…BEVJ` | 4.2813472 |
+| Gas wallet de Pollar `GDP2IY…B2MT` | 9999.5857337 XLM |
+| Contrato | 0 (sin tareas abiertas) |
+
+## Pendientes y riesgos
+
+- **Grabar el video de respaldo** de la demo completa: la checklist lo pide para las caídas de Gemini y de la red, y todavía no existe.
+- Las sesiones de Pollar caducan: iniciar sesión en los dos perfiles justo antes de subir.
+- La cuota de Vertex es por cuenta: no correr mediciones en los minutos previos a la demo.
+- Freighter sigue sin probar; `fase3-hito.mjs` no se actualizó a la revisión de USDC del paso 3 (lo reemplaza `fase5-ensayo.mjs`).
+- `backend/state.json` acumula las tareas de prueba sin depositar de esta fase; no afectan al contrato ni a la demo.

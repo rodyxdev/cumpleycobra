@@ -33,7 +33,7 @@ Duración objetivo: menos de 5 minutos. Todo en la testnet de Stellar. Plazo de 
 
   Dashboard de Pollar: Treasury → Sponsorship activo. Domains: `http://localhost:3000`.
 - [ ] **Saldos de USDC:**
-  - cliente Pollar ≥ 1.2 USDC (la tarea de 20 MXN son ≈ 1.14 USDC; hay 5);
+  - cliente Pollar ≥ 1.2 USDC (la tarea de 20 MXN son ≈ 1.14 USDC; tras los ensayos del 25 de septiembre quedan 2.72);
   - programador Pollar con trustline activa;
   - `cyc-client` ≥ 1 USDC para el respaldo (hay 2).
 
@@ -66,6 +66,22 @@ Duración objetivo: menos de 5 minutos. Todo en la testnet de Stellar. Plazo de 
 **Ventana del cliente:**
 
 10. El estado pasa a «Pagada». En «Veredictos del motor» se ve el rechazo de C y la aprobación de A, cada criterio con su razón, y «Ver video demo». «Código entregado» → **«Ver código»**: el código llega al cliente solo después del pago.
+
+### Tiempos medidos en el ensayo
+
+Ensayo automatizado del 25 de septiembre de 2026 (`frontend/scripts/fase5-ensayo.mjs`). Los tiempos van desde el clic hasta que la pantalla muestra el resultado. No incluyen hablar ni teclear, así que en vivo hay que sumar la narración.
+
+| Paso | Segundos |
+| --- | --- |
+| 2. Mejorar el pedido con IA | 5.4 |
+| 3. Revisar criterios (con «Que sea rápido») | 4.7 |
+| 4. Crear tarea | 0.6 |
+| 6. Depositar con Pollar hasta «Depositada» | 7.0 |
+| 7. Abrir invitación y aceptar | 1.6 |
+| 8. Caso C → rechazado | 12.4 |
+| 9. Caso A → aprobado y pagado | 11.3 |
+| 10. Cliente: «Pagada» y código | 1.6 |
+| **Total** | **45.9** |
 
 Frase de cierre: «Si cumple lo acordado, cobras. Sin discusiones.»
 

@@ -103,3 +103,13 @@ def test_fx_invalido_no_reintenta(monkeypatch, rate):
     monkeypatch.setattr(httpx.AsyncClient, "get", get)
     assert asyncio.run(fx.FxReference().get())["fallback"]
     assert get.call_count == 1
+
+
+def test_fx_fecha_utc_no_se_toma_como_futura(monkeypatch):
+    # Frankfurter fecha en UTC: de 18:00 a 24:00 en México ya es el día siguiente, y no es futura.
+    from datetime import datetime, timezone
+    today_utc = datetime.now(timezone.utc).date().isoformat()
+    response = httpx.Response(200, request=httpx.Request("GET", fx.URL), json={"rate": 17.5427, "date": today_utc, "base": "USD", "quote": "MXN"})
+    monkeypatch.setattr(httpx.AsyncClient, "get", AsyncMock(return_value=response))
+    result = asyncio.run(fx.FxReference().get())
+    assert result["fallback"] is False and result["as_of"] == today_utc and result["rate"] == "17.5427"
