@@ -19,10 +19,16 @@ class StateStore:
             with path.open("r", encoding="utf-8") as f:
                 self.data = json.load(f)
         self.data.setdefault("tasks", {})
+        self.data.setdefault("profiles", {})
 
     @property
     def tasks(self) -> dict:
         return self.data["tasks"]
+
+    @property
+    def profiles(self) -> dict:
+        """Perfiles públicos por dirección (nombre, habilidades, bio); los edita su dueño con sesión."""
+        return self.data["profiles"]
 
     def lock(self, task_id: str) -> asyncio.Lock:
         """Un asyncio.Lock por task_id: envíos y escrituras sin carreras."""

@@ -11,6 +11,7 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import anyio.from_thread
 from fastapi import FastAPI, Header, Request
@@ -22,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from starlette.concurrency import run_in_threadpool
 from stellar_sdk import StrKey
 
-from . import drafting, gemini, reputacion
+from . import drafting, gemini, identidad, reputacion
 from .config import (
     GEMINI_ATTEMPT_BUDGET_SECS,
     MAX_DEADLINE_MINUTES,
@@ -112,8 +113,8 @@ fx_reference = FxReference()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings_for_cors.frontend_origin],
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Client-Token", "X-Freelancer-Token"],
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type", "X-Client-Token", "X-Freelancer-Token", "Authorization"],
 )
 
 
@@ -420,15 +421,22 @@ class RatingIn(Strict):
 
 
 @app.post("/tasks/{task_id}/calificacion")
-async def rate_task(task_id: str, body: RatingIn, x_client_token: str | None = Header(default=None)):
-    """El cliente califica a su programador, una vez, cuando la tarea está Released on-chain."""
+async def rate_task(task_id: str, body: RatingIn, x_client_token: str | None = Header(default=None),
+                    authorization: str | None = Header(default=None)):
+    """El cliente califica a su programador, una vez, cuando la tarea está Released on-chain.
+
+    Además del X-Client-Token exige una sesión SEP-10 cuya dirección sea el cliente on-chain.
+    """
     task = get_task_or_404(task_id)
     async with store().lock(task_id):
         if not token_ok(task["client_token"], x_client_token):
             raise err(403, "INVALID_TOKEN", "Token de cliente inválido")
+        me = session_from(authorization)
         if task.get("rating"):
             raise err(409, "ALREADY_RATED", "Esta tarea ya tiene calificación")
         onchain, _ = await read_chain(task_id)
+        if onchain and onchain["client"] != me:
+            raise err(403, "NOT_TASK_CLIENT", "Tu identidad verificada no es la del cliente de esta tarea")
         if not onchain or onchain["status"] != "Released":
             raise err(409, "TASK_NOT_RELEASED", "Solo se puede calificar cuando el programador ya cobró")
         comment = (body.comentario or "").strip() or None
@@ -475,15 +483,113 @@ async def released_records() -> list[dict]:
     return reputacion.paid_records(tasks, onchain, events)
 
 
+def with_profile(row: dict) -> dict:
+    """Agrega nombre, habilidades y bio si el dueño de la dirección los publicó (con sesión SEP-10)."""
+    profile = store().profiles.get(row["address"])
+    if not profile:
+        return row
+    return {**row, "nombre": profile.get("nombre"), "habilidades": profile.get("habilidades", []),
+            "bio": profile.get("bio"), "identidad_verificada": True}
+
+
 @app.get("/programadores")
 async def programmers():
-    return {"programmers": reputacion.leaderboard(await released_records())}
+    return {"programmers": [with_profile(r) for r in reputacion.leaderboard(await released_records())]}
 
 
 @app.get("/programadores/{address}")
 async def programmer_profile(address: str):
     check_address(address, "address")
-    return reputacion.profile(address, await released_records())
+    return with_profile(reputacion.profile(address, await released_records()))
+
+
+# ---------------------------------------------------------------------------
+# Identidad (SEP-10) y perfil: aditivo, el flujo del dinero no la exige
+# ---------------------------------------------------------------------------
+def auth_keys() -> identidad.Keys:
+    try:
+        return identidad.load_keys(getattr(app.state.settings, "arbiter_secret", None))
+    except identidad.AuthError as exc:
+        raise err(exc.status, exc.code, exc.message) from None
+
+
+def challenges() -> identidad.Challenges:
+    if not hasattr(app.state, "challenges"):
+        app.state.challenges = identidad.Challenges()
+    return app.state.challenges
+
+
+def passphrase() -> str:
+    return getattr(app.state.settings, "network_passphrase", None) or "Test SDF Network ; September 2015"
+
+
+def session_from(authorization: str | None) -> str:
+    """Dirección de la sesión del header Authorization: Bearer; 401 SESSION_REQUIRED si no hay una válida."""
+    token = identidad.bearer(authorization)
+    if not token:
+        raise err(401, "SESSION_REQUIRED", "Verifica tu identidad con tu wallet para continuar")
+    try:
+        return identidad.session_address(auth_keys(), token)
+    except identidad.AuthError as exc:
+        raise err(exc.status, exc.code, exc.message) from None
+
+
+@app.get("/auth/challenge")
+async def auth_challenge(address: str):
+    """Reto SEP-10 para que la wallet de `address` lo firme. Un solo uso; caduca en 5 minutos."""
+    check_address(address, "address")
+    return challenges().issue(auth_keys(), address, passphrase())
+
+
+class TokenIn(Strict):
+    transaction: StrictStr = Field(min_length=1, max_length=20_000)
+
+
+@app.post("/auth/token")
+async def auth_token(body: TokenIn):
+    """Verifica el reto firmado con los firmantes de la cuenta y devuelve una sesión de 12 h."""
+    keys = auth_keys()
+    try:
+        address, expires = challenges().take(body.transaction, passphrase())
+    except identidad.AuthError as exc:
+        raise err(exc.status, exc.code, exc.message) from None
+    lookup = getattr(app.state, "signers_lookup", identidad.account_signers)
+    try:
+        await run_in_threadpool(identidad.verify_signed_challenge, body.transaction, keys, address,
+                                passphrase(), lookup)
+    except identidad.ChainError as exc:
+        challenges().restore(body.transaction, passphrase(), address, expires)
+        raise err(502, "CHAIN_UNAVAILABLE", f"No se pudieron leer los firmantes de la cuenta ({exc})") from None
+    except identidad.AuthError as exc:
+        raise err(exc.status, exc.code, exc.message) from None
+    return identidad.issue_session(keys, address)
+
+
+Skill = Annotated[StrictStr, Field(min_length=1, max_length=30)]
+
+
+class ProfileIn(Strict):
+    address: StrictStr | None = None  # opcional: si llega, debe ser la de la sesión
+    nombre: StrictStr | None = Field(default=None, max_length=60)
+    habilidades: list[Skill] = Field(default=[], max_length=8)
+    bio: StrictStr | None = Field(default=None, max_length=280)
+
+
+@app.put("/perfil")
+async def put_profile(body: ProfileIn, authorization: str | None = Header(default=None)):
+    """Perfil público del dueño de la sesión. Nadie edita el perfil de otra dirección."""
+    me = session_from(authorization)
+    if body.address is not None and body.address != me:
+        raise err(403, "NOT_PROFILE_OWNER", "Solo el dueño de la dirección puede editar su perfil")
+    skills: list[str] = []
+    for s in (x.strip() for x in body.habilidades):
+        if s and s.lower() not in {k.lower() for k in skills}:
+            skills.append(s)
+    profile = {"nombre": (body.nombre or "").strip() or None, "habilidades": skills,
+               "bio": (body.bio or "").strip() or None, "updated_at": int(time.time())}
+    store().profiles[me] = profile
+    store().save()
+    return {"address": me, **{k: profile[k] for k in ("nombre", "habilidades", "bio")}}
 
 
 # ---------------------------------------------------------------------------

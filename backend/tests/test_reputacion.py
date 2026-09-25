@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from stellar_sdk import scval
+from stellar_sdk import Keypair, scval
 
-from backend import main, reputacion
+from backend import identidad, main, reputacion
 from backend.plantilla import DEMO_SPEC
 from backend.state import StateStore
 from backend.stellar_client import StellarUnavailable
@@ -53,7 +53,10 @@ class FakeEvents:
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, monkeypatch):
+    # Llaves de prueba para las sesiones SEP-10 (calificar exige la del cliente on-chain).
+    monkeypatch.setenv("SEP10_SIGNING_SECRET", Keypair.random().secret)
+    monkeypatch.setenv("SESSION_SECRET", "secreto-de-prueba")
     chain = MultiChain()
     main.app.state.store = StateStore(tmp_path / "state.json")
     main.app.state.chain = chain
@@ -85,9 +88,13 @@ def world(tmp_path):
     del main.app.state.payment_events
 
 
-def rate(world, tid, token, **body):
-    return world.client.post(f"/tasks/{tid}/calificacion", headers={"X-Client-Token": token} if token else {},
-                             json=body or {"estrellas": 5})
+def session(address):
+    return {"Authorization": "Bearer " + identidad.issue_session(main.auth_keys(), address)["token"]}
+
+
+def rate(world, tid, token, as_client=C1, **body):
+    headers = {**({"X-Client-Token": token} if token else {}), **session(as_client)}
+    return world.client.post(f"/tasks/{tid}/calificacion", headers=headers, json=body or {"estrellas": 5})
 
 
 # --- POST /tasks/{id}/calificacion --------------------------------------------------------------
