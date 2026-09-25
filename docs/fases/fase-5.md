@@ -101,3 +101,28 @@ Fuente: [`fase-5-motor.json`](fase-5-motor.json), generado por `scripts/estabili
 - **Corpus:** las 7 entregas correctas usan implementaciones distintas: comprensión de lista, bucle `for`, `map`, `while` con incremento, factor precalculado, `enumerate` y lista vacía. Las 13 defectuosas son B, C, D, sumar el descuento, no redondear, orden inverso, descuento fijo, redondear a entero, devolver un generador, devolver `None` con lista vacía, `eval`, dunder y escritura de archivos.
 
 Límite honesto para el pitch: es un solo requisito (`aplicar_descuento`), con un corpus escrito por el equipo y de 20 casos. «Cero falsas aprobaciones» describe esta muestra, no una garantía general.
+
+## 5. Fondeo de la wallet del cliente y saldos
+
+`cyc-client` tenía 6 USDC; se enviaron 4 para dejar la wallet Pollar del cliente en 5 USDC, y `cyc-client` conserva 2 para el respaldo con `scripts/deposit.sh`:
+
+```text
+$ bash scripts/fondear.sh GBGK4NLPUTTOTHR5SLSFPOWA74EYH727WGZQ5CKGVX2B4DGF3UVPD4FL 4
+Enviando 4 USDC (40000000 unidades) de cyc-client a GBGK4NLPUTTOTHR5SLSFPOWA74EYH727WGZQ5CKGVX2B4DGF3UVPD4FL
+Transacción: 70d83210002006bdca5abee0efc4b922a3899b8f9d47fe9ce485fb51b2b3752d
+```
+
+Saldos en Horizon después del fondeo:
+
+| Cuenta | Dirección | USDC | XLM |
+| --- | --- | --- | --- |
+| Pollar cliente | `GBGK4NLPUTTOTHR5SLSFPOWA74EYH727WGZQ5CKGVX2B4DGF3UVPD4FL` | **5.0000000** | 0 (reservas patrocinadas) |
+| Pollar programador | `GA7MXQO3OL6IMISROP3JJM3NBGOEDHPPK7B5Q2ASNIBNVAPVCE6FBEVJ` | 2.0000000 | 0 (reservas patrocinadas) |
+| Gas wallet de Pollar (paga los fee-bump) | `GDP2IYGXTDLRLMPSWKY5W5LDQADTW3EG6E6JCBAM4F6LHNKJB7GKB2MT` | — | 9999.7062101 |
+| `cyc-client` | `GCJUXZSMNWHTRXRCRH5PIZU7USEMYAM4GGJRGF7FLZBNMO3R2WZY6CAB` | 2.0000000 | 9999.1348703 |
+| `cyc-freelancer` | `GDOEMEMACZEM77IREHP6UTOMOJ5MZAKGA4KVPG2CPIKMGT5R5WDPHPNK` | 8.0000000 | 9999.9999900 |
+| `cyc-third` | `GCF4HYJD4L6O7AX3YSTKA2MJAC4G35T26F3HIE2LBCMKM64R3VNQNWJD` | 0.0000000 | 9999.9847078 |
+| `cyc-arbiter` | `GAGGEH7TNBV7Z7TX7OLTBJPEFBWTMLD477P3DTTFFBUAYOZXGGVOKZGY` | sin trustline | 9983.0918118 |
+| Contrato | `CAWAZODOFP67HETHN4NLYOECPCJACGLUTCLARVGLBZ7TJDLT4KLQRATQ` | 0 (sin tareas abiertas) | — |
+
+La dirección de la gas wallet sale del `fee_account` del fee-bump del depósito de la fase 4b ([`fd550600…`](https://stellar.expert/explorer/testnet/tx/fd550600dbf24af28fde2d68607903e5b0277ee68837c7361ad2301de53c4733)); esa transacción costó 588 442 stroops (0.0588 XLM).
