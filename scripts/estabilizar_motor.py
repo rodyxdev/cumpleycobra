@@ -1,9 +1,10 @@
 """Diez repeticiones por caso A–D y estudio de 20 casos distintos, sin cadena.
 
-backend/.venv/Scripts/python scripts/estabilizar_motor.py
+backend/.venv/Scripts/python scripts/estabilizar_motor.py [--salida docs/fases/otro.json]
 Expectativas fijadas en corpus_motor.json antes de medir. No ejecuta las entregas.
 Máximo 8 llamadas/minuto, incluyendo reintentos. No usar junto a otra medición.
 """
+import argparse
 import asyncio
 import json
 import statistics
@@ -24,7 +25,7 @@ from scripts.probar_pedido import Pace, time_ok  # noqa: E402
 OUT = ROOT / "docs/fases/fase-5-motor.json"
 
 
-async def main():
+async def main(out: Path = OUT):
     settings = load_settings()
     client = gemini.make_client(settings)
     pace = Pace()
@@ -59,7 +60,7 @@ async def main():
         return result
 
     def save():
-        OUT.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     try:
         for case in corpus[:4]:
@@ -90,4 +91,6 @@ async def main():
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
-    sys.exit(asyncio.run(main()))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--salida", type=Path, default=OUT, help="JSON de salida (por defecto, el de la fase 5)")
+    sys.exit(asyncio.run(main(parser.parse_args().salida)))

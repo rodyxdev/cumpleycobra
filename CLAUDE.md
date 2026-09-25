@@ -241,7 +241,7 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | `POST /evaluate` | `task_id`, `freelancer_address`, `code`, `video_url` + header `X-Freelancer-Token` | Veredicto |
 | `POST /tasks/{task_id}/consent` | `code_hash` (opcional; por defecto el último envío) + header `X-Freelancer-Token` | Permite al cliente ver esa entrega rechazada (solo ese `code_hash`, no las futuras); si no es una entrega rechazada, `409 NO_REJECTED_DELIVERY` |
 | `GET /tasks/{task_id}/delivery` | header `X-Client-Token` | Código + video; solo si `Released` o con consentimiento |
-| `GET /tasks/{task_id}/verdicts` | header `X-Client-Token` | Veredictos para la vista del cliente: `approved`, `stage`, `reason`, `comparison`, `transaction_hash` (nunca `trace`, `logic` ni código) |
+| `GET /tasks/{task_id}/verdicts` | header `X-Client-Token` | Veredictos para la vista del cliente: `approved`, `stage`, `reason`, `comparison`, `security_flags`, `transaction_hash`, `video_url`, `consented` (nunca `trace`, `logic` ni código) |
 | `GET /demo` | — | Plantilla fija y casos A–D (fuente única: `backend/plantilla.py` y `backend/casos/`) |
 | `GET /fx/usd-mxn` | — | `rate`, `as_of`, `source`, `fallback`: tipo de cambio de referencia de Frankfurter; si falla, valor fijo de respaldo con `fallback: true` |
 | `GET /health` | — | `{"ok": true}` |
@@ -289,7 +289,7 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
   - `CHAIN_UNAVAILABLE` 502 (el RPC de Stellar no respondió)
 - `comparison` debe traer una entrada por criterio acordado, en el mismo orden.
 - Máximo 3 envíos por tarea; un acierto de caché no cuenta como envío. La caché se revisa antes del límite.
-- La vista del cliente nunca recibe `trace` ni `logic` ni el código antes de `Released`: solo `comparison` y `reason`.
+- La vista del cliente nunca recibe `trace` ni `logic` ni el código antes de `Released`: solo `comparison`, `reason` y `security_flags` (el mismo aviso de seguridad que ve el programador).
 - CORS solo para `FRONTEND_ORIGIN`.
 
 ## Motor de análisis (cuatro capas)

@@ -71,7 +71,7 @@ export type Verdict = {
 
 export type ClientVerdict = Pick<
   Verdict,
-  "code_hash" | "approved" | "stage" | "reason" | "comparison" | "transaction_hash"
+  "code_hash" | "approved" | "stage" | "reason" | "comparison" | "security_flags" | "transaction_hash"
 > & { video_url?: string | null; consented?: boolean };
 
 export class ApiError extends Error {

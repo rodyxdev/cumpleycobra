@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 
 import { Money } from "@/components/money";
@@ -19,11 +20,12 @@ import { api, ApiError, type ClientVerdict } from "@/lib/api";
 import { manualApproval } from "@/lib/approval";
 import { formatUsdc, shortHash } from "@/lib/format";
 import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
-import { keys, useStored, type ClientTask } from "@/lib/store";
+import { keys, store, useStored, type ClientTask } from "@/lib/store";
 
 export default function ClientePage({ searchParams }: { searchParams: Promise<{ tarea?: string }> }) {
   const { tarea } = use(searchParams);
   const ids = useStored<string[]>(keys.clientTaskIds) ?? [];
+  const router = useRouter();
 
   return (
     <div className="space-y-6">
@@ -38,7 +40,22 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
       ) : <AssistedTaskForm />}
       {ids.length > 0 && (
         <div className="space-y-2">
-          <div className="text-xs font-medium text-muted-foreground">Tareas creadas en este navegador</div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-medium text-muted-foreground">Tareas creadas en este navegador</div>
+            <button type="button" data-testid="limpiar-tareas"
+              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              onClick={() => {
+                const ok = window.confirm(
+                  "¿Borrar la lista de tareas de este navegador?\n\nSe borran los enlaces y tokens de esas tareas: ya no podrás ver " +
+                  "sus veredictos ni su código desde aquí. Los depósitos y pagos en el contrato no cambian, y tu sesión de Pollar se conserva.",
+                );
+                if (!ok) return;
+                store.clearTasks();
+                if (tarea) router.push("/cliente");
+              }}>
+              Limpiar lista
+            </button>
+          </div>
           <div className="flex flex-wrap gap-2">
             {ids.map((id) => (
               <Button key={id} variant={id === tarea ? "secondary" : "outline"} size="sm" nativeButton={false}
@@ -118,7 +135,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           {verdicts.length === 0 && <p className="rounded-xl border border-dashed p-6 text-base text-muted-foreground">Todavía no hay envíos.</p>}
           {verdicts.map((v) => (
             <VerdictCard key={v.code_hash} approved={v.approved} reason={v.reason} comparison={v.comparison}
-              transactionHash={v.transaction_hash} amount={task?.onchain?.amount}
+              securityFlags={v.security_flags ?? []} transactionHash={v.transaction_hash} amount={task?.onchain?.amount}
               meta={<>Capa {v.stage === "deterministic" ? "determinista" : v.stage === "cache" ? "caché" : "Gemini"} · código <span className="font-mono">{shortHash(v.code_hash)}</span></>}>
               <VideoDemo url={v.video_url} />
             </VerdictCard>
@@ -130,7 +147,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
         <CardHeader>
           <CardTitle>Tarea {taskId}</CardTitle>
           <CardDescription>
-            <Money units={ct.amount} /> acordados · plazo de {ct.deadline_minutes} minutos a partir del depósito
+            <Money units={ct.amount} inline /> acordados · plazo de {ct.deadline_minutes} minutos a partir del depósito
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

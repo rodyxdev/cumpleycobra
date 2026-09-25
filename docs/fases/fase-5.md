@@ -88,7 +88,7 @@ El monto inicial del formulario («20» MXN) es un valor de ejemplo del pedido, 
 
 ## 4. Motor medido: resumen para el pitch
 
-Fuente: [`fase-5-motor.json`](fase-5-motor.json), generado por `scripts/estabilizar_motor.py` el 24 de septiembre de 2026 (22:31–22:37 UTC) con `gemini-3.5-flash` en Vertex AI. Las expectativas de cada caso quedaron fijadas en [`scripts/corpus_motor.json`](../../scripts/corpus_motor.json) antes de medir. El motor nunca ejecuta las entregas.
+Medición original. Fuente: [`fase-5-motor.json`](fase-5-motor.json), generado por `scripts/estabilizar_motor.py` el 24 de septiembre de 2026 (22:31–22:37 UTC) con `gemini-3.5-flash` en Vertex AI. Las expectativas de cada caso quedaron fijadas en [`scripts/corpus_motor.json`](../../scripts/corpus_motor.json) antes de medir. El motor nunca ejecuta las entregas.
 
 | Medición | Casos | Aciertos | Falsas aprobaciones (código malo aprobado) | Falsos rechazos | Latencia mediana | Latencia máxima |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -99,6 +99,33 @@ Fuente: [`fase-5-motor.json`](fase-5-motor.json), generado por `scripts/estabili
 - **Latencia:** medida solo en los análisis con Gemini (46 de 60). No incluye las esperas del script para respetar la cuota (máximo 8 llamadas por minuto), pero sí los reintentos del motor. Los 14 rechazos de la capa determinista (D, `eval`, dunder, escritura de archivos) tardan menos de 1 ms y no llaman a Gemini. La máxima (17.78 s, caso K) queda dentro del tope de 20 s por intento. Estos tiempos no incluyen el `release` en la cadena.
 - **Seguridad:** los 6 casos con expectativa de seguridad (C por inyección en el docstring; D, R, S y T por la capa determinista) se rechazaron con `security_flags` no vacío en todas sus corridas.
 - **Corpus:** las 7 entregas correctas usan implementaciones distintas: comprensión de lista, bucle `for`, `map`, `while` con incremento, factor precalculado, `enumerate` y lista vacía. Las 13 defectuosas son B, C, D, sumar el descuento, no redondear, orden inverso, descuento fijo, redondear a entero, devolver un generador, devolver `None` con lista vacía, `eval`, dunder y escritura de archivos.
+
+### Medición vigente: prompt con el acuerdo como dato delimitado (25 de septiembre)
+
+Tras las correcciones de la auditoría, el motor recibe la descripción, los criterios y los ejemplos como JSON en un bloque `<acuerdo>` (`drafting.data_prompt`). Se repitió la medición completa, con las mismas expectativas y pausas de cuota, sin sobrescribir la anterior:
+
+```bash
+backend/.venv/Scripts/python scripts/estabilizar_motor.py --salida docs/fases/fase-5-motor-prompt-acuerdo.json
+```
+
+Fuente: [`fase-5-motor-prompt-acuerdo.json`](fase-5-motor-prompt-acuerdo.json), del 25 de septiembre de 2026 (15:19–15:26 UTC), con `gemini-3.5-flash` en Vertex AI.
+
+| Medición | Casos | Aciertos | Falsas aprobaciones (código malo aprobado) | Falsos rechazos | Latencia mediana | Latencia máxima |
+| --- | --- | --- | --- | --- | --- | --- |
+| Estabilidad: A, B, C y D, diez veces cada uno | 40 | **40/40** | 0 | 0 | 5.15 s | 23.02 s |
+| Corpus: 20 entregas distintas (7 correctas, 13 defectuosas) | 20 | **20/20** | 0 | 0 | 3.58 s | 13.07 s |
+| **Total** | **60** | **60/60** | **0** | **0** | **4.41 s** | **23.02 s** |
+
+- **Aciertos:** iguales a los del 24 de septiembre. Los 6 casos de seguridad se rechazaron con `security_flags` en todas sus corridas.
+- **Latencia:** más alta. Las dos máximas (A: 23.0 y 21.4 s) son intentos que Vertex cortó con `ServerError` tras 17.6 y 17.4 s, más el reintento. Sin ellos, la máxima de estabilidad es de 12.75 s.
+- **¿El prompt o el servicio?** Para saberlo, se hizo una prueba A/B en el mismo momento: el prompt anterior (texto plano) contra el nuevo, casos B y C, 4 veces cada uno, en orden alterno:
+
+| Prompt | B: mediana | C: mediana | Rechazos correctos |
+| --- | --- | --- | --- |
+| Anterior (texto plano) | 4.95 s | 6.70 s | 8/8 |
+| Nuevo (`<acuerdo>`) | 4.40 s | 5.95 s | 8/8 |
+
+  El prompt nuevo no es más lento: la subida de latencia viene del servicio en ese momento, que también dio errores reintentados (`ServerError`, `ClientError` y un `TimeoutError`). Es la misma degradación que alargó el caso C del ensayo de las correcciones.
 
 Límite honesto para el pitch: es un solo requisito (`aplicar_descuento`), con un corpus escrito por el equipo y de 20 casos. «Cero falsas aprobaciones» describe esta muestra, no una garantía general.
 

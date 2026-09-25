@@ -163,5 +163,5 @@ exit 0
 
 - El punto 17 no tiene test automatizado ni se probó con un RPC caído en el navegador.
 - Los escenarios A y B del punto 5 se reconstruyeron sin el texto de la auditoría; si la auditoría describe otros, hay que agregarlos.
-- El prompt del motor cambió (punto 10). Se probó con A, B y C y en el ensayo, pero la medición de 60 casos de la fase 5 (`fase-5-motor.json`) es de antes del cambio y no se repitió.
+- ~~La medición de 60 casos no se había repetido con el prompt nuevo.~~ Resuelto después de la revisión: 60/60, sin falsas aprobaciones ni falsos rechazos (ver `docs/fases/fase-5.md`, sección 4).
 - Fuera de la auditoría, visto en la captura del cliente: el veredicto del caso C aparece con los criterios en ✓ y «Rechazado», pero sin el aviso de seguridad, porque `GET /tasks/{id}/verdicts` no incluye `security_flags`. Lo explica el `reason`, pero agregar `security_flags` a esa respuesta haría la tarjeta del cliente igual a la del programador.

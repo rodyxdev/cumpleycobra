@@ -162,13 +162,13 @@ La demo paso a paso, con sus respaldos, está en [`docs/demo.md`](docs/demo.md).
 
 ## Motor medido
 
-Medición del 24 de septiembre de 2026 con `gemini-3.5-flash` ([detalle](docs/fases/fase-5.md#4-motor-medido-resumen-para-el-pitch)):
+Medición del 25 de septiembre de 2026 con `gemini-3.5-flash` y el prompt actual, con el acuerdo como dato delimitado ([detalle](docs/fases/fase-5.md#4-motor-medido-resumen-para-el-pitch)):
 
 | Casos | Aciertos | Falsas aprobaciones | Falsos rechazos | Latencia mediana | Latencia máxima |
 | --- | --- | --- | --- | --- | --- |
-| 60: A–D diez veces cada uno y 20 entregas distintas | 60/60 | 0 | 0 | 3.32 s | 17.78 s |
+| 60: A–D diez veces cada uno y 20 entregas distintas | 60/60 | 0 | 0 | 4.41 s | 23.02 s |
 
-Las expectativas se fijaron antes de medir. La latencia es la del análisis con Gemini; los rechazos deterministas tardan menos de 1 ms.
+Las expectativas se fijaron antes de medir. La latencia es la del análisis con Gemini e incluye sus reintentos: las dos máximas (23.0 y 21.4 s) son un intento que Vertex cortó con `ServerError` más el reintento. Los rechazos deterministas tardan menos de 1 ms. La medición del 24 de septiembre, con el prompt anterior, dio también 60/60 y mediana de 3.32 s; una prueba A/B en el mismo momento mostró que la latencia más alta viene del servicio, no del prompt.
 
 ## Límites honestos
 

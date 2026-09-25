@@ -48,10 +48,13 @@ export function parsePesos(text: string, rate: string): number | null {
   return units <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(units) : null;
 }
 
-export function Money({ units }: { units: number }) {
+/** Pesos primero y USDC debajo; con `inline`, en la misma línea para no romper una frase. */
+export function Money({ units, inline = false }: { units: number; inline?: boolean }) {
   const fx = useFx();
+  const pesos = fx ? `≈ ${(units / 10_000_000 * Number(fx.rate)).toLocaleString("es-MX", { style: "currency", currency: "MXN" })} MXN` : "Calculando pesos…";
+  if (inline) return <span>{pesos} <span className="text-muted-foreground">({formatUsdc(units)})</span></span>;
   return <span className="inline-flex flex-col align-middle">
-    <span>{fx ? `≈ ${(units / 10_000_000 * Number(fx.rate)).toLocaleString("es-MX", { style: "currency", currency: "MXN" })} MXN` : "Calculando pesos…"}</span>
+    <span>{pesos}</span>
     <span className="text-xs font-normal text-muted-foreground">{formatUsdc(units)}</span>
   </span>;
 }

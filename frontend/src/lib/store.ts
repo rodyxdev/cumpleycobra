@@ -5,6 +5,8 @@
 
 import { useMemo, useSyncExternalStore } from "react";
 
+import { STORAGE_PREFIX, taskStorageKeys } from "@/lib/task-keys";
+
 export type ClientTask = {
   task_id: string;
   client_token: string;
@@ -22,7 +24,7 @@ export type FreelancerTask = {
   freelancer_address: string;
 };
 
-const PREFIX = "cumpleycobra";
+const PREFIX = STORAGE_PREFIX;
 const EVENT = "cumpleycobra:storage";
 
 function readRaw(key: string): string | null {
@@ -94,4 +96,19 @@ export const store = {
   saveFreelancerTask: (t: FreelancerTask) => write(keys.freelancerTask(t.task_id), t),
   saveLastAddress: (role: "cliente" | "programador", addr: string) => write(keys.lastAddress(role), addr),
   clientTask: (id: string) => read<ClientTask>(keys.clientTask(id)),
+  /** Borra solo las llaves de tareas (task-keys.ts); la sesión de Pollar queda intacta. */
+  clearTasks: (): number => {
+    let removed = 0;
+    try {
+      const all = Array.from({ length: window.localStorage.length }, (_, i) => window.localStorage.key(i) ?? "");
+      for (const key of taskStorageKeys(all)) {
+        window.localStorage.removeItem(key);
+        removed += 1;
+      }
+    } catch {
+      // Sin almacenamiento: no hay nada que borrar.
+    }
+    window.dispatchEvent(new Event(EVENT));
+    return removed;
+  },
 };

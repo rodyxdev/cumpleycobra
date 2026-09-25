@@ -343,7 +343,7 @@ async def demo():
 
 @app.get("/tasks/{task_id}/verdicts")
 async def verdicts(task_id: str, x_client_token: str | None = Header(default=None)):
-    """Veredictos para la vista del cliente: solo reason y comparison (nunca trace, logic ni código)."""
+    """Veredictos para la vista del cliente: reason, comparison y security_flags (nunca trace, logic ni código)."""
     task = get_task_or_404(task_id)
     if not token_ok(task["client_token"], x_client_token):
         raise err(403, "INVALID_TOKEN", "Token de cliente inválido")
@@ -353,6 +353,8 @@ async def verdicts(task_id: str, x_client_token: str | None = Header(default=Non
         "verdicts": [
             {"code_hash": r["code_hash"], "approved": r["approved"], "stage": r["stage"],
              "reason": r["reason"], "comparison": r["comparison"],
+             # El mismo aviso de seguridad que ve el programador (y el que entra al verdict_hash).
+             "security_flags": r.get("security_flags", []),
              "transaction_hash": r["transaction_hash"],
              "video_url": task["codes"].get(r["code_hash"], {}).get("video_url"),
              "consented": task.get("consented_code_hash") == r["code_hash"]}
