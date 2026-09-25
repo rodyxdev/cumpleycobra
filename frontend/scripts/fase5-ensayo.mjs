@@ -81,6 +81,21 @@ const programador = await open("programador", 960, 9332);
 const c = cliente.page;
 const p = programador.page;
 const summary = { started_at: new Date().toISOString() };
+
+// Respuestas reales de la red, para verificar el pago con scripts/verificar_pago.py: el JSON de
+// POST /evaluate que recibió el programador y el código que entregó GET /delivery al cliente.
+const LOGS = path.join(ROOT, "scripts", ".logs");
+const evaluations = [];
+p.on("response", async (res) => {
+  if (res.request().method() === "POST" && new URL(res.url()).pathname === "/evaluate") {
+    try { evaluations.push(await res.json()); } catch { /* sin cuerpo JSON */ }
+  }
+});
+c.on("response", async (res) => {
+  if (/\/tasks\/[^/]+\/delivery$/.test(new URL(res.url()).pathname) && res.ok()) {
+    try { writeFileSync(path.join(LOGS, "ensayo-entrega.py"), (await res.json()).code); } catch { /* sin cuerpo */ }
+  }
+});
 try {
   // Preparación (no se cronometra): sesión de Pollar en ambas pestañas.
   await p.goto(`${APP}/cliente`, { waitUntil: "load" });
@@ -171,6 +186,9 @@ try {
     return send("Caso A");
   });
   summary.caso_a = { aprobado: /APROBADO/.test(caseA.terminal), release: caseA.tx };
+  const paid = evaluations.findLast((e) => e.transaction_hash === caseA.tx);
+  if (paid) writeFileSync(path.join(LOGS, "ensayo-evaluate-a.json"), JSON.stringify(paid, null, 1));
+  summary.caso_a.video_url = paid?.video_url ?? null;
   await shot(p, "fase-5-02-programador-caso-a-pagado.png");
 
   // 8. El cliente ve «Pagada» y recibe el código.
