@@ -64,6 +64,8 @@ export type Verdict = {
   code_hash: string;
   verdict_hash: string;
   security_flags: string[];
+  /** Enlace de Drive normalizado (…/preview) que entró al verdict_hash, o null. */
+  video_url: string | null;
   submissions_used: number;
 };
 

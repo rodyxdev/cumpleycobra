@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
-import { api, ApiError, type Caso, type TaskView } from "@/lib/api";
+import { api, ApiError, type Caso, type TaskView, type Verdict } from "@/lib/api";
 import { keys, store, useStored, type FreelancerTask } from "@/lib/store";
 
 const MIN_SECONDS = 120; // mismo margen que el backend (DEADLINE_TOO_CLOSE)
@@ -148,6 +148,8 @@ function SubmitPanel({
   const [consentFor, setConsentFor] = useState<string | null>(null);
   const [more, setMore] = useState(false);
   const [pasted, setPasted] = useState("");
+  // El veredicto que devolvió /evaluate: la tarjeta lo muestra tal cual, sin leer la terminal.
+  const [verdict, setVerdict] = useState<Verdict | null>(null);
   const { lines, busy, now, run } = useTerminal();
 
   useEffect(() => {
@@ -169,7 +171,8 @@ function SubmitPanel({
       : null;
 
   async function send() {
-    await run(label, () => api.evaluate(task.task_id, mine.freelancer_address, code, mine.freelancer_token, video.trim() || null));
+    setVerdict(null);
+    setVerdict(await run(label, () => api.evaluate(task.task_id, mine.freelancer_address, code, mine.freelancer_token, video.trim() || null)));
     onDone();
   }
 
@@ -178,7 +181,7 @@ function SubmitPanel({
 
   return (
     <div className="contents">
-      <SubmissionResult lines={lines} now={now} busy={busy} amount={task.onchain?.amount} criteriaCount={task.criteria.length} />
+      <SubmissionResult lines={lines} now={now} busy={busy} amount={task.onchain?.amount} verdict={verdict} />
       <Card className="order-3 min-w-0">
         <CardHeader>
           <CardTitle>Entregar código</CardTitle>

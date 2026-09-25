@@ -2,32 +2,19 @@ import { ChevronDown } from "lucide-react";
 
 import { Terminal } from "@/components/terminal";
 import { VerdictCard } from "@/components/verdict-card";
+import type { Verdict } from "@/lib/api";
+import { verdictCardProps } from "@/lib/verdict-view";
 
-type Props = Parameters<typeof Terminal>[0] & { busy: boolean; amount?: number; criteriaCount: number };
+type Props = Parameters<typeof Terminal>[0] & { busy: boolean; amount?: number; verdict: Verdict | null };
 
-/** Proyección visual de la salida existente; no guarda estado ni vuelve a evaluar el código. */
-export function SubmissionResult({ lines, now, busy, amount, criteriaCount }: Props) {
+/** Tarjeta con el veredicto que devolvió /evaluate y, debajo, la terminal con el análisis. */
+export function SubmissionResult({ lines, now, busy, amount, verdict }: Props) {
   if (lines.length === 0) return null;
-  const last = lines.at(-1);
-  const complete = !!last && (last.kind === "link" ||
-    (last.kind === "muted" && last.text === "Sin pago: transaction_hash = null"));
-  // El pie emitido por useTerminal tiene cinco líneas sin pago y seis con pago.
-  // Se lee ese pie, nunca una frase parecida dentro de la traza del modelo.
-  const statusIndex = complete ? lines.length - (last.kind === "link" ? 6 : 5) : -1;
-  const status = lines[statusIndex];
-  const reason = lines[statusIndex + 1];
-  const transaction = last?.kind === "link" ? last : null;
-  // comparison cierra analysis en el motor. Se toman sus últimas marcas para no repetir trazas.
-  const comparison = lines.slice(0, Math.max(0, statusIndex))
-    .flatMap((line) => "text" in line && /^[✓✗]/.test(line.text.trimStart()) ? [line.text] : []).slice(-criteriaCount);
-  const flags = lines.flatMap((line) => line.kind === "warn" && line.text.startsWith("Alerta de seguridad: ") ? [line.text.slice("Alerta de seguridad: ".length)] : []);
+  // run() devuelve el veredicto al terminar de imprimir: la tarjeta aparece al mismo tiempo que antes.
+  const complete = verdict !== null && !busy;
   return (
     <div className="order-first min-w-0 space-y-5">
-      {complete && status && "text" in status && reason && "text" in reason && (
-        <VerdictCard approved={status.text === "Veredicto: APROBADO"} reason={reason.text}
-          comparison={comparison} securityFlags={flags} amount={amount}
-          transactionHash={transaction && "text" in transaction ? transaction.text.replace(/^Transacción /, "") : null} />
-      )}
+      {complete && <VerdictCard {...verdictCardProps(verdict)} amount={amount} />}
       <details key={complete ? "complete" : "reading"} open={!complete} className="analysis-disclosure">
         <summary>
           <span>Ver análisis del motor</span>

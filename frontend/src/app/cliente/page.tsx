@@ -16,6 +16,7 @@ import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type ClientVerdict } from "@/lib/api";
+import { manualApproval } from "@/lib/approval";
 import { formatUsdc, shortHash } from "@/lib/format";
 import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
 import { keys, useStored, type ClientTask } from "@/lib/store";
@@ -82,9 +83,8 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const invite = `${origin}/tarea/${encodeURIComponent(taskId)}?invitacion=${encodeURIComponent(ct.invite_token)}`;
   const status = task?.onchain?.status;
-  const rejected = verdicts.some((v) => !v.approved);
-  const expired = status === "Funded" && secondsLeft !== null && secondsLeft <= 0;
-  const canApprove = status === "Funded" && !!task?.freelancer_address && (rejected || expired);
+  const approval = manualApproval({ status, freelancer: task?.freelancer_address, verdicts, secondsLeft });
+  const canApprove = approval.can;
   const walletLabel = wallet.mode === "pollar" ? "Pollar" : "Freighter";
 
   async function run(set: (s: TxState) => void, build: () => Promise<string>) {
@@ -185,9 +185,11 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           <CardHeader>
             <CardTitle>Aprobar manualmente</CardTitle>
             <CardDescription>
-              {expired
+              {approval.why === "expired"
                 ? "Venció el plazo. Puedes pagar al programador de todos modos; si no, cualquiera puede reembolsarte."
-                : "El motor rechazó la entrega. Si aun así la aceptas, el contrato le paga al programador."}{" "}
+                : approval.why === "approved-unpaid"
+                  ? "El motor aprobó la entrega, pero el pago automático no se liberó. Puedes pagarle con la aprobación manual."
+                  : "El motor rechazó la entrega. Si aun así la aceptas, el contrato le paga al programador."}{" "}
               El pago va a {task?.freelancer_address ? shortHash(task.freelancer_address, 6) : "la wallet del programador"}.
             </CardDescription>
           </CardHeader>

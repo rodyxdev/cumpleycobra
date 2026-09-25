@@ -3,15 +3,34 @@
 import { useEffect, useState } from "react";
 import { api, type Fx } from "@/lib/api";
 import { formatUsdc } from "@/lib/format";
+import { FX_RETRY_MS, shouldRefetch } from "@/lib/fx-cache";
 
-let pending: Promise<Fx> | null = null;
+const OFFLINE: Fx = { rate: "17.50", as_of: "2026-09-24", source: "Referencia fija de respaldo (sin conexión)", fallback: true };
+
+// Una consulta compartida por todos los montos de la página. Una referencia real se conserva en la
+// sesión; una de respaldo se vuelve a pedir a los 60 s (fx-cache.ts).
+let cached: { promise: Promise<Fx>; at: number; value?: Fx } | null = null;
+function loadFx(now: number): Promise<Fx> {
+  if (!cached || shouldRefetch(cached.value, cached.at, now)) {
+    const entry: NonNullable<typeof cached> = { promise: api.fx().catch(() => OFFLINE), at: now };
+    entry.promise.then((value) => { entry.value = value; });
+    cached = entry;
+  }
+  return cached.promise;
+}
+
 export function useFx() {
   const [fx, setFx] = useState<Fx | null>(null);
   useEffect(() => {
     let alive = true;
-    pending ??= api.fx().catch(() => ({ rate: "17.50", as_of: "2026-09-24", source: "Referencia fija de respaldo (sin conexión)", fallback: true }));
-    pending.then((value) => { if (alive) setFx(value); });
-    return () => { alive = false; };
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => loadFx(Date.now()).then((value) => {
+      if (!alive) return;
+      setFx(value);
+      if (value.fallback) retry = setTimeout(tick, FX_RETRY_MS);
+    });
+    tick();
+    return () => { alive = false; clearTimeout(retry); };
   }, []);
   return fx;
 }

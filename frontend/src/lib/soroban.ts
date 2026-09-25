@@ -14,6 +14,7 @@ import {
 } from "@stellar/stellar-sdk";
 
 import { CONTRACT_ID, NETWORK_PASSPHRASE, RPC_URL, USDC_ASSET } from "@/lib/config";
+import { sendRejection } from "@/lib/send-status";
 
 export const server = new rpc.Server(RPC_URL);
 
@@ -122,10 +123,8 @@ export async function usdcStatus(address: string): Promise<UsdcStatus> {
 export async function submitSigned(signedXdr: string): Promise<string> {
   const tx: Transaction | FeeBumpTransaction = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
   const sent = await server.sendTransaction(tx);
-  if (sent.status === "ERROR") {
-    const code = sent.errorResult?.result.type ?? "desconocido";
-    throw new ChainError(`La red rechazó la transacción al enviarla (${code}).`);
-  }
+  const rejection = sendRejection(sent.status, sent.status === "ERROR" ? sent.errorResult?.result.type : undefined);
+  if (rejection) throw new ChainError(rejection);
   return sent.hash;
 }
 
