@@ -5,6 +5,7 @@ event loop. La llave del árbitro nunca sale de este proceso ni se imprime.
 """
 
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ ERR_DEADLINE_PASSED = 9
 CONTRACT_ERR_RE = re.compile(r"Error\(Contract, #(\d+)\)")
 BACKOFF_SECS = (1, 3)
 POLL_ATTEMPTS = 30
+# Todas las firmas del árbitro usan la misma cuenta y su número de secuencia: dos release en
+# paralelo (dos tareas a la vez) armarían transacciones con la misma secuencia y una fallaría.
+RELEASE_LOCK = threading.Lock()
 
 
 class StellarUnavailable(Exception):
@@ -170,7 +174,13 @@ class StellarClient:
 
         `on_signed(hash)` se llama antes de enviar para guardar el hash en state.json.
         Lanza ContractError si la simulación devuelve un error del contrato (#6, #9…).
+        Un release a la vez en todo el proceso (RELEASE_LOCK): comparten la secuencia del árbitro.
         """
+        with RELEASE_LOCK:
+            return self._release(task_id, freelancer, code_hash_hex, verdict_hash_hex, on_signed)
+
+    def _release(self, task_id: str, freelancer: str, code_hash_hex: str,
+                 verdict_hash_hex: str, on_signed: Callable[[str], None]) -> ReleaseOutcome:
         params = [
             scval.to_string(task_id),
             scval.to_address(freelancer),

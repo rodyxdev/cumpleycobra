@@ -9,6 +9,7 @@ import httpx
 
 URL = "https://api.frankfurter.dev/v2/rate/USD/MXN"
 # Referencia fija de demo, no una cotización observada. Su fecha no se actualiza.
+FALLBACK_LAST_GOOD = "Respaldo: último valor de Frankfurter"
 FALLBACK = {"rate": "17.50", "as_of": "2026-09-24", "source": "Referencia fija de respaldo (no cotización)", "fallback": True}
 
 
@@ -43,7 +44,11 @@ class FxReference:
                             await asyncio.sleep((1, 3)[attempt])
                             continue
                         break
-            # Mantener fecha y fuente anteriores, marcando explícitamente el respaldo.
-            self.value = {**(self.value or FALLBACK), "fallback": True}
+            # Se conserva la última tasa buena y su fecha, pero la fuente dice que es un respaldo:
+            # no es la cotización de Frankfurter de este momento.
+            if self.value is None:
+                self.value = dict(FALLBACK)
+            elif not self.value["fallback"]:
+                self.value = {**self.value, "source": FALLBACK_LAST_GOOD, "fallback": True}
             self.expires = time.monotonic() + 60
             return self.value

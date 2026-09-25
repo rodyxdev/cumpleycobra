@@ -24,6 +24,7 @@ from stellar_sdk import StrKey
 from . import drafting, gemini
 from .config import (
     GEMINI_ATTEMPT_BUDGET_SECS,
+    MAX_DEADLINE_MINUTES,
     MAX_SUBMISSIONS,
     MIN_SECONDS_TO_EVALUATE,
     RELEASE_BUDGET_SECS,
@@ -65,21 +66,17 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class Example(Strict):
-    input: StrictStr
-    output: StrictStr
-
-
 class CreateTaskIn(Strict):
     client_address: StrictStr
     raw_request: StrictStr = Field(default="", max_length=2000)
-    description: StrictStr = Field(min_length=1)
+    description: drafting.Description
     criteria: list[drafting.Criterion] = Field(min_length=1, max_length=8)
     language: StrictStr
-    allowed_deps: list[StrictStr] = []
-    examples: list[Example] = []
+    allowed_deps: list[StrictStr] = Field(default=[], max_length=drafting.MAX_ALLOWED_DEPS)
+    examples: list[drafting.Example] = Field(default=[], max_length=drafting.MAX_EXAMPLES)
     amount: StrictInt = Field(gt=0)
-    deadline_minutes: StrictInt = Field(gt=0, le=60 * 24 * 30)
+    # 7 días: muy lejos del TTL de 30 días que el contrato extiende en cada escritura.
+    deadline_minutes: StrictInt = Field(gt=0, le=MAX_DEADLINE_MINUTES)
 
 
 class AcceptIn(Strict):
@@ -551,6 +548,11 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
                 result["reason"] = REASON_NO_TIME_TO_RELEASE
                 counted = False
             else:
+                # El veredicto queda en caché (y en disco) antes de firmar: si el proceso cae durante
+                # el release, reenviar el mismo código reintenta el pago en vez de volver a evaluar.
+                result["payment_retryable"] = True
+                task["cache"][ch] = result
+                store().save()
                 await try_payment(task, result)
 
         if counted:
@@ -649,6 +651,13 @@ async def settle_not_funded(task: dict, result: dict) -> None:
         result["payment_retryable"] = False
         return
     state = onchain["status"] if onchain else "desconocido"
+    if state == "Funded":
+        # El contrato solo acepta release con timestamp < plazo: vencido, ya no hay reintento posible.
+        left = await seconds_left(onchain["deadline"])
+        if left is not None and left <= 0:
+            result["reason"] = REASON_DEADLINE_PASSED
+            result["payment_retryable"] = False
+            return
     if state == "Funded" and await trustline_missing(task["freelancer_address"]):
         no_trustline(result)
         return

@@ -9,6 +9,12 @@ from . import gemini
 
 Criterion = Annotated[StrictStr, Field(min_length=1, max_length=300)]
 RawRequest = Annotated[StrictStr, Field(min_length=1, max_length=2000)]
+# Límites de la versión final, iguales en el borrador de Gemini y en POST /tasks: un borrador
+# que se pase queda fuera de esquema (reintento) en lugar de llegar a un formulario que no se puede crear.
+Description = Annotated[StrictStr, Field(min_length=1, max_length=2000)]
+ExampleField = Annotated[StrictStr, Field(max_length=300)]
+MAX_EXAMPLES = 8
+MAX_ALLOWED_DEPS = 10
 
 
 class Strict(BaseModel):
@@ -16,8 +22,8 @@ class Strict(BaseModel):
 
 
 class Example(Strict):
-    input: StrictStr
-    output: StrictStr
+    input: ExampleField
+    output: ExampleField
 
 
 class DraftIn(Strict):
@@ -43,11 +49,11 @@ class ReviewIn(Strict):
 
 
 class Draft(ReviewIn):
-    description: StrictStr = Field(min_length=1)
+    description: Description
     criteria: list[Criterion] = Field(min_length=3, max_length=8)
     language: Literal["python"]
-    allowed_deps: list[StrictStr]
-    examples: list[Example]
+    allowed_deps: list[StrictStr] = Field(max_length=MAX_ALLOWED_DEPS)
+    examples: list[Example] = Field(max_length=MAX_EXAMPLES)
 
     @field_validator("description")
     @classmethod

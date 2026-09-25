@@ -19,6 +19,7 @@ RELEASE_BUDGET_SECS = 30        # preparar, firmar, enviar y confirmar el releas
 GEMINI_ATTEMPT_BUDGET_SECS = GEMINI_TIMEOUT_SECS + RELEASE_BUDGET_SECS
 
 MAX_SUBMISSIONS = 3
+MAX_DEADLINE_MINUTES = 60 * 24 * 7  # 7 días; el TTL que el contrato extiende es de 30 días
 MAX_CODE_BYTES = 10 * 1024
 
 

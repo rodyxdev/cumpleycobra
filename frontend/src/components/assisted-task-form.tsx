@@ -41,7 +41,7 @@ export function AssistedTaskForm() {
   const mins = /^\d+$/.test(minutes) ? Number(minutes) : NaN;
   const validCriteria = !!spec && spec.criteria.length > 0 && spec.criteria.length <= 8 &&
     spec.criteria.every((c) => c.trim().length > 0 && c.length <= 300);
-  const valid = validCriteria && !!spec?.description.trim() && units !== null && mins > 0 && mins <= 43200;
+  const valid = validCriteria && !!spec?.description.trim() && units !== null && mins > 0 && mins <= 10080;
 
   function editCriteria(criteria: string[]) {
     if (!spec) return;
@@ -206,7 +206,7 @@ export function AssistedTaskForm() {
             </div>
             {units !== null && <Money units={units} />}
             <FxNotice />
-            {!valid && <p className="text-sm text-[var(--alert-foreground)]">Completa la descripción y los criterios, un monto válido y un plazo entre 1 y 43200 minutos.</p>}
+            {!valid && <p className="text-sm text-[var(--alert-foreground)]">Completa la descripción y los criterios, un monto válido y un plazo entre 1 y 10080 minutos (7 días).</p>}
             <Button disabled={!valid || !!busy} onClick={create}>{busy === "create" ? "Creando…" : "Crear tarea"}</Button>
           </CardContent>
         </Card>

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from .config import MAX_CODE_BYTES
 
 RESERVED_TAG = "codigo_entregado"
+TOO_DEEP = "el código tiene expresiones anidadas demasiado profundas para revisarlo de forma segura"
 
 FORBIDDEN_NAMES = {
     "eval", "exec", "compile", "__import__", "getenv", "subprocess", "socket",
@@ -207,9 +208,15 @@ def analyze(code: str, allowed_deps: list[str]) -> DeterministicResult:
         tree = ast.parse(clean)
     except (SyntaxError, ValueError) as exc:
         return DeterministicResult(False, problems=[f"error de sintaxis ({_short(exc)})"])
+    except (RecursionError, MemoryError):
+        return DeterministicResult(False, problems=[TOO_DEEP])
 
     checker = _Checker(set(allowed_deps))
-    checker.visit(tree)
+    try:
+        checker.visit(tree)
+    except (RecursionError, MemoryError):
+        # El visitante es recursivo: un código anidado a propósito no puede tumbar el servidor.
+        return DeterministicResult(False, clean_code=clean, problems=[TOO_DEEP], security=True)
     if checker.problems:
         return DeterministicResult(False, clean_code=clean, problems=checker.problems, security=True)
     return DeterministicResult(True, clean_code=clean)
