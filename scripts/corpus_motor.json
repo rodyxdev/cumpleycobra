@@ -1,0 +1,122 @@
+[
+  {
+    "id": "A",
+    "file": "backend/casos/a_feliz.py",
+    "approved": true,
+    "security": false
+  },
+  {
+    "id": "B",
+    "file": "backend/casos/b_calidad.py",
+    "approved": false,
+    "security": false
+  },
+  {
+    "id": "C",
+    "file": "backend/casos/c_inyeccion.py",
+    "approved": false,
+    "security": true
+  },
+  {
+    "id": "D",
+    "file": "backend/casos/d_secretos.py",
+    "approved": false,
+    "security": true
+  },
+  {
+    "id": "E-bucle-correcto",
+    "approved": true,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    resultado = []\n    for precio in precios:\n        resultado.append(round(precio * (1 - porcentaje / 100), 2))\n    return resultado\n"
+  },
+  {
+    "id": "F-map-correcto",
+    "approved": true,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return list(map(lambda p: round(p * (1 - porcentaje / 100), 2), precios))\n"
+  },
+  {
+    "id": "G-while-correcto",
+    "approved": true,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    resultado = []\n    i = 0\n    while i < len(precios):\n        resultado.append(round(precios[i] * (1 - porcentaje / 100), 2))\n        i += 1\n    return resultado\n"
+  },
+  {
+    "id": "H-factor-correcto",
+    "approved": true,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    factor = (100 - porcentaje) / 100\n    return [round(p * factor, 2) for p in precios]\n"
+  },
+  {
+    "id": "I-enumerate-correcto",
+    "approved": true,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    salida = []\n    for _, precio in enumerate(precios):\n        salida.append(round(precio * (1 - porcentaje / 100), 2))\n    return salida\n"
+  },
+  {
+    "id": "J-vacia-correcto",
+    "approved": true,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    if not precios:\n        return []\n    return [round(p * (1 - porcentaje / 100), 2) for p in precios]\n"
+  },
+  {
+    "id": "K-suma-descuento",
+    "approved": false,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return [round(p * (1 + porcentaje / 100), 2) for p in precios]\n"
+  },
+  {
+    "id": "L-sin-redondeo",
+    "approved": false,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return [p * (1 - porcentaje / 100) for p in precios]\n"
+  },
+  {
+    "id": "M-orden-inverso",
+    "approved": false,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return [round(p * (1 - porcentaje / 100), 2) for p in reversed(precios)]\n"
+  },
+  {
+    "id": "N-descuento-fijo",
+    "approved": false,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return [round(p * 0.9, 2) for p in precios]\n"
+  },
+  {
+    "id": "O-redondea-entero",
+    "approved": false,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return [round(p * (1 - porcentaje / 100)) for p in precios]\n"
+  },
+  {
+    "id": "P-generador",
+    "approved": false,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return (round(p * (1 - porcentaje / 100), 2) for p in precios)\n"
+  },
+  {
+    "id": "Q-vacia-none",
+    "approved": false,
+    "security": false,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    if not precios:\n        return None\n    return [round(p * (1 - porcentaje / 100), 2) for p in precios]\n"
+  },
+  {
+    "id": "R-eval",
+    "approved": false,
+    "security": true,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    return eval(\"[round(p * (1 - porcentaje / 100), 2) for p in precios]\")\n"
+  },
+  {
+    "id": "S-dunder",
+    "approved": false,
+    "security": true,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    tipo = precios.__class__\n    return [round(p * (1 - porcentaje / 100), 2) for p in precios]\n"
+  },
+  {
+    "id": "T-escritura",
+    "approved": false,
+    "security": true,
+    "code": "def aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]:\n    with open(\"datos.txt\", \"w\") as archivo:\n        archivo.write(str(precios))\n    return [round(p * (1 - porcentaje / 100), 2) for p in precios]\n"
+  }
+]
