@@ -4,6 +4,7 @@ Arranque (desde la raíz del repositorio):
     backend/.venv/Scripts/python -m uvicorn backend.main:app --port 8000
 """
 
+import asyncio
 import hmac
 import logging
 import secrets
@@ -21,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from starlette.concurrency import run_in_threadpool
 from stellar_sdk import StrKey
 
-from . import drafting, gemini
+from . import drafting, gemini, reputacion
 from .config import (
     GEMINI_ATTEMPT_BUDGET_SECS,
     MAX_DEADLINE_MINUTES,
@@ -292,6 +293,8 @@ async def get_task(task_id: str):
         "latest_code_hash": task.get("latest_code_hash"),
         "consented_code_hash": task.get("consented_code_hash"),
         "latest_rejected": bool(task.get("latest_code_hash") and not task["codes"][task["latest_code_hash"]].get("approved")),
+        # Calificación pública del cliente (también aparece en el perfil del programador).
+        "rating": task.get("rating"),
     }
 
 
@@ -403,6 +406,84 @@ async def consent(task_id: str, body: ConsentIn | None = None,
         task["consented_code_hash"] = ch
         store().save()
         return {"code_hash": ch, "consented": True}
+
+
+# ---------------------------------------------------------------------------
+# Reputación del programador: solo lectura del contrato; no toca el flujo del dinero
+# ---------------------------------------------------------------------------
+ONCHAIN_CONCURRENCY = 8
+
+
+class RatingIn(Strict):
+    estrellas: StrictInt = Field(ge=1, le=5)
+    comentario: StrictStr | None = Field(default=None, max_length=280)
+
+
+@app.post("/tasks/{task_id}/calificacion")
+async def rate_task(task_id: str, body: RatingIn, x_client_token: str | None = Header(default=None)):
+    """El cliente califica a su programador, una vez, cuando la tarea está Released on-chain."""
+    task = get_task_or_404(task_id)
+    async with store().lock(task_id):
+        if not token_ok(task["client_token"], x_client_token):
+            raise err(403, "INVALID_TOKEN", "Token de cliente inválido")
+        if task.get("rating"):
+            raise err(409, "ALREADY_RATED", "Esta tarea ya tiene calificación")
+        onchain, _ = await read_chain(task_id)
+        if not onchain or onchain["status"] != "Released":
+            raise err(409, "TASK_NOT_RELEASED", "Solo se puede calificar cuando el programador ya cobró")
+        comment = (body.comentario or "").strip() or None
+        task["rating"] = {"estrellas": body.estrellas, "comentario": comment, "at": int(time.time())}
+        store().save()
+        return {"task_id": task_id, "estrellas": body.estrellas, "comentario": comment}
+
+
+def payment_events() -> "reputacion.PaymentEvents | None":
+    events = getattr(app.state, "payment_events", None)
+    if events is None and hasattr(chain(), "server"):
+        events = app.state.payment_events = reputacion.PaymentEvents(chain().server,
+                                                                     app.state.settings.contract_id)
+    return events
+
+
+async def released_records() -> list[dict]:
+    """Tareas Released confirmadas con get_task, con cómo se pagó (eventos del contrato)."""
+    tasks = store().tasks
+    candidates = [tid for tid, t in tasks.items() if t.get("freelancer_address")]
+    cache = reputacion.onchain_cache(chain())
+    limit = asyncio.Semaphore(ONCHAIN_CONCURRENCY)
+
+    async def read(tid: str):
+        hit = cache.get(tid)
+        if hit and (hit[1] is None or hit[1] > time.monotonic()):
+            return tid, hit[0]
+        async with limit:
+            onchain = await run_in_threadpool(chain().get_task, tid)
+        cache[tid] = reputacion.cache_entry(onchain, time.monotonic())
+        return tid, onchain
+
+    try:
+        onchain = dict(await asyncio.gather(*(read(tid) for tid in candidates)))
+    except (StellarUnavailable, ContractError) as exc:
+        raise err(502, "CHAIN_UNAVAILABLE", f"No se pudo leer el contrato ({exc})") from exc
+    events: dict = {}
+    source = payment_events()
+    if source is not None:
+        try:
+            events = await run_in_threadpool(source.refresh)
+        except Exception as exc:  # noqa: BLE001 - sin eventos se usa lo guardado en state.json
+            log.warning("No se pudieron leer los eventos de pago (%s)", type(exc).__name__)
+    return reputacion.paid_records(tasks, onchain, events)
+
+
+@app.get("/programadores")
+async def programmers():
+    return {"programmers": reputacion.leaderboard(await released_records())}
+
+
+@app.get("/programadores/{address}")
+async def programmer_profile(address: str):
+    check_address(address, "address")
+    return reputacion.profile(address, await released_records())
 
 
 # ---------------------------------------------------------------------------
