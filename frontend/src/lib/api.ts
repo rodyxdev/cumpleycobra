@@ -44,7 +44,34 @@ export type TaskView = Spec & {
   latest_code_hash?: string | null;
   consented_code_hash?: string | null;
   latest_rejected?: boolean;
+  /** Calificación del cliente, si ya calificó (pública: aparece en el perfil del programador). */
+  rating?: Rating | null;
 };
+
+export type Rating = { estrellas: number; comentario: string | null };
+
+/** Métricas de un programador: solo tareas Released confirmadas en el contrato. */
+export type ProgrammerSummary = {
+  address: string;
+  engine_paid: number;
+  manual_paid: number;
+  distinct_clients: number;
+  rating_average: number | null;
+  rating_count: number;
+};
+
+export type PaidTask = {
+  task_id: string;
+  description: string;
+  criteria_count: number;
+  amount: number;
+  paid_by: "motor" | "manual";
+  transaction_hash: string | null;
+  paid_at: string | null;
+  rating: Rating | null;
+};
+
+export type ProgrammerProfile = ProgrammerSummary & { history: PaidTask[] };
 
 export type CreatedTask = {
   task_id: string;
@@ -104,6 +131,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   fx: () => request<Fx>("/fx/usd-mxn"),
+  programmers: () => request<{ programmers: ProgrammerSummary[] }>("/programadores"),
+  programmer: (address: string) => request<ProgrammerProfile>(`/programadores/${encodeURIComponent(address)}`),
+  rateTask: (id: string, clientToken: string, estrellas: number, comentario: string | null) =>
+    request<{ task_id: string } & Rating>(`/tasks/${encodeURIComponent(id)}/calificacion`, {
+      method: "POST", headers: { "X-Client-Token": clientToken }, body: JSON.stringify({ estrellas, comentario }),
+    }),
   consent: (id: string, token: string, code_hash: string) =>
     request<{ consented: boolean; code_hash: string }>(`/tasks/${encodeURIComponent(id)}/consent`, {
       method: "POST", headers: { "X-Freelancer-Token": token }, body: JSON.stringify({ code_hash }),

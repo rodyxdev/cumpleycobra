@@ -13,6 +13,9 @@ export function SiteHeader() {
           <Link href="/cliente" className="transition-colors hover:text-primary">
             Soy cliente
           </Link>
+          <Link href="/programadores" className="transition-colors hover:text-primary">
+            Programadores
+          </Link>
           <span className="hidden border-l pl-6 text-sm lg:inline">Testnet de Stellar</span>
           <WalletConnect />
         </nav>

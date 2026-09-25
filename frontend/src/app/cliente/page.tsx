@@ -7,6 +7,7 @@ import { use, useEffect, useState } from "react";
 import { Money } from "@/components/money";
 import { VideoDemo } from "@/components/video-demo";
 import { VerdictCard } from "@/components/verdict-card";
+import { RatingCard } from "@/components/rating-card";
 import { CopyField } from "@/components/copy-field";
 import { AssistedTaskForm } from "@/components/assisted-task-form";
 import { StatusCard } from "@/components/status-card";
@@ -230,6 +231,11 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
       )}
 
       {(status === "Released" || verdicts.some((v) => v.consented)) && <Delivery taskId={taskId} clientToken={ct.client_token} paid={status === "Released"} />}
+
+      {status === "Released" && (
+        <RatingCard taskId={taskId} clientToken={ct.client_token} rating={task?.rating} onRated={refresh}
+          freelancer={task?.onchain?.freelancer ?? task?.freelancer_address ?? null} />
+      )}
     </div>
   );
 }
