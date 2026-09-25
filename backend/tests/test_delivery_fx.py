@@ -94,6 +94,7 @@ def test_fx_caida_reintentos_y_respaldo(monkeypatch):
     result = asyncio.run(fx.FxReference().get())
     assert get.call_count == 3
     assert result == fx.FALLBACK
+    assert result["rate"] == "17.50" and result["fallback"] is True
 
 
 @pytest.mark.parametrize("rate", ["NaN", "-1", "Infinity", "0"])

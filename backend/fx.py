@@ -9,7 +9,7 @@ import httpx
 
 URL = "https://api.frankfurter.dev/v2/rate/USD/MXN"
 # Referencia fija de demo, no una cotización observada. Su fecha no se actualiza.
-FALLBACK = {"rate": "20.000000", "as_of": "2026-09-24", "source": "Referencia fija de respaldo (no cotización)", "fallback": True}
+FALLBACK = {"rate": "17.50", "as_of": "2026-09-24", "source": "Referencia fija de respaldo (no cotización)", "fallback": True}
 
 
 class FxReference:

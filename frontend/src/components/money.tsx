@@ -9,7 +9,7 @@ export function useFx() {
   const [fx, setFx] = useState<Fx | null>(null);
   useEffect(() => {
     let alive = true;
-    pending ??= api.fx().catch(() => ({ rate: "20", as_of: "2026-09-24", source: "Referencia fija de respaldo (sin conexión)", fallback: true }));
+    pending ??= api.fx().catch(() => ({ rate: "17.50", as_of: "2026-09-24", source: "Referencia fija de respaldo (sin conexión)", fallback: true }));
     pending.then((value) => { if (alive) setFx(value); });
     return () => { alive = false; };
   }, []);

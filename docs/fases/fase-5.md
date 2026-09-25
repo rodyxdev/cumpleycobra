@@ -70,4 +70,18 @@ pestaña nueva: {"visible":"visible","hasFocus":true} valor tras teclear 5: 205
 
 **Causa:** las pestañas que ya estaban abiertas en las ventanas de Chrome de los perfiles tenían `document.visibilityState = "hidden"` aun después de `bringToFront()`. Chrome descarta las teclas enviadas por CDP (`Input.dispatchKeyEvent`) a una pestaña oculta, aunque el campo tenga el foco. Es un artefacto de la automatización, no de la UI: una persona siempre teclea en una pestaña visible. No hay remontaje, así que no hizo falta elevar el estado ni guardarlo en `localStorage`.
 
-**Cambio:** `frontend/scripts/fase4b-capturas.mjs` abre ahora su propia pestaña, se detiene con un error claro si la pestaña está oculta antes de teclear y conserva la comprobación del valor antes de enviar. Las 8 tareas de estas pruebas (`vCFQ8tf4nxR-efN-`, `GAktRMM5EsJWF8YT`, `hktCca_xj_vvKExS`, `V5ZR6cdj1LocbBzn`, `lYw9JaULh-Y4JBxs`, `AnPKtplSdM84S75n`, `Kdtyj19IanUix8Wj`, `EKWx_XxX0mnT447V` y `3_3jP0K8UVUmSwI3`) nunca se depositaron: solo existen en `state.json`.
+**Cambio:** `frontend/scripts/fase4b-capturas.mjs` abre ahora su propia pestaña, se detiene con un error claro si la pestaña está oculta antes de teclear y conserva la comprobación del valor antes de enviar. Las 9 tareas de estas pruebas (`vCFQ8tf4nxR-efN-`, `GAktRMM5EsJWF8YT`, `hktCca_xj_vvKExS`, `V5ZR6cdj1LocbBzn`, `lYw9JaULh-Y4JBxs`, `AnPKtplSdM84S75n`, `Kdtyj19IanUix8Wj`, `EKWx_XxX0mnT447V` y `3_3jP0K8UVUmSwI3`) nunca se depositaron: solo existen en `state.json`.
+
+## 3. Tipo de cambio de respaldo: 17.50
+
+`backend/fx.py` (`FALLBACK`) y `frontend/src/components/money.tsx` (respaldo sin conexión al backend) usan ahora **17.50** MXN por USD en lugar de 20. La tasa real de Frankfurter en la sesión fue 17.5335. El respaldo sigue marcado `fallback: true`, con la fuente «Referencia fija de respaldo (no cotización)», y la UI añade «Se está usando un valor de respaldo». El test de caída de Frankfurter comprueba además la tasa y la marca:
+
+```text
+$ backend/.venv/Scripts/python -m pytest backend/tests -q
+126 passed, 2 warnings in 6.67s
+
+# Frankfurter sin red (tres intentos fallidos):
+{'rate': '17.50', 'as_of': '2026-09-24', 'source': 'Referencia fija de respaldo (no cotización)', 'fallback': True}
+```
+
+El monto inicial del formulario («20» MXN) es un valor de ejemplo del pedido, no una tasa, y no cambió.
