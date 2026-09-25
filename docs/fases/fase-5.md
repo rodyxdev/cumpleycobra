@@ -40,3 +40,34 @@ $ curl -s localhost:8000/tasks/3Pi1ubNJqZadIooQ
 ```
 
 `latest_rejected` ya es un booleano junto al `code_hash`: la vista pública no incluye `reason`, `comparison`, `trace`, `logic`, `analysis` ni el código. No hubo cambios de código. El veredicto completo solo sale por `POST /evaluate` (al programador) y `GET /tasks/{id}/verdicts` (con `X-Client-Token`).
+
+## 2. Campo del video: la causa no es un remontaje
+
+**Síntoma (fase 4b):** en una corrida del script de capturas, el enlace tecleado en «Enlace de Google Drive al video demo» quedó vacío justo después de elegir el caso. En la misma sesión, el monto «10» del cliente se quedó en «20».
+
+**Hipótesis revisadas en el código:**
+
+- `useTask` consulta cada 3 s y nunca vuelve `task` a `null`: no desmonta el panel.
+- `UsdcGate` sustituye a sus hijos si `wallet.address` es `null` o si `status` es `null`; tras la primera lectura, `status` no vuelve a `null`.
+- «Usar la plantilla de la demo» no toca `amount`. El estado del monto vive en `AssistedTaskForm` y solo se reiniciaría si se remontara el formulario completo.
+
+**Reproducción** con un observador (`MutationObserver`) instalado antes de cargar la página. Anota cada aparición de «Conecta tu wallet», «Revisando tu cuenta en la red» y «Cargando la tarea», y cada `<input>` nuevo:
+
+| Secuencia | Pestaña | Resultado |
+| --- | --- | --- |
+| Tarea ya aceptada: pegar enlace, elegir caso A y luego C, esperar 25 s (refrescos de saldo cada 8 s y de tarea cada 3 s) | Nueva, abierta por el script | 3 de 3 conservan el enlace; un solo montaje del `<input>` |
+| Aceptar una tarea nueva y pegar el enlace enseguida; muestras cada 0.5 s durante 15 s | Nueva | 5 de 5 conservan el enlace (`vvvv…`); «Conecta tu wallet» nunca aparece |
+| `/cliente` → plantilla → teclear «10» en el monto | Ya abierta desde la fase 3 | 5 de 5 se quedan en «20» |
+| La secuencia exacta de la corrida 4b (plantilla → invitación → aceptar → caso B → enlace) | Ya abierta | 3 de 3 se quedan vacíos |
+
+En todas las corridas fallidas, el observador registró **un solo montaje** (`<input id=monto> montado valor=«20»`, nunca `NUEVO (remontaje)`): el campo nunca recibió el texto. En las pestañas ya abiertas:
+
+```text
+pestaña 0: {"visible":"hidden","hasFocus":true,"active":"monto"} valor tras teclear 5: 20
+…
+pestaña nueva: {"visible":"visible","hasFocus":true} valor tras teclear 5: 205
+```
+
+**Causa:** las pestañas que ya estaban abiertas en las ventanas de Chrome de los perfiles tenían `document.visibilityState = "hidden"` aun después de `bringToFront()`. Chrome descarta las teclas enviadas por CDP (`Input.dispatchKeyEvent`) a una pestaña oculta, aunque el campo tenga el foco. Es un artefacto de la automatización, no de la UI: una persona siempre teclea en una pestaña visible. No hay remontaje, así que no hizo falta elevar el estado ni guardarlo en `localStorage`.
+
+**Cambio:** `frontend/scripts/fase4b-capturas.mjs` abre ahora su propia pestaña, se detiene con un error claro si la pestaña está oculta antes de teclear y conserva la comprobación del valor antes de enviar. Las 8 tareas de estas pruebas (`vCFQ8tf4nxR-efN-`, `GAktRMM5EsJWF8YT`, `hktCca_xj_vvKExS`, `V5ZR6cdj1LocbBzn`, `lYw9JaULh-Y4JBxs`, `AnPKtplSdM84S75n`, `Kdtyj19IanUix8Wj`, `EKWx_XxX0mnT447V` y `3_3jP0K8UVUmSwI3`) nunca se depositaron: solo existen en `state.json`.

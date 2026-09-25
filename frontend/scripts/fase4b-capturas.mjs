@@ -37,6 +37,10 @@ async function clickText(page, selector, text, timeout = 30000) {
 }
 
 async function fill(page, selector, value) {
+  await page.bringToFront();
+  if ((await page.evaluate(() => document.visibilityState)) !== "visible") {
+    throw new Error("La pestaña está oculta: Chrome no le entrega las teclas. Deja la ventana visible.");
+  }
   await page.focus(selector);
   await page.keyboard.down("Control");
   await page.keyboard.press("KeyA");
@@ -47,8 +51,7 @@ async function fill(page, selector, value) {
   if (got !== value) throw new Error(`${selector}: se esperaba «${value}» y quedó «${got}»`);
 }
 
-// El campo del video llegó vacío una vez justo después de elegir el caso: se reintenta y se
-// comprueba de nuevo inmediatamente antes de enviar.
+// Defensa adicional: se reintenta y se comprueba el valor inmediatamente antes de enviar.
 async function fillStable(page, selector, value) {
   for (let i = 1; i <= 3; i++) {
     try {
@@ -90,9 +93,12 @@ async function open(role, x, port) {
     await sleep(500);
   }
   const browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${port}`, defaultViewport: null, protocolTimeout: 600000 });
-  const pages = await browser.pages();
-  const page = pages.find((pg) => pg.url().startsWith(APP)) ?? pages[0] ?? (await browser.newPage());
+  // Pestaña nueva y propia: en las pestañas que ya estaban abiertas, document.visibilityState era
+  // "hidden" aun después de bringToFront, y Chrome descartaba las teclas enviadas por CDP (el campo
+  // conservaba su valor inicial, sin remontaje). Ver docs/fases/fase-5.md, punto 2.
+  const page = await browser.newPage();
   page.on("pageerror", (e) => log(`[${role}] error en la página:`, e.message));
+  await page.goto(`${APP}/cliente`, { waitUntil: "load" });
   return { browser, page };
 }
 

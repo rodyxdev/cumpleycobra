@@ -118,7 +118,7 @@ Ninguna muestra tokens: el enlace de invitación aparece enmascarado (`invitacio
 ## 4. Pendientes y riesgos
 
 - **`fase3-hito.mjs` ya no funciona tal cual:** desde la fase 4a, la revisión de USDC de `/cliente` aparece en el paso 3 del pedido, y ese script la espera sin cargar un pedido. `fase4b-capturas.mjs` ya carga la plantilla primero; el hito de la fase 3 no se volvió a ejecutar.
-- **Campo del video en la automatización:** una vez, el campo quedó vacío justo después de elegir el caso. No se reprodujo a mano ni se encontró la causa en la UI; el script ahora reintenta y comprueba el valor antes de enviar.
+- **Campo del video en la automatización:** una vez, el campo quedó vacío justo después de elegir el caso. La causa quedó aislada en la fase 5 (punto 2): la pestaña del script estaba oculta y Chrome descartaba las teclas; no es un remontaje de la UI.
 - **Permisos y duración del video:** el backend no puede comprobarlos. Si el archivo no es público, el reproductor muestra el error de Drive; la UI lo avisa.
 - **Respaldo del tipo de cambio:** su fecha fija (`2026-09-24`) no se actualiza. Si Frankfurter falla varios días, el aviso seguirá mostrando esa fecha, marcada como respaldo.
 - No se repitió el camino con "Aprobar manualmente" después del consentimiento: `client_release` con Pollar quedó probado en la fase 3. Freighter sigue sin probar.
