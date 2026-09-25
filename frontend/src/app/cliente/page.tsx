@@ -7,6 +7,7 @@ import { use, useEffect, useState } from "react";
 import { Money } from "@/components/money";
 import { VideoDemo } from "@/components/video-demo";
 import { VerdictCard } from "@/components/verdict-card";
+import { ClientProposals } from "@/components/client-proposals";
 import { RatingCard } from "@/components/rating-card";
 import { CopyField } from "@/components/copy-field";
 import { AssistedTaskForm } from "@/components/assisted-task-form";
@@ -143,6 +144,8 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           ))}
         </div>
       </section>
+
+      <ClientProposals taskId={taskId} clientToken={ct.client_token} clientAddress={ct.client_address} />
 
       <Card>
         <CardHeader>

@@ -6,6 +6,7 @@ import { ArrowUpRight, ShieldCheck } from "lucide-react";
 
 import { Money } from "@/components/money";
 import { IdentityBadge } from "@/components/identity";
+import { SendProposal } from "@/components/send-proposal";
 import { ProfileEditor } from "@/components/profile-editor";
 import { ProgrammerMetrics } from "@/components/programmer-metrics";
 import { SkillTags } from "@/components/skill-tags";
@@ -49,6 +50,7 @@ export default function ProgramadorPage({ params }: { params: Promise<{ address:
 
       {profile && (
         <>
+          <SendProposal programador={address} />
           <ProfileEditor address={address}
             initial={{ nombre: profile.nombre ?? null, habilidades: profile.habilidades ?? [], bio: profile.bio ?? null }}
             onSaved={(p) => setProfile({ ...profile, ...p, identidad_verificada: true })} />

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { HeaderInbox } from "@/components/header-inbox";
 import { HeaderIdentity } from "@/components/identity";
 import { WalletConnect } from "@/components/wallet-connect";
 
@@ -18,6 +19,7 @@ export function SiteHeader() {
             Programadores
           </Link>
           <span className="hidden border-l pl-6 text-sm lg:inline">Testnet de Stellar</span>
+          <HeaderInbox />
           <HeaderIdentity />
           <WalletConnect />
         </nav>

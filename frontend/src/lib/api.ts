@@ -1,3 +1,5 @@
+import type { Proposal, InboxProposal } from "@/lib/proposals";
+
 // Cliente del backend de Cumple&Cobra. El frontend nunca toca llaves ni la API de Gemini.
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -138,6 +140,26 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  createProposal: (task_id: string, programador: string, clientToken: string, sessionToken: string) =>
+    request<Proposal>("/propuestas", {
+      method: "POST", headers: { "X-Client-Token": clientToken, Authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ task_id, programador }),
+    }),
+  inbox: (sessionToken: string) => request<{ propuestas: InboxProposal[] }>("/buzon", {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  }),
+  taskProposals: (id: string, clientToken: string, sessionToken: string) =>
+    request<{ propuestas: Proposal[] }>(`/tasks/${encodeURIComponent(id)}/propuestas`, {
+      headers: { "X-Client-Token": clientToken, Authorization: `Bearer ${sessionToken}` },
+    }),
+  acceptProposal: (id: string, sessionToken: string) =>
+    request<Proposal & { freelancer_token: string }>(`/propuestas/${encodeURIComponent(id)}/aceptar`, {
+      method: "POST", headers: { Authorization: `Bearer ${sessionToken}` },
+    }),
+  rejectProposal: (id: string, sessionToken: string) =>
+    request<Proposal>(`/propuestas/${encodeURIComponent(id)}/rechazar`, {
+      method: "POST", headers: { Authorization: `Bearer ${sessionToken}` },
+    }),
   fx: () => request<Fx>("/fx/usd-mxn"),
   programmers: () => request<{ programmers: ProgrammerSummary[] }>("/programadores"),
   programmer: (address: string) => request<ProgrammerProfile>(`/programadores/${encodeURIComponent(address)}`),
