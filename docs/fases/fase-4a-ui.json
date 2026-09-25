@@ -1,0 +1,55 @@
+{
+  "captured_at": "2026-09-24T22:14:12.991Z",
+  "draft": {
+    "criteria": [
+      "La función acepta como argumentos una lista de valores numéricos que representan los precios y un valor numérico que representa el porcentaje de descuento.",
+      "La función calcula el descuento para cada precio aplicando la reducción porcentual correspondiente.",
+      "La función devuelve una lista con los precios resultantes, donde cada elemento está redondeado a dos decimales."
+    ],
+    "description": "Una función en Python que toma una lista de precios y un porcentaje de descuento, aplica dicho descuento a cada precio y retorna una nueva lista con los precios finales redondeados a 2 decimales, sin utilizar librerías externas.",
+    "language": "python",
+    "allowed_deps": [],
+    "examples": [
+      {
+        "input": "precios = [100.0, 50.0, 10.0], descuento = 10",
+        "output": "[90.0, 45.0, 9.0]"
+      },
+      {
+        "input": "precios = [19.99, 5.5], descuento = 20",
+        "output": "[15.99, 4.4]"
+      }
+    ]
+  },
+  "review": {
+    "criteria": [
+      {
+        "index": 0,
+        "vague": true,
+        "suggestion": "La función debe procesar la lista de precios en una sola pasada utilizando una comprensión de lista, sin bucles anidados."
+      },
+      {
+        "index": 1,
+        "vague": false,
+        "suggestion": null
+      },
+      {
+        "index": 2,
+        "vague": false,
+        "suggestion": null
+      }
+    ]
+  },
+  "browser_errors": [],
+  "checks": [
+    "borrador real",
+    "revisión real",
+    "aplicar sugerencia",
+    "invalidar revisión al editar",
+    "editar descripción y ejemplos",
+    "agregar y quitar criterios",
+    "límites HTML",
+    "móvil sin desbordamiento",
+    "conservar ediciones tras error",
+    "plantilla de respaldo"
+  ]
+}
