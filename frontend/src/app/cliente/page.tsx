@@ -82,7 +82,6 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
   const sameWallet = wallet.address === ct.client_address;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const invite = `${origin}/tarea/${encodeURIComponent(taskId)}?invitacion=${encodeURIComponent(ct.invite_token)}`;
-  const depositCmd = `bash scripts/deposit.sh ${taskId} ${ct.amount} ${ct.deadline_minutes * 60} ${ct.rules_hash}`;
   const status = task?.onchain?.status;
   const rejected = verdicts.some((v) => !v.approved);
   const expired = status === "Funded" && secondsLeft !== null && secondsLeft <= 0;
@@ -150,10 +149,13 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           )}
           <TxResult state={deposit} label="Depósito" />
           <details className="text-xs text-muted-foreground">
-            <summary className="cursor-pointer">Respaldo: depositar con scripts/deposit.sh</summary>
-            <div className="mt-2">
-              <CopyField label="Comando" value={depositCmd} />
-            </div>
+            <summary className="cursor-pointer">Respaldo si la wallet no firma el depósito</summary>
+            <p className="mt-2">
+              Un depósito desde la terminal lo firma otra cuenta, y el motor exige que el cliente en el contrato sea
+              quien creó la tarea. Crea una tarea nueva desde la terminal con{" "}
+              <code className="font-mono">backend/.venv/Scripts/python scripts/tarea_respaldo.py</code> y comparte el
+              enlace que imprime.
+            </p>
           </details>
           <div className="text-xs text-muted-foreground">
             rules_hash <span className="font-mono">{ct.rules_hash}</span>

@@ -126,3 +126,33 @@ Saldos en Horizon después del fondeo:
 | Contrato | `CAWAZODOFP67HETHN4NLYOECPCJACGLUTCLARVGLBZ7TJDLT4KLQRATQ` | 0 (sin tareas abiertas) | — |
 
 La dirección de la gas wallet sale del `fee_account` del fee-bump del depósito de la fase 4b ([`fd550600…`](https://stellar.expert/explorer/testnet/tx/fd550600dbf24af28fde2d68607903e5b0277ee68837c7361ad2301de53c4733)); esa transacción costó 588 442 stroops (0.0588 XLM).
+
+## 6. Checklist de la demo: [`docs/demo.md`](../demo.md)
+
+Tiene tres partes: lo que hay que revisar antes de subir, los diez pasos en orden (con el texto exacto del pedido) y qué hacer si falla cada pieza.
+
+**Hallazgo al escribir el respaldo de Pollar.** `scripts/deposit.sh` deposita con una identidad de la Stellar CLI (`cyc-client`), y `/evaluate` exige que el cliente on-chain sea el que creó la tarea (`backend/main.py`, guardia `TASK_MISMATCH`). Una tarea creada en el navegador con la wallet de Pollar y depositada con `deposit.sh` nunca se podría evaluar. El comando «Respaldo: depositar con scripts/deposit.sh» que mostraba la vista del cliente llevaba a ese error.
+
+- **Nuevo `scripts/tarea_respaldo.py`:** crea la tarea con la plantilla y con `cyc-client` como cliente, la deposita con el mismo `deposit` que `deposit.sh` (invocando la Stellar CLI sin `bash`, porque en Windows el `bash` que encuentra Python puede ser el de WSL, sin la CLI), imprime el enlace de invitación y guarda los tokens solo en `scripts/.logs/`.
+- **Vista del cliente:** el bloque de respaldo explica la regla y apunta a ese script en lugar del comando que no funcionaba.
+
+Prueba de punta a punta del respaldo (0.1 USDC, plazo de 3 minutos; programador `cyc-freelancer` por API):
+
+```text
+$ backend/.venv/Scripts/python scripts/tarea_respaldo.py --usdc 0.1 --minutos 3
+Tarea _HpAjUOhwnT6cxLU creada con cyc-client (GCJUXZSMNWHTRXRCRH5PIZU7USEMYAM4GGJRGF7FLZBNMO3R2WZY6CAB) como cliente
+Depositando 1000000 unidades (plazo 180 s) desde cyc-client
+Transacción: b71751da1564f66cdeebe7e15600ce2fc755c3eabd5a22b8e0f5b9a4129c4fb8
+
+accept 200
+evaluate 200 {'approved': False, 'stage': 'deterministic', 'reason': "Rechazado por la capa determinista: línea 1: import no permitido 'os'; línea 6: atributo prohibido '.environ'", 'transaction_hash': None}
+verdicts 200 [(False, 'deterministic')]
+
+$ stellar contract invoke … -- timeout_refund --task_id '"_HpAjUOhwnT6cxLU"'
+ℹ️  Signing transaction: 1b5a8eb012a354f14dc4a360ed7f90bd0330f68495106acf5ec09a7acc505f68
+📅 … TimeoutRefundEvent (timeout_refund), task_id: "_HpAjUOhwnT6cxLU", client: "GCJUXZSMNWHTRXRCRH5PIZU7USEMYAM4GGJRGF7FLZBNMO3R2WZY6CAB", amount: "1000000"
+```
+
+Sin `TASK_MISMATCH`: el motor evaluó y respondió con la capa determinista. Una tarea creada en el primer intento (`XjMrxYujvjZU-0-h`) no se depositó (el `bash` de WSL no tenía la CLI) y solo existe en `state.json`.
+
+Pendiente de la checklist: **grabar el video de respaldo** de la demo completa.
