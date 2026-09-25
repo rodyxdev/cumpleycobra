@@ -258,7 +258,7 @@ def test_verdicts_del_cliente_sin_trace_logic_ni_codigo(api):
     assert client.get(f"/tasks/{task_id}/verdicts").status_code == 403
     body = client.get(f"/tasks/{task_id}/verdicts", headers={"X-Client-Token": ct}).json()
     v = body["verdicts"][0]
-    assert set(v) == {"code_hash", "approved", "stage", "reason", "comparison", "transaction_hash"}
+    assert set(v) == {"code_hash", "approved", "stage", "reason", "comparison", "transaction_hash", "video_url", "consented"}
     texto = json.dumps(body, ensure_ascii=False)
     assert "paso" not in texto and "lógica" not in texto and "aplicar_descuento(precios" not in texto
 

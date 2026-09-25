@@ -88,7 +88,7 @@ async function walletReady(page, role) {
 async function createAndDeposit(page) {
   await page.bringToFront();
   await page.goto(`${APP}/cliente`, { waitUntil: "load" });
-  await wait(page, () => document.body.innerText.includes("Plantilla: aplicar_descuento"), 60000);
+  await clickText(page, "button", "Usar la plantilla de la demo", 60000);
   await clickText(page, "button", "Crear tarea");
   await wait(page, () => location.search.includes("tarea="), 30000);
   const taskId = new URL(page.url()).searchParams.get("tarea");

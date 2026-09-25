@@ -3,7 +3,8 @@ import { Clock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { TaskView } from "@/lib/api";
-import { formatCountdown, formatUsdc, STATUS_LABEL } from "@/lib/format";
+import { formatCountdown, STATUS_LABEL } from "@/lib/format";
+import { Money, FxNotice } from "@/components/money";
 
 /** Estado y monto leídos del contrato (no del backend), con la cuenta regresiva del plazo. */
 export function StatusCard({ task, secondsLeft }: { task: TaskView; secondsLeft: number | null }) {
@@ -26,7 +27,7 @@ export function StatusCard({ task, secondsLeft }: { task: TaskView; secondsLeft:
         </div>
         <div>
           <div className="text-xs text-muted-foreground">Monto en el contrato</div>
-          <div className="mt-1 font-medium">{onchain ? formatUsdc(onchain.amount) : "—"}</div>
+          <div className="mt-1 font-medium">{onchain ? <Money units={onchain.amount} /> : "—"}</div>
         </div>
         <div>
           <div className="text-xs text-muted-foreground">Plazo restante</div>
@@ -48,6 +49,7 @@ export function StatusCard({ task, secondsLeft }: { task: TaskView; secondsLeft:
         {task.onchain_error && (
           <div className="w-full text-xs text-red-600">No se pudo leer el contrato: {task.onchain_error}</div>
         )}
+        <div className="w-full"><FxNotice /></div>
       </CardContent>
     </Card>
   );

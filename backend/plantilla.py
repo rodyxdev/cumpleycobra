@@ -1,8 +1,9 @@
-"""Plantilla fija de la demo (mientras no exista el pedido asistido)."""
+"""Pedido de la demo y plantilla fija de respaldo del pedido asistido."""
 
 DEMO_RAW_REQUEST = (
-    "Necesito una función en Python que le aplique un descuento a una lista de "
-    "precios y me regrese los precios ya con descuento."
+    "Necesito una función en Python que reciba una lista de precios y un porcentaje "
+    "de descuento, y me regrese los precios con el descuento aplicado, redondeados "
+    "a 2 decimales. Sin librerías externas."
 )
 
 DEMO_SPEC = {

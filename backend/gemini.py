@@ -9,6 +9,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 import httpx
 from google import genai
@@ -20,6 +21,7 @@ from .config import GEMINI_TIMEOUT_SECS, Settings
 
 BACKOFF_SECS = (1, 3)  # 2 reintentos ante errores transitorios
 log = logging.getLogger("cumpleycobra.gemini")
+Result = TypeVar("Result")
 
 # gemini-3.5-flash razona internamente por defecto (usage_metadata.thoughts_token_count > 0).
 # ThinkingConfig.thinking_level (enum ThinkingLevel del SDK instalado) lo acota.
@@ -131,19 +133,37 @@ def build_config() -> types.GenerateContentConfig:
 
 
 async def evaluate(client: genai.Client, model: str, spec: dict, clean_code: str,
-                   time_ok: Callable[[], Awaitable[bool]]) -> tuple[GeminiVerdict, float]:
+                   time_ok: Callable[[], Awaitable[bool]], *,
+                   before_attempt: Callable[[], Awaitable[None]] | None = None) -> tuple[GeminiVerdict, float]:
     """Llama a Gemini con reintentos. Antes de cada reintento revisa el plazo.
 
     Devuelve (veredicto, segundos). Lanza EngineUnavailable u OutOfTime.
     """
-    config = build_config()
-    prompt = build_prompt(spec, clean_code)
+    return await generate_structured(
+        client, model, build_prompt(spec, clean_code), build_config(),
+        lambda text: _parse(text, len(spec["criteria"])), time_ok, before_attempt,
+    )
+
+
+async def generate_structured(
+    client: genai.Client, model: str, prompt: str, config: types.GenerateContentConfig,
+    parse: Callable[[str | None], Result | None],
+    time_ok: Callable[[], Awaitable[bool]] | None = None,
+    before_attempt: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[Result, float]:
+    """Política única para evaluación, borrador y revisión; 20 s por intento.
+
+    before_attempt permite espaciar también los reintentos de las pruebas de cuota.
+    La espera de cuota ocurre antes de iniciar el reloj de la petición.
+    """
     transient_retries = 0
     schema_retries = 0
     started = time.monotonic()
     attempt = 0
     while True:
-        if attempt > 0 and not await time_ok():
+        if before_attempt is not None:
+            await before_attempt()
+        if attempt > 0 and time_ok is not None and not await time_ok():
             raise OutOfTime()
         attempt += 1
         t0 = time.monotonic()
@@ -161,7 +181,7 @@ async def evaluate(client: genai.Client, model: str, spec: dict, clean_code: str
                 continue
             raise EngineUnavailable(f"Gemini falló: {type(exc).__name__}") from exc
 
-        verdict = _parse(resp.text, len(spec["criteria"]))
+        verdict = parse(resp.text)
         if verdict is not None:
             return verdict, time.monotonic() - started
         log.warning("Gemini: intento %d fuera de esquema tras %.1f s", attempt, time.monotonic() - t0)

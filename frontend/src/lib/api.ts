@@ -3,6 +3,8 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export type Example = { input: string; output: string };
+export type Fx = { rate: string; as_of: string; source: string; fallback: boolean };
+export type CriterionReview = { index: number; vague: boolean; suggestion: string | null };
 
 export type Spec = {
   description: string;
@@ -39,6 +41,9 @@ export type TaskView = Spec & {
   onchain: OnchainTask | null;
   seconds_left: number | null;
   onchain_error: string | null;
+  latest_code_hash?: string | null;
+  consented_code_hash?: string | null;
+  latest_rejected?: boolean;
 };
 
 export type CreatedTask = {
@@ -65,7 +70,7 @@ export type Verdict = {
 export type ClientVerdict = Pick<
   Verdict,
   "code_hash" | "approved" | "stage" | "reason" | "comparison" | "transaction_hash"
->;
+> & { video_url?: string | null; consented?: boolean };
 
 export class ApiError extends Error {
   constructor(
@@ -96,6 +101,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  fx: () => request<Fx>("/fx/usd-mxn"),
+  consent: (id: string, token: string, code_hash: string) =>
+    request<{ consented: boolean; code_hash: string }>(`/tasks/${encodeURIComponent(id)}/consent`, {
+      method: "POST", headers: { "X-Freelancer-Token": token }, body: JSON.stringify({ code_hash }),
+    }),
+  draft: (raw_request: string) =>
+    request<Spec>("/tasks/draft", { method: "POST", body: JSON.stringify({ raw_request }) }),
+  reviewDraft: (criteria: string[]) =>
+    request<{ criteria: CriterionReview[] }>("/tasks/draft/review", {
+      method: "POST", body: JSON.stringify({ criteria }),
+    }),
   demo: () => request<Demo>("/demo"),
   task: (id: string) => request<TaskView>(`/tasks/${encodeURIComponent(id)}`),
   createTask: (body: Record<string, unknown>) =>
@@ -105,11 +121,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ freelancer_address, invite_token }),
     }),
-  evaluate: (task_id: string, freelancer_address: string, code: string, token: string) =>
+  evaluate: (task_id: string, freelancer_address: string, code: string, token: string, video_url: string | null = null) =>
     request<Verdict>("/evaluate", {
       method: "POST",
       headers: { "X-Freelancer-Token": token },
-      body: JSON.stringify({ task_id, freelancer_address, code, video_url: null }),
+      body: JSON.stringify({ task_id, freelancer_address, code, video_url }),
     }),
   delivery: (id: string, clientToken: string) =>
     request<{ code: string; video_url: string | null; code_hash: string }>(

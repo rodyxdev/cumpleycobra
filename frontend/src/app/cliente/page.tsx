@@ -1,26 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 
+import { Money } from "@/components/money";
+import { VideoDemo } from "@/components/video-demo";
 import { ComparisonList } from "@/components/comparison-list";
 import { CopyField } from "@/components/copy-field";
-import { CriteriaCard } from "@/components/criteria-card";
+import { AssistedTaskForm } from "@/components/assisted-task-form";
 import { StatusCard } from "@/components/status-card";
 import { TxResult, type TxState } from "@/components/tx-result";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
-import { api, ApiError, type ClientVerdict, type Demo } from "@/lib/api";
-import { explorerTx, formatUsdc, parseUsdc, shortHash } from "@/lib/format";
+import { api, ApiError, type ClientVerdict } from "@/lib/api";
+import { explorerTx, formatUsdc, shortHash } from "@/lib/format";
 import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
-import { keys, store, useStored, type ClientTask } from "@/lib/store";
+import { keys, useStored, type ClientTask } from "@/lib/store";
 
 export default function ClientePage({ searchParams }: { searchParams: Promise<{ tarea?: string }> }) {
   const { tarea } = use(searchParams);
@@ -34,9 +33,9 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
           Crea la tarea, comparte la invitación con tu programador y deposita el monto en el contrato.
         </p>
       </div>
-      <UsdcGate role="cliente">
-        {(usdc) => (tarea ? <ClientTaskPanel taskId={tarea} usdc={usdc} /> : <CreateTaskForm />)}
-      </UsdcGate>
+      {tarea ? (
+        <UsdcGate role="cliente">{(usdc) => <ClientTaskPanel taskId={tarea} usdc={usdc} />}</UsdcGate>
+      ) : <AssistedTaskForm />}
       {ids.length > 0 && (
         <div className="space-y-2">
           <div className="text-xs font-medium text-muted-foreground">Tareas creadas en este navegador</div>
@@ -55,82 +54,6 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Crear tarea con la plantilla fija (la dirección es la de la wallet conectada)
-// ---------------------------------------------------------------------------
-function CreateTaskForm() {
-  const router = useRouter();
-  const wallet = useWallet();
-  const [demo, setDemo] = useState<Demo | null>(null);
-  const [amount, setAmount] = useState("1");
-  const [minutes, setMinutes] = useState("10");
-  const [error, setError] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-
-  useEffect(() => {
-    api.demo().then(setDemo, (e: ApiError) => setError(e.message));
-  }, []);
-
-  const units = parseUsdc(amount);
-  const mins = /^\d+$/.test(minutes) ? Number(minutes) : NaN;
-  const valid = demo && wallet.address && units !== null && mins > 0;
-
-  async function create() {
-    if (!demo || units === null || !wallet.address) return;
-    setSending(true);
-    setError(null);
-    try {
-      const created = await api.createTask({
-        client_address: wallet.address,
-        raw_request: demo.raw_request,
-        ...demo.spec,
-        amount: units,
-        deadline_minutes: mins,
-      });
-      store.saveClientTask({ ...created, amount: units, deadline_minutes: mins, client_address: wallet.address });
-      router.replace(`/cliente?tarea=${encodeURIComponent(created.task_id)}`);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-      setSending(false);
-    }
-  }
-
-  return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-      {demo ? (
-        <CriteriaCard spec={demo.spec} title="Plantilla: aplicar_descuento" />
-      ) : (
-        <Card>
-          <CardContent className="text-sm text-muted-foreground">Cargando la plantilla…</CardContent>
-        </Card>
-      )}
-      <Card className="h-fit">
-        <CardHeader>
-          <CardTitle>Nueva tarea</CardTitle>
-          <CardDescription>Los criterios de la plantilla quedan fijos y se firman con su hash.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="monto">Monto (USDC)</Label>
-              <Input id="monto" value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="plazo">Plazo (minutos)</Label>
-              <Input id="plazo" value={minutes} inputMode="numeric" onChange={(e) => setMinutes(e.target.value)} />
-            </div>
-          </div>
-          {units !== null && <p className="text-xs text-muted-foreground">{units.toLocaleString("es-MX")} unidades del token</p>}
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <Button className="w-full" disabled={!valid || sending} onClick={create}>
-            {sending ? "Creando…" : "Crear tarea"}
-          </Button>
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -192,7 +115,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
         <CardHeader>
           <CardTitle>Tarea {taskId}</CardTitle>
           <CardDescription>
-            {formatUsdc(ct.amount)} acordados · plazo de {ct.deadline_minutes} minutos a partir del depósito
+            <Money units={ct.amount} /> acordados · plazo de {ct.deadline_minutes} minutos a partir del depósito
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -227,7 +150,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           )}
           <TxResult state={deposit} label="Depósito" />
           <details className="text-xs text-muted-foreground">
-            <summary className="cursor-pointer">Plan C: depositar con la Stellar CLI</summary>
+            <summary className="cursor-pointer">Respaldo: depositar con scripts/deposit.sh</summary>
             <div className="mt-2">
               <CopyField label="Comando" value={depositCmd} />
             </div>
@@ -242,7 +165,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
         <CardHeader>
           <CardTitle>Veredictos del motor</CardTitle>
           <CardDescription>
-            Ves el motivo y el resultado de cada criterio. El código solo se entrega cuando el programador cobra.
+            Ves el resultado de cada criterio y el video demo. El código se comparte tras el pago o con autorización explícita del programador.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5" data-testid="veredictos">
@@ -257,6 +180,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
               </div>
               <p className="text-sm">{v.reason}</p>
               <ComparisonList items={v.comparison} />
+              <VideoDemo url={v.video_url} />
               {v.transaction_hash && (
                 <a className="text-sm text-sky-700 underline" href={explorerTx(v.transaction_hash)} target="_blank" rel="noreferrer">
                   Pago en el explorador: {shortHash(v.transaction_hash)}
@@ -297,7 +221,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
         </Card>
       )}
 
-      {status === "Released" && <Delivery taskId={taskId} clientToken={ct.client_token} />}
+      {(status === "Released" || verdicts.some((v) => v.consented)) && <Delivery taskId={taskId} clientToken={ct.client_token} paid={status === "Released"} />}
     </div>
   );
 }
@@ -323,23 +247,27 @@ function useVerdicts(taskId: string, clientToken: string | null): ClientVerdict[
   return verdicts;
 }
 
-function Delivery({ taskId, clientToken }: { taskId: string; clientToken: string }) {
+function Delivery({ taskId, clientToken, paid }: { taskId: string; clientToken: string; paid: boolean }) {
+  const [deliveryHash, setDeliveryHash] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Código entregado</CardTitle>
-        <CardDescription>El programador ya cobró: el código es tuyo.</CardDescription>
+        <CardTitle>{paid ? "Código entregado" : "Código compartido con consentimiento"}</CardTitle>
+        <CardDescription>{paid ? "El programador ya cobró: el código es tuyo." : "El programador autorizó revisar una entrega rechazada. El pago todavía depende de tu aprobación manual."}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {code === null ? (
-          <Button variant="outline" onClick={() => api.delivery(taskId, clientToken).then((d) => setCode(d.code), (e: ApiError) => setError(e.message))}>
+          <Button variant="outline" onClick={() => api.delivery(taskId, clientToken).then((d) => { setCode(d.code); setDeliveryHash(d.code_hash); setVideoUrl(d.video_url); }, (e: ApiError) => setError(e.message))}>
             Ver código
           </Button>
         ) : (
           <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">{code}</pre>
         )}
+        {deliveryHash && <p className="break-all text-xs text-muted-foreground">Entrega: {deliveryHash}</p>}
+        <VideoDemo url={videoUrl} />
         {error && <p className="text-sm text-red-600">{error}</p>}
       </CardContent>
     </Card>

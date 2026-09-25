@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from starlette.concurrency import run_in_threadpool
 from stellar_sdk import StrKey
 
-from . import gemini
+from . import drafting, gemini
 from .config import (
     GEMINI_ATTEMPT_BUDGET_SECS,
     MAX_SUBMISSIONS,
@@ -31,6 +31,8 @@ from .config import (
 )
 from .deterministic import analyze
 from .hashing import code_hash, rules_hash, verdict_hash
+from .fx import FxReference
+from .video import normalize_video
 from .plantilla import DEMO_RAW_REQUEST, DEMO_SPEC
 from .state import StateStore
 from .stellar_client import (
@@ -70,9 +72,9 @@ class Example(Strict):
 
 class CreateTaskIn(Strict):
     client_address: StrictStr
-    raw_request: StrictStr = ""
+    raw_request: StrictStr = Field(default="", max_length=2000)
     description: StrictStr = Field(min_length=1)
-    criteria: list[StrictStr] = Field(min_length=1)
+    criteria: list[drafting.Criterion] = Field(min_length=1, max_length=8)
     language: StrictStr
     allowed_deps: list[StrictStr] = []
     examples: list[Example] = []
@@ -108,6 +110,7 @@ async def lifespan(app: FastAPI):
 
 settings_for_cors = load_settings()
 app = FastAPI(title="Cumple&Cobra", lifespan=lifespan)
+fx_reference = FxReference()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings_for_cors.frontend_origin],
@@ -137,7 +140,7 @@ async def _validation_error(_: Request, exc: RequestValidationError):
     where = ".".join(str(p) for p in first.get("loc", []) if p != "body")
     return JSONResponse(status_code=400, content={
         "error": "INVALID_REQUEST",
-        "message": f"Solicitud inválida en '{where}': {first.get('msg', '')}",
+        "message": f"Solicitud inválida en '{where}': revisa el tipo, la longitud y los campos requeridos.",
     })
 
 
@@ -193,6 +196,11 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/fx/usd-mxn")
+async def fx_usd_mxn():
+    return await fx_reference.get()
+
+
 @app.post("/tasks")
 async def create_task(body: CreateTaskIn):
     check_address(body.client_address, "client_address")
@@ -239,6 +247,22 @@ async def create_task(body: CreateTaskIn):
     }
 
 
+@app.post("/tasks/draft", response_model=drafting.Draft)
+async def draft_task(body: drafting.DraftIn):
+    try:
+        return await drafting.draft(app.state.gemini, app.state.settings.gemini_model, body.raw_request)
+    except gemini.EngineUnavailable as exc:
+        raise err(502, "ENGINE_UNAVAILABLE", "No se pudo preparar el pedido. Inténtalo de nuevo o usa la plantilla de la demo.") from exc
+
+
+@app.post("/tasks/draft/review", response_model=drafting.Review)
+async def review_draft(body: drafting.ReviewIn):
+    try:
+        return await drafting.review(app.state.gemini, app.state.settings.gemini_model, body.criteria)
+    except gemini.EngineUnavailable as exc:
+        raise err(502, "ENGINE_UNAVAILABLE", "No se pudieron revisar los criterios. Inténtalo de nuevo.") from exc
+
+
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
     task = get_task_or_404(task_id)
@@ -263,6 +287,9 @@ async def get_task(task_id: str):
         "onchain": onchain,
         "seconds_left": left,
         "onchain_error": chain_error,
+        "latest_code_hash": task.get("latest_code_hash"),
+        "consented_code_hash": task.get("consented_code_hash"),
+        "latest_rejected": bool(task.get("latest_code_hash") and not task["codes"][task["latest_code_hash"]].get("approved")),
     }
 
 
@@ -324,7 +351,9 @@ async def verdicts(task_id: str, x_client_token: str | None = Header(default=Non
         "verdicts": [
             {"code_hash": r["code_hash"], "approved": r["approved"], "stage": r["stage"],
              "reason": r["reason"], "comparison": r["comparison"],
-             "transaction_hash": r["transaction_hash"]}
+             "transaction_hash": r["transaction_hash"],
+             "video_url": task["codes"].get(r["code_hash"], {}).get("video_url"),
+             "consented": task.get("consented_code_hash") == r["code_hash"]}
             for r in task["cache"].values()
         ],
     }
@@ -336,14 +365,40 @@ async def delivery(task_id: str, x_client_token: str | None = Header(default=Non
     if not token_ok(task["client_token"], x_client_token):
         raise err(403, "INVALID_TOKEN", "Token de cliente inválido")
     onchain, _ = await read_chain(task_id)
-    if not onchain or onchain["status"] != "Released":
-        raise err(409, "TASK_NOT_RELEASED", "El código se entrega cuando el programador cobra")
-    approved = [c for c in task["codes"].values() if c.get("approved")]
-    chosen = approved[-1] if approved else (list(task["codes"].values()) or [None])[-1]
+    released = onchain and onchain["status"] == "Released"
+    if released:
+        paid_hash = (task.get("release") or {}).get("code_hash")
+        approved = [c for c in task["codes"].values() if c.get("approved")]
+        chosen = task["codes"].get(paid_hash) or (approved[-1] if approved else (list(task["codes"].values()) or [None])[-1])
+    else:
+        consented = task.get("consented_code_hash")
+        chosen = task["codes"].get(consented)
+        if not chosen or chosen.get("approved"):
+            raise err(409, "TASK_NOT_RELEASED", "El código se entrega al cobrar o con consentimiento del programador para una entrega rechazada")
     if chosen is None:
         raise err(404, "NO_DELIVERY", "No hay código entregado")
     return {"task_id": task_id, "code": chosen["code"], "video_url": chosen.get("video_url"),
             "code_hash": chosen["code_hash"]}
+
+
+class ConsentIn(Strict):
+    code_hash: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@app.post("/tasks/{task_id}/consent")
+async def consent(task_id: str, body: ConsentIn | None = None,
+                  x_freelancer_token: str | None = Header(default=None)):
+    task = get_task_or_404(task_id)
+    async with store().lock(task_id):
+        if not token_ok(task.get("freelancer_token"), x_freelancer_token):
+            raise err(403, "INVALID_TOKEN", "Token de programador inválido")
+        ch = body.code_hash if body else task.get("latest_code_hash")
+        code = task["codes"].get(ch)
+        if not code or code.get("approved"):
+            raise err(409, "NO_REJECTED_DELIVERY", "Solo se puede autorizar la revisión de una entrega rechazada")
+        task["consented_code_hash"] = ch
+        store().save()
+        return {"code_hash": ch, "consented": True}
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +434,11 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
         if (not token_ok(task["freelancer_token"], x_freelancer_token)
                 or body.freelancer_address != task["freelancer_address"]):
             raise err(403, "INVALID_TOKEN", "Token de programador inválido para esta tarea")
+
+        try:
+            video_url = normalize_video(body.video_url)
+        except ValueError as exc:
+            raise err(400, "INVALID_REQUEST", str(exc)) from exc
 
         ch = code_hash(body.code)
         cached = task["cache"].get(ch)
@@ -449,7 +509,7 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
 
         vh = verdict_hash(task_id=body.task_id, code_hash=ch, approved=approved, reason=reason,
                           stage=stage, comparison=comparison, security_flags=security_flags,
-                          video_url=body.video_url)
+                          video_url=video_url)
         result = {
             "task_id": body.task_id,
             "approved": approved,
@@ -464,8 +524,9 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
             "security_flags": security_flags,
             "payment_retryable": False,
         }
-        task["codes"][ch] = {"code": body.code, "video_url": body.video_url, "code_hash": ch,
+        task["codes"][ch] = {"code": body.code, "video_url": video_url, "code_hash": ch,
                              "approved": approved}
+        task["latest_code_hash"] = ch
 
         counted = True
         if approved:

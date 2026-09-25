@@ -2,6 +2,8 @@
 
 import { use, useEffect, useState } from "react";
 
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { CriteriaCard } from "@/components/criteria-card";
 import { StatusCard } from "@/components/status-card";
 import { Terminal, useTerminal } from "@/components/terminal";
@@ -138,6 +140,11 @@ function SubmitPanel({
 }) {
   const [casos, setCasos] = useState<Caso[]>([]);
   const [selected, setSelected] = useState<string>("A");
+  const [video, setVideo] = useState("");
+  const [consentError, setConsentError] = useState<string | null>(null);
+  const [consenting, setConsenting] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [consentFor, setConsentFor] = useState<string | null>(null);
   const [more, setMore] = useState(false);
   const [pasted, setPasted] = useState("");
   const { lines, busy, now, run } = useTerminal();
@@ -161,7 +168,7 @@ function SubmitPanel({
       : null;
 
   async function send() {
-    await run(label, () => api.evaluate(task.task_id, mine.freelancer_address, code, mine.freelancer_token));
+    await run(label, () => api.evaluate(task.task_id, mine.freelancer_address, code, mine.freelancer_token, video.trim() || null));
     onDone();
   }
 
@@ -204,6 +211,11 @@ function SubmitPanel({
           ) : (
             <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">{code}</pre>
           )}
+          <div className="space-y-2">
+            <Label htmlFor="video-demo">Enlace de Google Drive al video demo (opcional)</Label>
+            <Input id="video-demo" type="url" maxLength={1000} value={video} disabled={busy} onChange={(e) => setVideo(e.target.value)} placeholder="https://drive.google.com/file/d/…/view" />
+            <p className="text-xs text-muted-foreground">Compártelo como &apos;cualquier persona con el enlace&apos; y que dure máximo 3 minutos. El video no condiciona un pago aprobado por el motor.</p>
+          </div>
           <div className="flex items-center gap-3">
             <Button onClick={send} disabled={busy || !!blocked || !code.trim()} data-testid="enviar">
               {busy ? "Enviando…" : "Enviar"}
@@ -213,6 +225,22 @@ function SubmitPanel({
         </CardContent>
       </Card>
       <Terminal lines={lines} now={now} />
+      {task.latest_rejected && task.latest_code_hash && task.onchain?.status !== "Released" && (
+        <Card><CardHeader><CardTitle>Revisión del cliente</CardTitle>
+          <CardDescription>Tu código sigue protegido. Puedes compartir esta entrega rechazada antes de cobrar para que el cliente decida si la aprueba manualmente.</CardDescription></CardHeader>
+          <CardContent className="space-y-3">
+            {(consentFor === task.latest_code_hash || task.consented_code_hash === task.latest_code_hash) ? <p role="status">Autorizaste compartir esta entrega. Las entregas futuras requieren otro consentimiento.</p> : <>
+              <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />Entiendo que el cliente podrá ver y copiar este código antes de pagar. La autorización de esta entrega no se puede retirar.</label>
+              <Button variant="outline" disabled={!checked || consenting || busy} onClick={async () => {
+                setConsenting(true); setConsentError(null);
+                try { await api.consent(task.task_id, mine.freelancer_token, task.latest_code_hash!); setConsentFor(task.latest_code_hash!); setChecked(false); onDone(); }
+                catch (e) { setConsentError(e instanceof Error ? e.message : String(e)); }
+                finally { setConsenting(false); }
+              }}>{consenting ? "Autorizando…" : "Autorizar revisión de este código"}</Button>
+            </>}
+            {consentError && <p role="alert" className="text-sm text-red-600">{consentError}</p>}
+          </CardContent></Card>
+      )}
     </div>
   );
 }

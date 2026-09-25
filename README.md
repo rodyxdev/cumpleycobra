@@ -8,7 +8,7 @@ MVP para GOYA HACK (reto Stellar BAF). Todo corre en la testnet de Stellar.
 
 ## Cómo funciona
 
-1. **Acuerdo:** el cliente crea la tarea con criterios verificables y comparte un enlace de invitación con su programador.
+1. **Acuerdo:** el cliente escribe su pedido, Gemini propone criterios verificables y el cliente edita la versión final. Crea la tarea y comparte un enlace de invitación con su programador.
 2. **Depósito:** el cliente deposita el monto en el contrato. El `rules_hash` (SHA-256 de los criterios) queda guardado on-chain.
 3. **Aceptación:** el programador acepta los criterios; la tarea queda amarrada a su dirección.
 4. **Veredicto:** el motor revisa el código en cuatro capas:
@@ -62,10 +62,9 @@ Configuración del dashboard de Pollar (https://dashboard.pollar.xyz) para desar
 | Treasury → Auth Policy | El contrato `CAWAZODOFP67HETHN4NLYOECPCJACGLUTCLARVGLBZ7TJDLT4KLQRATQ` |
 | Treasury → Sponsorship | Activo para contratos y transferencias (sin él, la red responde `txInsufficientBalance`) |
 
-Si la firma con Pollar falla, hay dos respaldos:
+Si la firma con Pollar falla, el respaldo de la demo es `bash scripts/deposit.sh TASK_ID MONTO PLAZO_S RULES_HASH`, con la Stellar CLI.
 
-- **Plan B:** `NEXT_PUBLIC_WALLET=freighter`. La extensión Freighter firma `deposit` y `client_release`, y Pollar se queda para iniciar sesión, la wallet y la trustline.
-- **Plan C:** `bash scripts/deposit.sh TASK_ID MONTO PLAZO_S RULES_HASH` deposita con la Stellar CLI.
+La opción `NEXT_PUBLIC_WALLET=freighter` está implementada pero queda **sin probar**; no se considera un respaldo validado.
 
 Para la demo, `bash scripts/fondear.sh DIRECCION_G MONTO_USDC` manda USDC de testnet desde `cyc-client` a una wallet que ya activó USDC.
 
@@ -87,6 +86,25 @@ La implementación está en [`backend/hashing.py`](backend/hashing.py).
 | `verdict_hash` | `{"version": 1, "task_id", "code_hash", "approved", "reason", "stage", "comparison", "security_flags", "video_url"}` |
 
 `rules_hash` queda en el depósito. `code_hash` y `verdict_hash` quedan en el evento `release` del contrato, así que cualquiera puede recalcularlos y comparar.
+
+El `rules_hash` se calcula al crear la tarea sobre la versión final editada: descripción, criterios, lenguaje, dependencias y ejemplos. El pedido original (`raw_request`) no entra en el hash.
+
+## Pedido asistido (fase 4a)
+
+En `/cliente` se puede preparar el pedido antes de conectar la wallet. La propuesta, los criterios y los ejemplos son editables. «Revisar criterios» señala los vagos y permite aplicar cada sugerencia; las ediciones invalidan la revisión anterior. «Usar la plantilla de la demo» es el respaldo. Para crear la tarea se conserva la conexión con Pollar y la revisión de USDC.
+
+- `POST /tasks/draft`: `{"raw_request": "..."}` → `description`, `criteria`, `language`, `allowed_deps`, `examples`.
+- `POST /tasks/draft/review`: `{"criteria": ["..."]}` → `{"criteria": [{"index": 0, "vague": true, "suggestion": "..."}]}`. Índices desde 0; `suggestion` es `null` cuando el criterio no es vago.
+- Límite de 2000 caracteres por pedido, 300 por criterio y 8 criterios. Gemini genera entre 3 y 8; la versión final editada y la revisión admiten entre 1 y 8.
+- Ambos endpoints comparten el cliente, salida estructurada, tope de 20 s por intento y reintentos del motor. No invocan la cadena ni guardan tareas.
+
+Prueba reproducible con Vertex (no ejecuta los scripts entregados ni toca la cadena):
+
+```bash
+backend/.venv/Scripts/python scripts/probar_pedido.py
+```
+
+Genera cinco borradores, analiza A–D contra cada uno y guarda tabla, criterios y veredictos en `docs/fases/fase-4a-pedido.md` y `.json`. Espacia todos los intentos al menos 8 s; ejecutar sin otras llamadas a Gemini en paralelo. Ver [reporte de fase 4a](docs/fases/fase-4a.md).
 
 ## Créditos
 
