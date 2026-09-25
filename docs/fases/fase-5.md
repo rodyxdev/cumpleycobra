@@ -85,3 +85,19 @@ $ backend/.venv/Scripts/python -m pytest backend/tests -q
 ```
 
 El monto inicial del formulario («20» MXN) es un valor de ejemplo del pedido, no una tasa, y no cambió.
+
+## 4. Motor medido: resumen para el pitch
+
+Fuente: [`fase-5-motor.json`](fase-5-motor.json), generado por `scripts/estabilizar_motor.py` el 24 de septiembre de 2026 (22:31–22:37 UTC) con `gemini-3.5-flash` en Vertex AI. Las expectativas de cada caso quedaron fijadas en [`scripts/corpus_motor.json`](../../scripts/corpus_motor.json) antes de medir. El motor nunca ejecuta las entregas.
+
+| Medición | Casos | Aciertos | Falsas aprobaciones (código malo aprobado) | Falsos rechazos | Latencia mediana | Latencia máxima |
+| --- | --- | --- | --- | --- | --- | --- |
+| Estabilidad: A, B, C y D, diez veces cada uno | 40 | **40/40** | 0 | 0 | 3.20 s | 10.14 s |
+| Corpus: 20 entregas distintas (7 correctas, 13 defectuosas) | 20 | **20/20** | 0 | 0 | 3.38 s | 17.78 s |
+| **Total** | **60** | **60/60** | **0** | **0** | **3.32 s** | **17.78 s** |
+
+- **Latencia:** medida solo en los análisis con Gemini (46 de 60). No incluye las esperas del script para respetar la cuota (máximo 8 llamadas por minuto), pero sí los reintentos del motor. Los 14 rechazos de la capa determinista (D, `eval`, dunder, escritura de archivos) tardan menos de 1 ms y no llaman a Gemini. La máxima (17.78 s, caso K) queda dentro del tope de 20 s por intento. Estos tiempos no incluyen el `release` en la cadena.
+- **Seguridad:** los 6 casos con expectativa de seguridad (C por inyección en el docstring; D, R, S y T por la capa determinista) se rechazaron con `security_flags` no vacío en todas sus corridas.
+- **Corpus:** las 7 entregas correctas usan implementaciones distintas: comprensión de lista, bucle `for`, `map`, `while` con incremento, factor precalculado, `enumerate` y lista vacía. Las 13 defectuosas son B, C, D, sumar el descuento, no redondear, orden inverso, descuento fijo, redondear a entero, devolver un generador, devolver `None` con lista vacía, `eval`, dunder y escritura de archivos.
+
+Límite honesto para el pitch: es un solo requisito (`aplicar_descuento`), con un corpus escrito por el equipo y de 20 casos. «Cero falsas aprobaciones» describe esta muestra, no una garantía general.
