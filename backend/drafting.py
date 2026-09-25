@@ -113,6 +113,9 @@ propón precisar la entrada y salida requerida, sin inventar un comportamiento.
 No marques vago un comportamiento preciso solo porque admite varias implementaciones.
 No impongas estructuras de código concretas (comprensiones de lista, bucles,
 funciones auxiliares); describe el comportamiento observable.
+Sí puedes pedir propiedades verificables leyendo el código, como 'una sola pasada' o 'sin recorridos
+anidados'; no nombres construcciones concretas como comprensiones de lista, bucles for o while,
+ni funciones auxiliares.
 La sugerencia debe ser un criterio de reemplazo listo para aplicar, no un consejo
 como "definir un límite", una pregunta ni opciones separadas por "o". No propongas
 tiempos en segundos, mediciones, benchmarks ni pruebas de ejecución: este motor no

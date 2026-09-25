@@ -1,0 +1,144 @@
+{
+  "model": "gemini-3.5-flash",
+  "finished_at": "2026-09-25T02:23:35+00:00",
+  "input_criteria": [
+    "Define una función llamada aplicar_descuento(precios: list[float], porcentaje: float) -> list[float].",
+    "Cada precio de salida es igual a precio * (1 - porcentaje / 100).",
+    "Cada precio de salida está redondeado a 2 decimales.",
+    "La salida conserva el orden y la cantidad de elementos de la entrada; una lista vacía devuelve una lista vacía.",
+    "No importa ningún módulo (sin dependencias externas).",
+    "La función termina para cualquier lista de entrada (sin bucles infinitos).",
+    "Que sea rápido"
+  ],
+  "runs": [
+    {
+      "run": 1,
+      "seconds": 5.8,
+      "criteria": [
+        {
+          "index": 0,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 1,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 2,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 3,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 4,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 5,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 6,
+          "vague": true,
+          "suggestion": "Procesa cada elemento de la lista en una sola pasada, sin recorridos anidados sobre esa misma lista."
+        }
+      ],
+      "constructs_named": [],
+      "ok": true
+    },
+    {
+      "run": 2,
+      "seconds": 2.8,
+      "criteria": [
+        {
+          "index": 0,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 1,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 2,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 3,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 4,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 5,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 6,
+          "vague": true,
+          "suggestion": "Procesa cada elemento de la lista de precios en una sola pasada, sin recorridos anidados sobre esa misma lista."
+        }
+      ],
+      "constructs_named": [],
+      "ok": true
+    },
+    {
+      "run": 3,
+      "seconds": 3.1,
+      "criteria": [
+        {
+          "index": 0,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 1,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 2,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 3,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 4,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 5,
+          "vague": false,
+          "suggestion": null
+        },
+        {
+          "index": 6,
+          "vague": true,
+          "suggestion": "Procesa cada elemento de la lista de precios en una sola pasada, sin recorridos anidados sobre esa misma lista."
+        }
+      ],
+      "constructs_named": [],
+      "ok": true
+    }
+  ]
+}
