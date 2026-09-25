@@ -104,36 +104,36 @@ export function Terminal({ lines, now }: { lines: Line[]; now: number }) {
 
   return (
     <div
-      className="h-80 overflow-y-auto rounded-xl bg-neutral-950 p-4 font-mono text-xs leading-relaxed text-neutral-200"
+      className="max-h-[32rem] min-h-40 overflow-y-auto bg-[#15181F] p-5 text-base leading-relaxed text-[#F5F4EF] sm:p-6"
       data-testid="terminal"
     >
-      {lines.length === 0 && <div className="text-neutral-500">La salida del motor de análisis aparece aquí.</div>}
+      {lines.length === 0 && <div className="text-[#B8BCC5]">La salida del motor de análisis aparece aquí.</div>}
       {lines.map((l, i) => {
         if (l.kind === "wait") {
           const secs = (Math.max(0, now - l.startedAt) / 1000).toFixed(1);
           return (
-            <div key={i} className="text-amber-300">
+            <div key={i} className="text-[#B2CCFF]">
               Enviando al motor de análisis… {secs} s
             </div>
           );
         }
         if (l.kind === "link") {
           return (
-            <a key={i} href={l.href} target="_blank" rel="noreferrer" className="block text-sky-300 underline" data-testid="tx-link">
+            <a key={i} href={l.href} target="_blank" rel="noreferrer" className="block break-all font-mono text-sm text-[#B2CCFF] underline underline-offset-4" data-testid="tx-link">
               {l.text}
             </a>
           );
         }
         const color = {
-          cmd: "text-neutral-400",
-          muted: "text-neutral-500",
-          text: "text-neutral-200",
-          ok: "text-emerald-400",
-          err: "text-red-400",
-          warn: "text-amber-300",
+          cmd: "text-[#B8BCC5]",
+          muted: "text-[#B8BCC5]",
+          text: "text-[#F5F4EF]",
+          ok: "text-[#B2CCFF]",
+          err: "text-[#F0BC7E]",
+          warn: "text-[#F0BC7E]",
         }[l.kind];
         return (
-          <div key={i} className={`whitespace-pre-wrap ${color}`}>
+          <div key={i} className={`whitespace-pre-wrap break-words ${/^(code_hash|verdict_hash|\$ POST)/.test(l.text) ? "font-mono text-sm" : ""} ${color}`}>
             {l.text}
           </div>
         );

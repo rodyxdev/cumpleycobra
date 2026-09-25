@@ -1,0 +1,38 @@
+{
+  "browser": "Chrome/154.0.8037.57",
+  "measurements": [
+    {
+      "width": 1440,
+      "horizontalOverflow": false,
+      "font": "\"DM Sans\", \"DM Sans Fallback\"",
+      "mono": "\"JetBrains Mono\", \"JetBrains Mono Fallback\"",
+      "verdicts": 2
+    },
+    {
+      "width": 1024,
+      "horizontalOverflow": false,
+      "font": "\"DM Sans\", \"DM Sans Fallback\"",
+      "mono": "\"JetBrains Mono\", \"JetBrains Mono Fallback\"",
+      "verdicts": 2
+    },
+    {
+      "width": 768,
+      "horizontalOverflow": false,
+      "font": "\"DM Sans\", \"DM Sans Fallback\"",
+      "mono": "\"JetBrains Mono\", \"JetBrains Mono Fallback\"",
+      "verdicts": 2
+    },
+    {
+      "width": 390,
+      "horizontalOverflow": false,
+      "font": "\"DM Sans\", \"DM Sans Fallback\"",
+      "mono": "\"JetBrains Mono\", \"JetBrains Mono Fallback\"",
+      "verdicts": 2
+    },
+    {
+      "view": "formulario",
+      "width": 390,
+      "horizontalOverflow": false
+    }
+  ]
+}

@@ -5,15 +5,15 @@ import { WalletConnect } from "@/components/wallet-connect";
 export function SiteHeader() {
   return (
     <header className="border-b bg-background">
-      <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-4">
-        <Link href="/" className="font-semibold tracking-tight">
-          Cumple<span className="text-muted-foreground">&amp;</span>Cobra
+      <div className="mx-auto flex min-h-20 max-w-[1248px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-4 sm:px-8">
+        <Link href="/" className="text-xl font-semibold tracking-[-0.06em] sm:text-2xl">
+          Cumple<span className="text-primary">&amp;</span>Cobra
         </Link>
-        <nav className="flex items-center gap-4 text-sm text-muted-foreground">
-          <Link href="/cliente" className="hover:text-foreground">
+        <nav className="flex flex-wrap items-center gap-4 text-base text-muted-foreground sm:gap-6">
+          <Link href="/cliente" className="transition-colors hover:text-primary">
             Soy cliente
           </Link>
-          <span className="hidden sm:inline">Testnet de Stellar</span>
+          <span className="hidden border-l pl-6 text-sm lg:inline">Testnet de Stellar</span>
           <WalletConnect />
         </nav>
       </div>

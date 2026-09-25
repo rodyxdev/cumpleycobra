@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-sans: var(--font-dm-sans);
+  --font-mono: var(--font-jetbrains-mono);
+  --font-heading: var(--font-dm-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,83 +48,82 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+:root {
+  --background: #F5F4EF;
+  --foreground: #15181F;
+  --card: #FFFEFB;
+  --card-foreground: #15181F;
+  --popover: #FFFEFB;
+  --popover-foreground: #15181F;
+  --primary: #2A5FC7;
+  --primary-foreground: #FFFFFF;
+  --secondary: #E9EEF8;
+  --secondary-foreground: #234FA6;
+  --muted: #ECEBE5;
+  --muted-foreground: #555C67;
+  --accent: #E9EEF8;
+  --accent-foreground: #234FA6;
+  --destructive: #804710;
+  --border: #DADBD5;
+  --input: #8B9199;
+  --ring: #2A5FC7;
+  --radius: 0.75rem;
+  --alert: #E8963A;
+  --alert-background: #FFF1DF;
+  --alert-foreground: #75420F;
+  --sidebar: var(--background);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-  html {
-    @apply font-sans;
+  * { @apply border-border outline-ring/50; }
+  html { @apply font-sans; color-scheme: light; }
+  body { @apply bg-background text-foreground; font-size: 17px; line-height: 1.6; }
+  h1, h2, h3 { text-wrap: balance; }
+  button, input, textarea, select { font: inherit; }
+  button, a, summary { -webkit-tap-highlight-color: transparent; }
+  a, button, summary, input, textarea { scroll-margin-block: 2rem; }
+  summary { cursor: pointer; }
+  summary:focus-visible, a:focus-visible { outline: 2px solid var(--ring); outline-offset: 5px; border-radius: 3px; }
+  ::selection { background: #D8E4FC; color: #15181F; }
+}
+
+@layer components {
+  .eyebrow { font-size: .8125rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); }
+  .page-heading { display: grid; gap: .6rem; padding-bottom: .5rem; }
+  .page-heading h1 { font-size: clamp(1.875rem, 4vw, 2.5rem); line-height: 1.15; font-weight: 600; letter-spacing: -.045em; }
+  .page-heading p { max-width: 52rem; font-size: 1rem; line-height: 1.65; }
+  .alert-panel { border: 1px solid var(--alert); border-left-width: 4px; border-radius: .75rem; background: var(--alert-background); color: var(--alert-foreground); padding: 1rem 1.25rem; }
+  .money-prominent > span > span:first-child { font-size: clamp(1.625rem, 3vw, 2rem); line-height: 1.25; letter-spacing: -.04em; font-weight: 600; }
+  .money-prominent > span { gap: .3rem; }
+  .money-prominent > span > span:last-child { font-size: .875rem; }
+  .analysis-disclosure { border: 1px solid var(--border); border-radius: .875rem; background: var(--card); overflow: hidden; }
+  .analysis-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.1rem 1.5rem; font-weight: 500; list-style: none; }
+  .analysis-disclosure > summary::-webkit-details-marker { display: none; }
+  .analysis-disclosure[open] > summary { border-bottom: 1px solid var(--border); }
+  .analysis-disclosure[open] > summary .disclosure-chevron { transform: rotate(180deg); }
+  .criterion-editor { padding-block: 1.25rem; border-bottom: 1px solid var(--border); }
+  .criterion-editor:first-child { padding-top: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; }
+}
+
+/* El ensayo lee innerText. El contenido plegado sigue maquetado, pero no visible
+   ni interactivo. En navegadores anteriores se conserva el details nativo. */
+@supports (interactivity: inert) and selector(details::details-content) {
+  .analysis-disclosure::details-content { content-visibility: visible; }
+  .analysis-disclosure:not([open])::details-content {
+    block-size: 0;
+    overflow: clip;
+    interactivity: inert;
   }
 }

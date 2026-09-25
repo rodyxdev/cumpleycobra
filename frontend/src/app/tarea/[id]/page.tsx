@@ -2,11 +2,12 @@
 
 import { use, useEffect, useState } from "react";
 
+import { SubmissionResult } from "@/components/submission-result";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CriteriaCard } from "@/components/criteria-card";
 import { StatusCard } from "@/components/status-card";
-import { Terminal, useTerminal } from "@/components/terminal";
+import { useTerminal } from "@/components/terminal";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,29 +43,29 @@ export default function TareaPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Vista del programador</h1>
-        <p className="text-sm text-muted-foreground">
+      <div className="page-heading">
+        <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Vista del programador</h1>
+        <p className="text-base text-muted-foreground">
           Tarea {id}. Estos son los criterios que el motor va a verificar; el monto es el que está en el contrato.
         </p>
       </div>
       <StatusCard task={task} secondsLeft={secondsLeft} />
       <UsdcGate role="programador">
         {() => (
-          <>
-            <CriteriaCard spec={task} />
+          <div className="grid gap-6">
+            <div className="order-2 min-w-0"><CriteriaCard spec={task} /></div>
             {accepted ? (
               <SubmitPanel task={task} mine={mine} secondsLeft={secondsLeft} onDone={refresh} />
             ) : takenByOther ? (
-              <Card>
+              <Card className="order-3">
                 <CardContent className="text-sm text-muted-foreground">
                   Esta tarea ya la aceptó otra wallet. Solo esa wallet puede entregar y cobrar.
                 </CardContent>
               </Card>
             ) : (
-              <AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} />
+              <div className="order-3"><AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} /></div>
             )}
-          </>
+          </div>
         )}
       </UsdcGate>
     </div>
@@ -106,15 +107,15 @@ function AcceptPanel({ taskId, invite, onAccepted }: { taskId: string; invite: s
       </CardHeader>
       <CardContent className="space-y-4">
         {!invite && (
-          <p className="text-sm text-red-600">Necesitas el enlace de invitación que te compartió el cliente.</p>
+          <p className="text-sm text-[var(--alert-foreground)]">Necesitas el enlace de invitación que te compartió el cliente.</p>
         )}
         {error?.code === "NO_USDC_TRUSTLINE" ? (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <div className="rounded-md border border-[var(--alert)] bg-[var(--alert-background)] p-3 text-sm text-[var(--alert-foreground)]">
             <div className="font-medium">Activa USDC antes de continuar</div>
             Tu cuenta no tiene trustline de USDC, así que no podría recibir el pago. Actívala y vuelve a aceptar.
           </div>
         ) : error ? (
-          <p className="text-sm text-red-600">{error.message}</p>
+          <p className="text-sm text-[var(--alert-foreground)]">{error.message}</p>
         ) : null}
         <Button disabled={!invite || !addr || sending} onClick={accept} data-testid="aceptar">
           {sending ? "Aceptando…" : "Acepto los criterios"}
@@ -176,8 +177,9 @@ function SubmitPanel({
   const extra = casos.filter((c) => !c.principal);
 
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="contents">
+      <SubmissionResult lines={lines} now={now} busy={busy} amount={task.onchain?.amount} criteriaCount={task.criteria.length} />
+      <Card className="order-3 min-w-0">
         <CardHeader>
           <CardTitle>Entregar código</CardTitle>
           <CardDescription>Aceptaste los criterios con {mine.freelancer_address.slice(0, 8)}…</CardDescription>
@@ -207,16 +209,16 @@ function SubmitPanel({
           )}
           {selected === "pegar" ? (
             <Textarea value={pasted} onChange={(e) => setPasted(e.target.value)} rows={10}
-              className="font-mono text-xs" placeholder="Pega aquí tu script de Python" />
+              className="font-mono text-sm" placeholder="Pega aquí tu script de Python" />
           ) : (
-            <pre className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">{code}</pre>
+            <pre className="max-h-80 overflow-auto rounded-lg border bg-muted/40 p-5 font-mono text-sm">{code}</pre>
           )}
           <div className="space-y-2">
             <Label htmlFor="video-demo">Enlace de Google Drive al video demo (opcional)</Label>
             <Input id="video-demo" type="url" maxLength={1000} value={video} disabled={busy} onChange={(e) => setVideo(e.target.value)} placeholder="https://drive.google.com/file/d/…/view" />
             <p className="text-xs text-muted-foreground">Compártelo como &apos;cualquier persona con el enlace&apos; y que dure máximo 3 minutos. El video no condiciona un pago aprobado por el motor.</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button onClick={send} disabled={busy || !!blocked || !code.trim()} data-testid="enviar">
               {busy ? "Enviando…" : "Enviar"}
             </Button>
@@ -224,9 +226,8 @@ function SubmitPanel({
           </div>
         </CardContent>
       </Card>
-      <Terminal lines={lines} now={now} />
       {task.latest_rejected && task.latest_code_hash && task.onchain?.status !== "Released" && (
-        <Card><CardHeader><CardTitle>Revisión del cliente</CardTitle>
+        <Card className="order-4"><CardHeader><CardTitle>Revisión del cliente</CardTitle>
           <CardDescription>Tu código sigue protegido. Puedes compartir esta entrega rechazada antes de cobrar para que el cliente decida si la aprueba manualmente.</CardDescription></CardHeader>
           <CardContent className="space-y-3">
             {(consentFor === task.latest_code_hash || task.consented_code_hash === task.latest_code_hash) ? <p role="status">Autorizaste compartir esta entrega. Las entregas futuras requieren otro consentimiento.</p> : <>
@@ -238,7 +239,7 @@ function SubmitPanel({
                 finally { setConsenting(false); }
               }}>{consenting ? "Autorizando…" : "Autorizar revisión de este código"}</Button>
             </>}
-            {consentError && <p role="alert" className="text-sm text-red-600">{consentError}</p>}
+            {consentError && <p role="alert" className="text-sm text-[var(--alert-foreground)]">{consentError}</p>}
           </CardContent></Card>
       )}
     </div>

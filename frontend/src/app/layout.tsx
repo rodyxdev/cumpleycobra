@@ -1,18 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans, JetBrains_Mono } from "next/font/google";
 
 import { Providers } from "@/components/providers";
 import { SiteHeader } from "@/components/site-header";
 
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-sans",
+const dmSans = DM_Sans({
+  variable: "--font-dm-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
   subsets: ["latin"],
 });
 
@@ -23,12 +23,12 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="es" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
-      <body className="flex min-h-full flex-col bg-muted/30">
+    <html lang="es" className={`${dmSans.variable} ${jetbrainsMono.variable} h-full antialiased`}>
+      <body className="flex min-h-full flex-col">
         <Providers>
           <SiteHeader />
-          <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">{children}</main>
-          <footer className="border-t py-4 text-center text-xs text-muted-foreground">
+          <main className="mx-auto w-full max-w-[1248px] flex-1 px-5 py-10 sm:px-8 lg:py-14">{children}</main>
+          <footer className="mx-auto w-full max-w-[1248px] border-t px-5 py-7 text-center text-sm leading-relaxed text-muted-foreground sm:px-8">
             Cumple&amp;Cobra · Motor de Análisis Estático de Código basado en LLM · Testnet de Stellar
           </footer>
         </Providers>

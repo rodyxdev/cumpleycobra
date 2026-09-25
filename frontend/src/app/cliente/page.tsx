@@ -5,19 +5,18 @@ import { use, useEffect, useState } from "react";
 
 import { Money } from "@/components/money";
 import { VideoDemo } from "@/components/video-demo";
-import { ComparisonList } from "@/components/comparison-list";
+import { VerdictCard } from "@/components/verdict-card";
 import { CopyField } from "@/components/copy-field";
 import { AssistedTaskForm } from "@/components/assisted-task-form";
 import { StatusCard } from "@/components/status-card";
 import { TxResult, type TxState } from "@/components/tx-result";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type ClientVerdict } from "@/lib/api";
-import { explorerTx, formatUsdc, shortHash } from "@/lib/format";
+import { formatUsdc, shortHash } from "@/lib/format";
 import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
 import { keys, useStored, type ClientTask } from "@/lib/store";
 
@@ -27,9 +26,9 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Vista del cliente</h1>
-        <p className="text-sm text-muted-foreground">
+      <div className="page-heading">
+        <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Vista del cliente</h1>
+        <p className="text-base text-muted-foreground">
           Crea la tarea, comparte la invitación con tu programador y deposita el monto en el contrato.
         </p>
       </div>
@@ -102,13 +101,30 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
   return (
     <div className="space-y-6">
       {task ? <StatusCard task={task} secondsLeft={secondsLeft} /> : error ? (
-        <p className="text-sm text-red-600">{error.message}</p>
+        <p className="text-sm text-[var(--alert-foreground)]">{error.message}</p>
       ) : null}
       {!sameWallet && (
-        <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        <p className="rounded-md border border-[var(--alert)] bg-[var(--alert-background)] p-3 text-sm text-[var(--alert-foreground)]">
           Esta tarea se creó con la wallet {shortHash(ct.client_address, 6)}; conecta esa wallet para depositar o aprobar.
         </p>
       )}
+
+      <section className="space-y-5" aria-label="Veredictos del motor">
+        <div className="space-y-2">
+          <h2 className="text-2xl font-semibold tracking-tight">Veredictos del motor</h2>
+          <p className="max-w-3xl text-base text-muted-foreground">Ves el resultado de cada criterio y el video demo. El código se comparte tras el pago o con autorización explícita del programador.</p>
+        </div>
+        <div className="flex flex-col-reverse gap-6" data-testid="veredictos">
+          {verdicts.length === 0 && <p className="rounded-xl border border-dashed p-6 text-base text-muted-foreground">Todavía no hay envíos.</p>}
+          {verdicts.map((v) => (
+            <VerdictCard key={v.code_hash} approved={v.approved} reason={v.reason} comparison={v.comparison}
+              transactionHash={v.transaction_hash} amount={task?.onchain?.amount}
+              meta={<>Capa {v.stage === "deterministic" ? "determinista" : v.stage === "cache" ? "caché" : "Gemini"} · código <span className="font-mono">{shortHash(v.code_hash)}</span></>}>
+              <VideoDemo url={v.video_url} />
+            </VerdictCard>
+          ))}
+        </div>
+      </section>
 
       <Card>
         <CardHeader>
@@ -123,9 +139,9 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
             <div className="space-y-2">
               <div className="text-xs font-medium text-muted-foreground">Depósito</div>
               {usdc.units < ct.amount && (
-                <p className="text-sm text-amber-700">
+                <p className="text-sm text-[var(--alert-foreground)]">
                   Tu saldo ({formatUsdc(usdc.units)}) no alcanza para el depósito. Para la demo:{" "}
-                  <code className="font-mono text-xs">bash scripts/fondear.sh {wallet.address} {formatUsdc(ct.amount - usdc.units).replace(" USDC", "")}</code>
+                  <code className="font-mono text-sm">bash scripts/fondear.sh {wallet.address} {formatUsdc(ct.amount - usdc.units).replace(" USDC", "")}</code>
                 </p>
               )}
               <Button
@@ -158,40 +174,11 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
             </p>
           </details>
           <div className="text-xs text-muted-foreground">
-            rules_hash <span className="font-mono">{ct.rules_hash}</span>
+            rules_hash <span className="break-all font-mono">{ct.rules_hash}</span>
           </div>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Veredictos del motor</CardTitle>
-          <CardDescription>
-            Ves el resultado de cada criterio y el video demo. El código se comparte tras el pago o con autorización explícita del programador.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5" data-testid="veredictos">
-          {verdicts.length === 0 && <p className="text-sm text-muted-foreground">Todavía no hay envíos.</p>}
-          {verdicts.map((v) => (
-            <div key={v.code_hash} className="space-y-2 border-l-2 pl-4" style={{ borderColor: v.approved ? "#059669" : "#dc2626" }}>
-              <div className="flex items-center gap-2">
-                <Badge variant={v.approved ? "default" : "destructive"}>{v.approved ? "Aprobado" : "Rechazado"}</Badge>
-                <span className="text-xs text-muted-foreground">
-                  capa {v.stage === "deterministic" ? "determinista" : "Gemini"} · código {shortHash(v.code_hash)}
-                </span>
-              </div>
-              <p className="text-sm">{v.reason}</p>
-              <ComparisonList items={v.comparison} />
-              <VideoDemo url={v.video_url} />
-              {v.transaction_hash && (
-                <a className="text-sm text-sky-700 underline" href={explorerTx(v.transaction_hash)} target="_blank" rel="noreferrer">
-                  Pago en el explorador: {shortHash(v.transaction_hash)}
-                </a>
-              )}
-            </div>
-          ))}
-        </CardContent>
-      </Card>
 
       {(canApprove || manual.phase !== "idle") && (
         <Card data-testid="aprobar-manual">
@@ -266,11 +253,11 @@ function Delivery({ taskId, clientToken, paid }: { taskId: string; clientToken: 
             Ver código
           </Button>
         ) : (
-          <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">{code}</pre>
+          <pre className="overflow-x-auto rounded-lg border bg-muted/40 p-5 font-mono text-sm">{code}</pre>
         )}
         {deliveryHash && <p className="break-all text-xs text-muted-foreground">Entrega: {deliveryHash}</p>}
         <VideoDemo url={videoUrl} />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-[var(--alert-foreground)]">{error}</p>}
       </CardContent>
     </Card>
   );
