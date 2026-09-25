@@ -224,8 +224,8 @@ Orden de construcción: 3 → 2 → 1 → 6 → 4 → 5.
 2. **Criterios acordados.** El `rules_hash` se calcula sobre la versión FINAL editada. El programador ve esa versión y pulsa "Acepto los criterios" (`/accept`) antes de poder enviar. El motor de verificación juzga exactamente esos criterios.
 3. **Veredicto por criterio.** La terminal y el resultado muestran cada criterio con ✓ o ✗ y su razón (campo `comparison`).
 4. **Código protegido + video.** El programador adjunta un enlace de Google Drive a un video demo (máx. 3 min). Se muestra con el reproductor incrustado de Drive (`https://drive.google.com/file/d/<ID>/preview`). El backend valida el formato del enlace y extrae el ID; no puede comprobar permisos ni duración, así que la UI avisa: "Compártelo como 'cualquier persona con el enlace' y que dure máximo 3 minutos". El enlace entra al `verdict_hash`. El código solo se entrega al cliente (con `client_token`) cuando la tarea está en `Released`.
-5. **Revisión manual con consentimiento.** Si la IA rechaza, el cliente ve el video. El código solo se le muestra si el programador da su consentimiento (con `freelancer_token`). Con eso el cliente decide si usa `client_release`.
-6. **Montos en pesos.** El backend expone un tipo de cambio USD/MXN de referencia (fuente pública con valor fijo de respaldo si falla) y la UI muestra: "Estimado con tipo de cambio de referencia del [fecha]; el monto final depende de la rampa de retiro". Pollar sigue siendo prioridad para login, wallet, trustline y firma; su rampa SEP-24 es el camino a pesos reales en producción.
+5. **Revisión manual con consentimiento.** Si la IA rechaza, el cliente ve el video. El código solo se le muestra si el programador da su consentimiento (con `freelancer_token`). Con eso el cliente decide si usa `client_release`. El consentimiento autoriza ver una entrega concreta (`code_hash`), no las futuras: un envío nuevo necesita su propio consentimiento, y solo se puede consentir una entrega rechazada.
+6. **Montos en pesos.** El backend expone un tipo de cambio USD/MXN de referencia (`GET /fx/usd-mxn`: Frankfurter, con valor fijo de respaldo si falla) y la UI muestra: "Estimado con tipo de cambio de referencia del [fecha]; el monto final depende de la rampa de retiro". Pollar sigue siendo prioridad para login, wallet, trustline y firma; su rampa SEP-24 es el camino a pesos reales en producción.
 
 El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el motor.
 
@@ -239,11 +239,11 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | `GET /tasks/{task_id}` | — | Pedido + criterios + estado y monto leídos del contrato |
 | `POST /tasks/{task_id}/accept` | `freelancer_address`, `invite_token` | `freelancer_token` (exige trustline de USDC: si falta, `409 NO_USDC_TRUSTLINE`) |
 | `POST /evaluate` | `task_id`, `freelancer_address`, `code`, `video_url` + header `X-Freelancer-Token` | Veredicto |
-| `POST /tasks/{task_id}/consent` | header `X-Freelancer-Token` | Permite al cliente ver el código tras un rechazo |
+| `POST /tasks/{task_id}/consent` | `code_hash` (opcional; por defecto el último envío) + header `X-Freelancer-Token` | Permite al cliente ver esa entrega rechazada (solo ese `code_hash`, no las futuras); si no es una entrega rechazada, `409 NO_REJECTED_DELIVERY` |
 | `GET /tasks/{task_id}/delivery` | header `X-Client-Token` | Código + video; solo si `Released` o con consentimiento |
 | `GET /tasks/{task_id}/verdicts` | header `X-Client-Token` | Veredictos para la vista del cliente: `approved`, `stage`, `reason`, `comparison`, `transaction_hash` (nunca `trace`, `logic` ni código) |
 | `GET /demo` | — | Plantilla fija y casos A–D (fuente única: `backend/plantilla.py` y `backend/casos/`) |
-| `GET /fx/usd-mxn` | — | `rate`, `as_of`, `source` |
+| `GET /fx/usd-mxn` | — | `rate`, `as_of`, `source`, `fallback`: tipo de cambio de referencia de Frankfurter; si falla, valor fijo de respaldo con `fallback: true` |
 | `GET /health` | — | `{"ok": true}` |
 
 Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombre):
@@ -281,6 +281,7 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
   - `DEADLINE_TOO_CLOSE` 409 (quedan menos de 120 s de plazo on-chain, o no alcanza para reintentar)
   - `NO_USDC_TRUSTLINE` 409 (el programador no tiene trustline de USDC)
   - `TASK_NOT_RELEASED` 409 (`/delivery` antes de que el programador cobre)
+  - `NO_REJECTED_DELIVERY` 409 (`/consent` sobre un `code_hash` que no es una entrega rechazada de esa tarea)
   - `TOO_MANY_SUBMISSIONS` 429
   - `ENGINE_UNAVAILABLE` 502 (el motor de análisis no respondió)
   - `CHAIN_UNAVAILABLE` 502 (el RPC de Stellar no respondió)

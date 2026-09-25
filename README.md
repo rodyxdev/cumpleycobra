@@ -30,28 +30,34 @@ docs/fases/               # un reporte por fase, con comandos, salidas y hashes 
 
 Contrato en testnet: `CAWAZODOFP67HETHN4NLYOECPCJACGLUTCLARVGLBZ7TJDLT4KLQRATQ` (detalles en [`contracts/cumpleycobra/README.md`](contracts/cumpleycobra/README.md)).
 
-## Cómo correrlo
+## Instalación
 
-```bash
-# Contrato
-cargo test -p cumpleycobra
-stellar contract build
+Desde un clon limpio. Requisitos: Python 3.14, Node.js con npm, la CLI de Google Cloud (`gcloud`) y, para los scripts de testnet, la Stellar CLI. Las rutas `backend/.venv/Scripts/` son de Windows; en Linux y macOS usa `backend/.venv/bin/`.
 
-# Backend (copia .env.example a backend/.env y llénalo)
-python -m venv backend/.venv
-backend/.venv/Scripts/python -m pip install -r backend/requirements.txt
-backend/.venv/Scripts/python -m pytest backend/tests
-backend/.venv/Scripts/python -m uvicorn backend.main:app --port 8000
+1. **Variables de entorno.** Copia `.env.example` a `backend/.env` y llénalo. `ARBITER_SECRET_KEY` debe ser la llave del árbitro con que se inicializó el contrato (`stellar keys secret cyc-arbiter`); con otra llave hay que desplegar un contrato propio (ver [`contracts/cumpleycobra/README.md`](contracts/cumpleycobra/README.md)). Copia la sección `NEXT_PUBLIC_*` del mismo archivo a `frontend/.env.local` y pon ahí la clave publicable de Pollar. Ninguno de los dos archivos se sube al repositorio.
+2. **Credenciales de Vertex AI** (si `GOOGLE_GENAI_USE_VERTEXAI=true`):
 
-# Frontend (NEXT_PUBLIC_* en frontend/.env.local)
-cd frontend && npm install && npm run build && npx next start -p 3000
-```
+   ```bash
+   gcloud auth application-default login
+   ```
 
-## Wallet: Pollar (y respaldos)
+3. **Backend:**
 
-La app usa [Pollar](https://pollar.xyz) para iniciar sesión, obtener la wallet, activar USDC y firmar `deposit` y `client_release`. Las transacciones se arman en el navegador con `@stellar/stellar-sdk` y se preparan contra el RPC. Pollar las firma en su servidor y las envuelve en un fee-bump pagado por la app, así que las wallets no necesitan XLM. La app las envía al RPC y consulta hasta `SUCCESS`.
+   ```bash
+   python -m venv backend/.venv
+   backend/.venv/Scripts/python -m pip install -r backend/requirements.txt
+   ```
 
-Configuración del dashboard de Pollar (https://dashboard.pollar.xyz) para desarrollo local:
+4. **Frontend.** `next typegen` genera los tipos de las rutas (`LayoutProps`, `PageProps`) que necesita el chequeo de tipos; `next build` los genera solo.
+
+   ```bash
+   cd frontend
+   npm ci
+   npx next typegen
+   npx tsc --noEmit
+   ```
+
+5. **Pollar.** Configura la app en el dashboard (https://dashboard.pollar.xyz):
 
 | Sección | Qué configurar |
 | --- | --- |
@@ -61,6 +67,27 @@ Configuración del dashboard de Pollar (https://dashboard.pollar.xyz) para desar
 | Treasury → Tokens & Trustlines | `USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` |
 | Treasury → Auth Policy | El contrato `CAWAZODOFP67HETHN4NLYOECPCJACGLUTCLARVGLBZ7TJDLT4KLQRATQ` |
 | Treasury → Sponsorship | Activo para contratos y transferencias (sin él, la red responde `txInsufficientBalance`) |
+
+## Cómo correrlo
+
+```bash
+# Contrato
+cargo test -p cumpleycobra
+stellar contract build
+
+# Backend
+backend/.venv/Scripts/python -m pytest backend/tests
+backend/.venv/Scripts/python -m uvicorn backend.main:app --port 8000
+
+# Frontend
+cd frontend && npm run build && npx next start -p 3000
+```
+
+El backend lee `backend/.env` al importarse: sin esas variables, `backend.main` no arranca.
+
+## Wallet: Pollar (y respaldos)
+
+La app usa [Pollar](https://pollar.xyz) para iniciar sesión, obtener la wallet, activar USDC y firmar `deposit` y `client_release`. Las transacciones se arman en el navegador con `@stellar/stellar-sdk` y se preparan contra el RPC. Pollar las firma en su servidor y las envuelve en un fee-bump pagado por la app, así que las wallets no necesitan XLM. La app las envía al RPC y consulta hasta `SUCCESS`. La configuración del dashboard está en [Instalación](#instalación).
 
 Si la firma con Pollar falla, el respaldo de la demo es `bash scripts/deposit.sh TASK_ID MONTO PLAZO_S RULES_HASH`, con la Stellar CLI.
 
@@ -108,4 +135,4 @@ Genera cinco borradores, analiza A–D contra cada uno y guarda tabla, criterios
 
 ## Créditos
 
-Desarrollado por Rodrigo Martínez Reyes. Construido con asistencia de IA: Claude Code (Anthropic) como agente de programación, y Claude en claude.ai para planeación y revisión de cada fase.
+Desarrollado por Rodrigo Martínez Reyes. Construido con asistencia de IA: Claude Code (Anthropic) y Codex (OpenAI) como agentes de programación, y Claude en claude.ai para planeación y revisión de cada fase.

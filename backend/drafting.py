@@ -111,6 +111,8 @@ lectura del código. Las sugerencias son propuestas: el cliente decide si aplica
 No inventes números de rendimiento, validaciones ni excepciones. Si falta contexto,
 propón precisar la entrada y salida requerida, sin inventar un comportamiento.
 No marques vago un comportamiento preciso solo porque admite varias implementaciones.
+No impongas estructuras de código concretas (comprensiones de lista, bucles,
+funciones auxiliares); describe el comportamiento observable.
 La sugerencia debe ser un criterio de reemplazo listo para aplicar, no un consejo
 como "definir un límite", una pregunta ni opciones separadas por "o". No propongas
 tiempos en segundos, mediciones, benchmarks ni pruebas de ejecución: este motor no
