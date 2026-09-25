@@ -20,6 +20,7 @@ class StateStore:
                 self.data = json.load(f)
         self.data.setdefault("tasks", {})
         self.data.setdefault("profiles", {})
+        self.data.setdefault("proposals", {})
 
     @property
     def tasks(self) -> dict:
@@ -29,6 +30,11 @@ class StateStore:
     def profiles(self) -> dict:
         """Perfiles públicos por dirección (nombre, habilidades, bio); los edita su dueño con sesión."""
         return self.data["profiles"]
+
+    @property
+    def proposals(self) -> dict:
+        """Propuestas privadas por identificador; compatibles con archivos de estado anteriores."""
+        return self.data["proposals"]
 
     def lock(self, task_id: str) -> asyncio.Lock:
         """Un asyncio.Lock por task_id: envíos y escrituras sin carreras."""

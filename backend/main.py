@@ -874,3 +874,114 @@ def no_trustline(result: dict) -> None:
     """Falta la trustline: no es un fallo de red, así que no se marca como reintentable."""
     result["reason"] = f"{result['verdict_reason']} {REASON_NO_TRUSTLINE}"
     result["payment_retryable"] = False
+
+
+# ---------------------------------------------------------------------------
+# Propuestas privadas: vía adicional al enlace de invitación existente
+# ---------------------------------------------------------------------------
+class ProposalIn(Strict):
+    task_id: StrictStr = Field(min_length=1, max_length=100)
+    programador: StrictStr
+
+
+def proposal_client(task_id: str, client_token: str | None, authorization: str | None) -> dict:
+    me = session_from(authorization)
+    task = get_task_or_404(task_id)
+    if me != task["client_address"] or not token_ok(task["client_token"], client_token):
+        raise err(403, "NOT_TASK_CLIENT", "Solo el cliente de esta tarea puede gestionar sus propuestas")
+    return task
+
+
+def proposal_for_recipient(proposal_id: str, authorization: str | None) -> dict:
+    me = session_from(authorization)
+    proposal = store().proposals.get(proposal_id)
+    if proposal is None:
+        raise err(404, "PROPOSAL_NOT_FOUND", "No existe esa propuesta")
+    if proposal["programador"] != me:
+        raise err(403, "NOT_PROPOSAL_RECIPIENT", "Esta propuesta está dirigida a otro programador")
+    return proposal
+
+
+def public_proposal(proposal: dict) -> dict:
+    # Lista cerrada: nunca se publican tokens de cliente, invitación o programador.
+    return {k: proposal[k] for k in ("id", "task_id", "programador", "estado", "created_at")}
+
+
+@app.post("/propuestas")
+async def create_proposal(body: ProposalIn, x_client_token: str | None = Header(default=None),
+                          authorization: str | None = Header(default=None)):
+    task = proposal_client(body.task_id, x_client_token, authorization)
+    check_address(body.programador, "programador")
+    async with store().lock(f"propuestas:{body.task_id}"):
+        async with store().lock(body.task_id):
+            if task["freelancer_address"]:
+                raise err(409, "TASK_TAKEN", "Esta tarea ya fue aceptada")
+            if any(p["task_id"] == body.task_id and p["programador"] == body.programador
+                   for p in store().proposals.values()):
+                raise err(409, "PROPOSAL_EXISTS", "Ya enviaste esta tarea a ese programador")
+            proposal = {"id": secrets.token_urlsafe(12), "task_id": body.task_id,
+                        "programador": body.programador, "estado": "pendiente", "created_at": int(time.time())}
+            store().proposals[proposal["id"]] = proposal
+            store().save()
+    return public_proposal(proposal)
+
+
+@app.get("/tasks/{task_id}/propuestas")
+async def task_proposals(task_id: str, x_client_token: str | None = Header(default=None),
+                         authorization: str | None = Header(default=None)):
+    proposal_client(task_id, x_client_token, authorization)
+    return {"propuestas": [public_proposal(p) for p in reversed(list(store().proposals.values()))
+                           if p["task_id"] == task_id]}
+
+
+@app.get("/buzon")
+async def inbox(authorization: str | None = Header(default=None)):
+    me = session_from(authorization)
+    own = [p for p in reversed(list(store().proposals.values())) if p["programador"] == me]
+    result = []
+    for proposal in own:
+        task = get_task_or_404(proposal["task_id"])
+        onchain, chain_error = None, None
+        try:
+            onchain, _ = await read_chain(task["task_id"])
+        except ApiError as exc:
+            chain_error = exc.message
+        result.append({**public_proposal(proposal), "tarea": {
+            "description": task["spec"]["description"], "criteria": list(task["spec"]["criteria"]),
+            "amount": task["amount"], "freelancer_address": task["freelancer_address"],
+            "onchain": {"amount": onchain["amount"], "status": onchain["status"]} if onchain else None,
+            "onchain_error": chain_error,
+        }})
+    return {"propuestas": result}
+
+
+@app.post("/propuestas/{proposal_id}/aceptar")
+async def accept_proposal(proposal_id: str, authorization: str | None = Header(default=None)):
+    proposal = proposal_for_recipient(proposal_id, authorization)
+    task_id = proposal["task_id"]
+    async with store().lock(f"propuestas:{task_id}"):
+        if proposal["estado"] == "rechazada":
+            raise err(409, "PROPOSAL_REJECTED", "No se puede aceptar una propuesta rechazada")
+        task = get_task_or_404(task_id)
+        if task["freelancer_address"]:
+            raise err(409, "TASK_TAKEN", "Esta tarea ya fue aceptada")
+        # Misma función que atiende /accept: mantiene trustline, token, bloqueo y persistencia.
+        # Su lock por tarea también protege frente a la aceptación por invitación.
+        accepted = await accept(task_id, AcceptIn(freelancer_address=proposal["programador"],
+                                                 invite_token=task["invite_token"]))
+        proposal["estado"] = "aceptada"
+        store().save()
+        return {**public_proposal(proposal), **accepted}
+
+
+@app.post("/propuestas/{proposal_id}/rechazar")
+async def reject_proposal(proposal_id: str, authorization: str | None = Header(default=None)):
+    proposal = proposal_for_recipient(proposal_id, authorization)
+    async with store().lock(f"propuestas:{proposal['task_id']}"):
+        async with store().lock(proposal["task_id"]):
+            task = get_task_or_404(proposal["task_id"])
+            if task["freelancer_address"]:
+                raise err(409, "TASK_TAKEN", "Esta tarea ya fue aceptada")
+            proposal["estado"] = "rechazada"
+            store().save()
+        return public_proposal(proposal)
