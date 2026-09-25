@@ -158,6 +158,11 @@ class StellarClient:
         resp = _with_retries(lambda: self.server.get_ledger_entries([key]))
         return bool(resp.entries)
 
+    def transaction_succeeded(self, tx_hash: str) -> bool:
+        """True solo si el RPC confirma la transacción como SUCCESS (NOT_FOUND o FAILED: False)."""
+        tx = _with_retries(lambda: self.server.get_transaction(tx_hash))
+        return tx.status == GetTransactionStatus.SUCCESS
+
     # --- release ---------------------------------------------------------------
     def release(self, task_id: str, freelancer: str, code_hash_hex: str,
                 verdict_hash_hex: str, on_signed: Callable[[str], None]) -> ReleaseOutcome:

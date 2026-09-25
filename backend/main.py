@@ -180,11 +180,16 @@ async def read_chain(task_id: str) -> tuple[dict | None, int]:
     return onchain, now
 
 
-async def seconds_left(deadline: int) -> int:
+class ClockUnavailable(Exception):
+    """No se pudo leer el reloj del ledger: es un error de red, no falta de plazo."""
+
+
+async def seconds_left(deadline: int) -> int | None:
+    """Segundos de plazo on-chain, o None si el RPC no responde (sin reloj no se decide nada)."""
     try:
         now = await run_in_threadpool(chain().ledger_time)
     except StellarUnavailable:
-        return 0  # sin reloj confiable no se arriesga el pago
+        return None
     return deadline - now
 
 
@@ -413,6 +418,7 @@ REASON_NO_TRUSTLINE = (
     "El pago no se liberó: la dirección del programador no tiene trustline de USDC. Cuando la "
     "active, el cliente puede aprobar el pago manualmente."
 )
+REASON_PAID_OTHERWISE = "La tarea ya se pagó por otra entrega o por aprobación manual."
 REASON_NO_TIME_TO_RELEASE = (
     "El código cumple los criterios acordados, pero no queda plazo suficiente para liberar el "
     "pago de forma segura. El envío no se contó. El cliente aún puede aprobarlo manualmente."
@@ -482,7 +488,10 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
         else:
             # --- Capa 3: Gemini ---------------------------------------------------
             async def time_ok() -> bool:
-                return await seconds_left(deadline) >= GEMINI_ATTEMPT_BUDGET_SECS
+                left = await seconds_left(deadline)
+                if left is None:
+                    raise ClockUnavailable()
+                return left >= GEMINI_ATTEMPT_BUDGET_SECS
 
             try:
                 gv, _elapsed = await gemini.evaluate(app.state.gemini, app.state.settings.gemini_model,
@@ -490,6 +499,10 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
             except gemini.OutOfTime:
                 raise err(409, "DEADLINE_TOO_CLOSE",
                           "No queda plazo para reintentar el análisis; el envío no se contó") from None
+            except ClockUnavailable:
+                raise err(502, "CHAIN_UNAVAILABLE",
+                          "No se pudo leer el reloj del contrato para reintentar el análisis; "
+                          "el envío no se contó") from None
             except gemini.EngineUnavailable as exc:
                 raise err(502, "ENGINE_UNAVAILABLE",
                           f"El motor de análisis no respondió; el envío no se contó ({exc})") from None
@@ -522,6 +535,7 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
             "verdict_hash": vh,
             "verdict_reason": reason,
             "security_flags": security_flags,
+            "video_url": video_url,  # el mismo valor normalizado que entra al verdict_hash
             "payment_retryable": False,
         }
         task["codes"][ch] = {"code": body.code, "video_url": video_url, "code_hash": ch,
@@ -530,7 +544,10 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
 
         counted = True
         if approved:
-            if await seconds_left(deadline) < RELEASE_BUDGET_SECS:
+            left = await seconds_left(deadline)
+            if left is None:
+                network_error(result)  # sin reloj: se reintenta con el mismo código
+            elif left < RELEASE_BUDGET_SECS:
                 result["reason"] = REASON_NO_TIME_TO_RELEASE
                 counted = False
             else:
@@ -554,7 +571,7 @@ async def try_payment(task: dict, result: dict) -> None:
     task_id = task["task_id"]
     freelancer = task["freelancer_address"]
     rel = task.get("release")
-    if rel and rel.get("status") == "success":
+    if rel and rel.get("status") == "success" and rel.get("code_hash") == result["code_hash"]:
         result["transaction_hash"] = rel["transaction_hash"]
         result["payment_retryable"] = False
         return
@@ -588,9 +605,7 @@ async def try_payment(task: dict, result: dict) -> None:
         if await trustline_missing(freelancer):
             no_trustline(result)
             return
-        result["reason"] = (f"{result['verdict_reason']} El pago no se pudo enviar por un problema de red; "
-                            "reenvía el mismo código para reintentarlo (no cuenta como envío).")
-        result["payment_retryable"] = True
+        network_error(result)
         return
 
     if outcome.status == "success":
@@ -603,17 +618,34 @@ async def try_payment(task: dict, result: dict) -> None:
 
 
 async def settle_not_funded(task: dict, result: dict) -> None:
-    """#6 o release sin confirmar: si la tarea ya está Released para este programador, es éxito."""
+    """#6 o release sin confirmar: solo es éxito si el release guardado es de esta entrega y quedó SUCCESS.
+
+    Que la tarea esté Released para el programador no basta: pudo pagarla otra entrega o el cliente
+    con client_release, y entonces este veredicto no tiene transacción propia.
+    """
     try:
         onchain = await run_in_threadpool(chain().get_task, task["task_id"])
     except (StellarUnavailable, ContractError):
         onchain = None
     rel = task.get("release")
-    if (onchain and onchain["status"] == "Released"
-            and onchain.get("freelancer") == task["freelancer_address"] and rel):
-        rel["status"] = "success"
-        result["transaction_hash"] = rel["transaction_hash"]
-        result["reason"] = result["verdict_reason"]
+    if onchain and onchain["status"] == "Released":
+        own = (rel and rel.get("code_hash") == result["code_hash"]
+               and onchain.get("freelancer") == task["freelancer_address"])
+        confirmed = False
+        if own:
+            try:
+                confirmed = await run_in_threadpool(chain().transaction_succeeded, rel["transaction_hash"])
+            except StellarUnavailable:
+                network_error(result)  # sin confirmar todavía: el reenvío lo vuelve a revisar
+                return
+        if own and confirmed:
+            rel["status"] = "success"
+            result["transaction_hash"] = rel["transaction_hash"]
+            result["reason"] = result["verdict_reason"]
+            result["payment_retryable"] = False
+            return
+        result["transaction_hash"] = None
+        result["reason"] = f"{result['verdict_reason']} {REASON_PAID_OTHERWISE}"
         result["payment_retryable"] = False
         return
     state = onchain["status"] if onchain else "desconocido"
@@ -631,6 +663,13 @@ async def trustline_missing(address: str) -> bool:
         return not await run_in_threadpool(chain().has_usdc_trustline, address)
     except Exception:  # noqa: BLE001
         return False
+
+
+def network_error(result: dict) -> None:
+    """Fallo de red (RPC o reloj del ledger): el mismo código se puede reenviar sin contar envío."""
+    result["reason"] = (f"{result['verdict_reason']} El pago no se pudo enviar por un problema de red; "
+                        "reenvía el mismo código para reintentarlo (no cuenta como envío).")
+    result["payment_retryable"] = True
 
 
 def no_trustline(result: dict) -> None:

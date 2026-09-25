@@ -66,7 +66,7 @@ def test_caso_d_rechazo_determinista_por_seguridad():
     ("compile('1', 'x', 'eval')\n", "'compile'"),
     ("__import__('os')\n", "__import__"),
     ("import os\nos.system('ls')\n", "'.system'"),
-    ("import subprocess\n", "import no permitido 'subprocess'"),
+    ("import subprocess\n", "import prohibido 'subprocess'"),
     ("from os import getenv\n", "import no permitido 'os'"),
     ("from . import algo\n", "import relativo"),
     ("open('x.txt', 'w').write('hola')\n", "open en modo escritura 'w'"),

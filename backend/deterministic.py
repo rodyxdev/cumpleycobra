@@ -24,6 +24,8 @@ FORBIDDEN_NAMES = {
 FORBIDDEN_ATTRS = {"system", "environ", "getenv", "putenv", "popen",
                    "write_text", "write_bytes"}
 FORBIDDEN_ATTR_PREFIXES = ("exec", "spawn")
+# Módulos que no se aceptan aunque el cliente los ponga en allowed_deps.
+ALWAYS_FORBIDDEN_MODULES = {"subprocess", "socket"}
 DYNAMIC_ATTR_FUNCS = {"getattr", "setattr", "delattr"}
 ALLOWED_DUNDERS = {"__name__", "__main__", "__init__"}
 DUNDER_RE = re.compile(r"^__\w+__$")
@@ -67,17 +69,30 @@ class _Checker(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             top = alias.name.split(".")[0]
-            if top not in self.allowed:
+            if top in ALWAYS_FORBIDDEN_MODULES:
+                self.add(node, f"import prohibido '{alias.name}'")
+            elif top not in self.allowed:
                 self.add(node, f"import no permitido '{alias.name}'")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.level:
             self.add(node, "import relativo no permitido")
-        else:
-            top = (node.module or "").split(".")[0]
-            if top not in self.allowed:
-                self.add(node, f"import no permitido '{node.module}'")
+            self.generic_visit(node)
+            return
+        top = (node.module or "").split(".")[0]
+        if top in ALWAYS_FORBIDDEN_MODULES:
+            self.add(node, f"import prohibido '{node.module}'")
+        elif top not in self.allowed:
+            self.add(node, f"import no permitido '{node.module}'")
+        # Cada nombre importado se revisa como un atributo: from os import system equivale a os.system.
+        for alias in node.names:
+            name = alias.name
+            if name == "*":
+                self.add(node, f"import con * desde '{node.module}' no verificable")
+            elif (name in FORBIDDEN_ATTRS or name in FORBIDDEN_NAMES
+                    or name.startswith(FORBIDDEN_ATTR_PREFIXES) or _is_dunder(name)):
+                self.add(node, f"import prohibido '{name}' desde '{node.module}'")
         self.generic_visit(node)
 
     # --- llamadas con reglas especiales ------------------------------------
@@ -97,6 +112,11 @@ class _Checker(ast.NodeVisitor):
                 else:
                     self.add(node, f"{func.id} con un nombre que no es literal")
                     self._ok_names.add(id(func))  # ya reportado
+            elif func.id == "open" and (any(isinstance(a, ast.Starred) for a in node.args)
+                                        or any(kw.arg is None for kw in node.keywords)):
+                # open(*args) u open(**kwargs): el modo no se puede leer, podría ser escritura.
+                self.add(node, "open con argumentos no verificables")
+                self._ok_names.add(id(func))
             elif func.id == "open":
                 mode = None
                 if len(node.args) >= 2:

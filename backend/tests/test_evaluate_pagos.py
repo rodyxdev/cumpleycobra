@@ -37,6 +37,11 @@ class FakeChain:
         self._release = release
         self.release_calls = 0
         self.trustline = True
+        self.last_release = None      # (code_hash, verdict_hash) del último release
+        self.failed_txs = set()       # hashes que getTransaction no confirma como SUCCESS
+
+    def transaction_succeeded(self, tx_hash):
+        return tx_hash not in self.failed_txs
 
     def has_usdc_trustline(self, address):
         return self.trustline
@@ -51,6 +56,7 @@ class FakeChain:
 
     def release(self, task_id, freelancer, ch, vh, on_signed):
         self.release_calls += 1
+        self.last_release = (ch, vh)
         return self._release(self, on_signed)
 
 
