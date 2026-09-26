@@ -152,14 +152,58 @@ def test_rechazo_persistido_no_permite_aceptar_ni_amarrar(world):
     assert StateStore(main.store().path).proposals[proposal["id"]]["estado"] == "rechazada"
 
 
-@pytest.mark.parametrize("bound", [P1, P2])
-def test_tarea_tomada_por_invitacion_no_admite_propuestas_ni_decisiones(world, bound):
+def test_tarea_tomada_por_otro_programador_no_admite_propuestas_ni_decisiones(world):
     task = create_task(world)
     proposal = send(world, task).json()
-    world.client.post(f"/tasks/{task['task_id']}/accept", json={"freelancer_address": bound, "invite_token": task["invite_token"]})
+    world.client.post(f"/tasks/{task['task_id']}/accept", json={"freelancer_address": P2, "invite_token": task["invite_token"]})
     assert_error(send(world, task, programmer=P2), 409, "TASK_TAKEN")
     assert_error(decision(world, proposal), 409, "TASK_TAKEN")
     assert_error(decision(world, proposal, "rechazar"), 409, "TASK_TAKEN")
+    assert main.store().proposals[proposal["id"]]["estado"] == "pendiente"
+
+
+def test_acepto_por_invitacion_y_luego_la_propuesta_devuelve_el_mismo_token(world):
+    task = create_task(world)
+    proposal = send(world, task).json()
+    by_invite = world.client.post(f"/tasks/{task['task_id']}/accept",
+                                  json={"freelancer_address": P1, "invite_token": task["invite_token"]}).json()
+    accepted = decision(world, proposal)
+    assert accepted.status_code == 200
+    assert accepted.json()["freelancer_token"] == by_invite["freelancer_token"]
+    assert accepted.json()["estado"] == "aceptada"
+    assert StateStore(main.store().path).proposals[proposal["id"]]["estado"] == "aceptada"
+    assert_error(send(world, task, programmer=P2), 409, "TASK_TAKEN")
+    assert_error(decision(world, proposal, "rechazar"), 409, "TASK_TAKEN")
+
+
+def test_propuesta_pendiente_con_la_tarea_amarrada_a_su_destinatario_se_acepta(world):
+    # accept() amarró la tarea pero el proceso cayó antes de guardar la propuesta como aceptada.
+    task = create_task(world)
+    proposal = send(world, task).json()
+    stored = main.store().tasks[task["task_id"]]
+    stored.update(freelancer_address=P1, freelancer_token="token-del-amarre", accepted_at=int(time.time()))
+    main.store().save()
+    main.app.state.store = StateStore(main.store().path)
+    assert main.store().proposals[proposal["id"]]["estado"] == "pendiente"
+    accepted = decision(world, proposal)
+    assert accepted.status_code == 200 and accepted.json()["freelancer_token"] == "token-del-amarre"
+    assert StateStore(main.store().path).proposals[proposal["id"]]["estado"] == "aceptada"
+
+
+def test_propuesta_rechazada_sigue_sin_aceptarse_aunque_la_tarea_sea_suya(world):
+    task = create_task(world)
+    proposal = send(world, task).json()
+    assert decision(world, proposal, "rechazar").status_code == 200
+    world.client.post(f"/tasks/{task['task_id']}/accept", json={"freelancer_address": P1, "invite_token": task["invite_token"]})
+    assert_error(decision(world, proposal), 409, "PROPOSAL_REJECTED")
+
+
+def test_no_se_puede_enviar_una_propuesta_a_uno_mismo(world):
+    task = create_task(world)
+    r = send(world, task, programmer=C1)
+    assert_error(r, 400, "INVALID_REQUEST")
+    assert r.json()["message"] == "No puedes enviarte una propuesta a ti mismo"
+    assert main.store().proposals == {}
 
 
 def test_propuesta_aceptada_no_se_puede_rechazar_y_aceptar_de_nuevo_devuelve_el_mismo_token(world):
@@ -272,3 +316,55 @@ def test_estado_anterior_sin_propuestas_sigue_cargando(tmp_path):
     p = tmp_path / "state.json"
     p.write_text('{"version":1,"tasks":{}}', encoding="utf-8")
     assert StateStore(p).proposals == {}
+
+
+def test_buzon_en_paralelo_con_limite_y_cache_terminal_da_el_mismo_resultado(world, monkeypatch):
+    import threading
+    tasks = [create_task(world) for _ in range(12)]
+    for i, t in enumerate(tasks):
+        send(world, t)
+        status = ("Released", "Refunded", "Funded", None)[i % 4]
+        if status:
+            world.chain.onchain[t["task_id"]] = {"amount": 10_000_000 + i, "status": status}
+    world.chain.onchain[tasks[5]["task_id"]] = "caida"  # una lectura falla: solo esa trae el error
+    active, peak, lock, calls = 0, 0, threading.Lock(), []
+
+    def get_task(task_id):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            calls.append(task_id)
+        try:
+            time.sleep(0.05)
+            value = world.chain.onchain.get(task_id)
+            if value == "caida":
+                raise StellarUnavailable("RPC caído")
+            return value
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(world.chain, "get_task", get_task)
+
+    # Resultado esperado, armado en serie con la misma forma de antes.
+    expected = []
+    for p in reversed(list(main.store().proposals.values())):
+        t = main.store().tasks[p["task_id"]]
+        oc = world.chain.onchain.get(p["task_id"])
+        down = oc == "caida"
+        expected.append({**main.public_proposal(p), "tarea": {
+            "description": t["spec"]["description"], "criteria": list(t["spec"]["criteria"]),
+            "amount": t["amount"], "freelancer_address": t["freelancer_address"],
+            "onchain": {"amount": oc["amount"], "status": oc["status"]} if oc and not down else None,
+            "onchain_error": "No se pudo leer el contrato (RPC caído)" if down else None,
+        }})
+
+    first = world.client.get("/buzon", headers=session(P1)).json()["propuestas"]
+    assert first == expected
+    assert 1 < peak <= main.ONCHAIN_CONCURRENCY and len(calls) == 12
+    calls.clear()
+    second = world.client.get("/buzon", headers=session(P1)).json()["propuestas"]
+    assert second == expected
+    terminal = {t["task_id"] for i, t in enumerate(tasks) if i % 4 in (0, 1) and i != 5}
+    # Released y Refunded no se vuelven a leer; Funded, sin depósito y la caída sí.
+    assert not terminal & set(calls) and len(calls) == 12 - len(terminal)

@@ -912,6 +912,8 @@ async def create_proposal(body: ProposalIn, x_client_token: str | None = Header(
                           authorization: str | None = Header(default=None)):
     task = proposal_client(body.task_id, x_client_token, authorization)
     check_address(body.programador, "programador")
+    if body.programador == task["client_address"]:
+        raise err(400, "INVALID_REQUEST", "No puedes enviarte una propuesta a ti mismo")
     async with store().lock(f"propuestas:{body.task_id}"):
         async with store().lock(body.task_id):
             if task["freelancer_address"]:
@@ -938,14 +940,27 @@ async def task_proposals(task_id: str, x_client_token: str | None = Header(defau
 async def inbox(authorization: str | None = Header(default=None)):
     me = session_from(authorization)
     own = [p for p in reversed(list(store().proposals.values())) if p["programador"] == me]
+    tasks = [get_task_or_404(p["task_id"]) for p in own]
+    # Como released_records: en paralelo (máximo ONCHAIN_CONCURRENCY) y sin volver a leer una tarea
+    # que ya está en un estado terminal (Released o Refunded no cambian).
+    cache = reputacion.onchain_cache(chain())
+    limit = asyncio.Semaphore(ONCHAIN_CONCURRENCY)
+
+    async def read(task_id: str) -> tuple[dict | None, str | None]:
+        hit = cache.get(task_id)
+        if hit and hit[1] is None:
+            return hit[0], None
+        async with limit:
+            try:
+                onchain, _ = await read_chain(task_id)
+            except ApiError as exc:
+                return None, exc.message
+        cache[task_id] = reputacion.cache_entry(onchain, time.monotonic())
+        return onchain, None
+
+    reads = await asyncio.gather(*(read(t["task_id"]) for t in tasks))
     result = []
-    for proposal in own:
-        task = get_task_or_404(proposal["task_id"])
-        onchain, chain_error = None, None
-        try:
-            onchain, _ = await read_chain(task["task_id"])
-        except ApiError as exc:
-            chain_error = exc.message
+    for proposal, task, (onchain, chain_error) in zip(own, tasks, reads):
         result.append({**public_proposal(proposal), "tarea": {
             "description": task["spec"]["description"], "criteria": list(task["spec"]["criteria"]),
             "amount": task["amount"], "freelancer_address": task["freelancer_address"],
@@ -963,9 +978,12 @@ async def accept_proposal(proposal_id: str, authorization: str | None = Header(d
         if proposal["estado"] == "rechazada":
             raise err(409, "PROPOSAL_REJECTED", "No se puede aceptar una propuesta rechazada")
         task = get_task_or_404(task_id)
-        if proposal["estado"] == "aceptada" and task["freelancer_address"] == proposal["programador"]:
-            # Repetir la aceptación (otro navegador, respuesta perdida) devuelve el mismo token,
-            # igual que /accept con la invitación: la sesión ya probó que es el destinatario.
+        if task["freelancer_address"] == proposal["programador"]:
+            # La tarea ya está amarrada al destinatario (por esta propuesta, por la invitación o en otro
+            # navegador): se decide por el amarre, igual que /accept, y se devuelve el mismo token.
+            if proposal["estado"] != "aceptada":
+                proposal["estado"] = "aceptada"
+                store().save()
             return {**public_proposal(proposal), "freelancer_token": task["freelancer_token"]}
         if task["freelancer_address"]:
             raise err(409, "TASK_TAKEN", "Esta tarea ya fue aceptada")
