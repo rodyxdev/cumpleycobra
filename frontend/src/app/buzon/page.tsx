@@ -7,13 +7,14 @@ import { Inbox } from "lucide-react";
 import { dropSessionIfRejected, useIdentity, VerifyIdentityButton } from "@/components/identity";
 import { FxNotice, Money } from "@/components/money";
 import { ProposalStatus } from "@/components/proposal-status";
+import { UsdcTrustlineNotice } from "@/components/usdc-trustline-notice";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useWallet } from "@/hooks/use-wallet";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { STATUS_LABEL } from "@/lib/format";
 import { type Session } from "@/lib/identity";
-import { canDecideProposal, type InboxProposal } from "@/lib/proposals";
+import { canDecideProposal, proposalDisplayState, type InboxProposal } from "@/lib/proposals";
 import { store } from "@/lib/store";
 
 export default function BuzonPage() {
@@ -32,7 +33,7 @@ export default function BuzonPage() {
 function InboxList({ session }: { session: Session }) {
   const router = useRouter();
   const [proposals, setProposals] = useState<InboxProposal[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   useEffect(() => {
@@ -65,13 +66,14 @@ function InboxList({ session }: { session: Session }) {
       }
     } catch (e) {
       dropSessionIfRejected(session.address, e);
-      setError(e instanceof Error ? e.message : String(e));
+      setError({ code: e instanceof ApiError ? e.code : "ERROR", message: e instanceof Error ? e.message : String(e) });
     } finally { setBusy(null); }
   }
 
   return <div className="space-y-5">
     {loadError && <p role="alert" className="text-[var(--alert-foreground)]">{loadError}</p>}
-    {error && <p role="alert" className="text-[var(--alert-foreground)]">{error}</p>}
+    {error?.code === "NO_USDC_TRUSTLINE" ? <UsdcTrustlineNotice />
+      : error && <p role="alert" className="text-[var(--alert-foreground)]">{error.message}</p>}
     {proposals === null && !loadError && <p className="text-muted-foreground">Consultando tus propuestas…</p>}
     {proposals?.length === 0 && <Card><CardContent className="space-y-3 py-4" data-testid="buzon-vacio">
       <Inbox className="size-7 text-primary" aria-hidden="true" /><h2 className="text-xl font-semibold">Tu buzón está al día</h2>
@@ -80,7 +82,7 @@ function InboxList({ session }: { session: Session }) {
     {proposals?.map((p) => <Card key={p.id} data-proposal-id={p.id}>
       <CardContent className="space-y-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-2"><p className="eyebrow">Tarea <span className="font-mono">{p.task_id}</span></p><ProposalStatus state={p.estado} /></div>
+          <div className="space-y-2"><p className="eyebrow">Tarea <span className="font-mono normal-case">{p.task_id}</span></p><ProposalStatus state={proposalDisplayState(p, p.tarea.freelancer_address)} /></div>
           <div className="text-right"><p className="text-xl font-semibold"><Money units={p.tarea.onchain?.amount ?? p.tarea.amount} /></p>
             <p className="mt-1 text-sm text-muted-foreground">{p.tarea.onchain ? STATUS_LABEL[p.tarea.onchain.status] : p.tarea.onchain_error ? "Estado del contrato no disponible" : "Sin depósito confirmado"}</p>
           </div>

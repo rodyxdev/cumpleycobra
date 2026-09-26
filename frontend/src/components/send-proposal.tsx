@@ -16,7 +16,8 @@ import { keys, store, useStored } from "@/lib/store";
 export function SendProposal({ programador }: { programador: string }) {
   const wallet = useWallet();
   const { session } = useIdentity(wallet.address);
-  return session ? <ProposalForm key={`${session.address}:${programador}`} session={session} programador={programador} /> : null;
+  // El dueño del perfil no se envía propuestas a sí mismo (el backend también lo rechaza).
+  return session && session.address !== programador ? <ProposalForm key={`${session.address}:${programador}`} session={session} programador={programador} /> : null;
 }
 
 function ProposalForm({ session, programador }: { session: Session; programador: string }) {

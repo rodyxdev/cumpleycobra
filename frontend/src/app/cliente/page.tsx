@@ -145,7 +145,8 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
         </div>
       </section>
 
-      <ClientProposals taskId={taskId} clientToken={ct.client_token} clientAddress={ct.client_address} />
+      <ClientProposals taskId={taskId} clientToken={ct.client_token} clientAddress={ct.client_address}
+        freelancerAddress={task?.freelancer_address ?? null} />
 
       <Card>
         <CardHeader>

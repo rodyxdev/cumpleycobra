@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { UsdcGate } from "@/components/usdc-gate";
+import { UsdcTrustlineNotice } from "@/components/usdc-trustline-notice";
 import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type Caso, type TaskView, type Verdict } from "@/lib/api";
@@ -110,10 +111,7 @@ function AcceptPanel({ taskId, invite, onAccepted }: { taskId: string; invite: s
           <p className="text-sm text-[var(--alert-foreground)]">Necesitas el enlace de invitación que te compartió el cliente.</p>
         )}
         {error?.code === "NO_USDC_TRUSTLINE" ? (
-          <div className="rounded-md border border-[var(--alert)] bg-[var(--alert-background)] p-3 text-sm text-[var(--alert-foreground)]">
-            <div className="font-medium">Activa USDC antes de continuar</div>
-            Tu cuenta no tiene trustline de USDC, así que no podría recibir el pago. Actívala y vuelve a aceptar.
-          </div>
+          <UsdcTrustlineNotice />
         ) : error ? (
           <p className="text-sm text-[var(--alert-foreground)]">{error.message}</p>
         ) : null}

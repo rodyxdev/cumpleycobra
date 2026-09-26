@@ -8,16 +8,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useWallet } from "@/hooks/use-wallet";
 import { api } from "@/lib/api";
 import { shortHash } from "@/lib/format";
-import { type Proposal } from "@/lib/proposals";
+import { proposalDisplayState, type Proposal } from "@/lib/proposals";
 
-type Props = { taskId: string; clientToken: string; clientAddress: string };
+/** freelancerAddress: el programador amarrado a la tarea (GET /tasks), para mostrar las propuestas cerradas. */
+type Props = { taskId: string; clientToken: string; clientAddress: string; freelancerAddress?: string | null };
 export function ClientProposals(props: Props) {
   const wallet = useWallet();
   const { session } = useIdentity(wallet.address);
   return session && session.address === props.clientAddress
     ? <ProposalList key={`${props.taskId}:${session.token}`} {...props} sessionToken={session.token} /> : null;
 }
-function ProposalList({ taskId, clientToken, clientAddress, sessionToken }: Props & { sessionToken: string }) {
+function ProposalList({ taskId, clientToken, clientAddress, freelancerAddress, sessionToken }: Props & { sessionToken: string }) {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -42,7 +43,7 @@ function ProposalList({ taskId, clientToken, clientAddress, sessionToken }: Prop
       <ul className="divide-y">
         {proposals.map((p) => <li key={p.id} data-proposal-id={p.id} className="flex flex-wrap items-center justify-between gap-3 py-4 first:pt-0 last:pb-0">
           <Link href={`/programador/${p.programador}`} title={p.programador} className="font-mono text-sm text-primary underline-offset-4 hover:underline">{shortHash(p.programador, 10)}</Link>
-          <ProposalStatus state={p.estado} />
+          <ProposalStatus state={proposalDisplayState(p, freelancerAddress)} />
         </li>)}
       </ul>
     </CardContent>
