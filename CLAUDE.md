@@ -246,6 +246,25 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | `GET /fx/usd-mxn` | — | `rate`, `as_of`, `source`, `fallback`: tipo de cambio de referencia de Frankfurter; si falla, valor fijo de respaldo con `fallback: true` |
 | `GET /health` | — | `{"ok": true}` |
 
+Rutas aditivas de identidad (SEP-10), reputación y propuestas. El flujo del dinero no las exige; «sesión» es el header `Authorization: Bearer <token>` que devuelve `/auth/token`:
+
+| Ruta | Autorización | Entrada y salida | Errores |
+| --- | --- | --- | --- |
+| `GET /auth/challenge?address=G…` | Ninguna | Reto SEP-10 firmado con `SEP10_SIGNING_SECRET`, de un solo uso y válido 5 min: `transaction`, `network_passphrase`, `home_domain`, `web_auth_domain`, `expires_in` | `400 INVALID_REQUEST` (dirección), `503 AUTH_NOT_CONFIGURED` |
+| `POST /auth/token` | El reto firmado por la wallet | `{transaction}` (el XDR firmado). Verifica la firma del servidor, el plazo y los firmantes de la cuenta en Horizon; devuelve `{token, address, expires_at}`, una sesión HMAC de 12 h | `401 CHALLENGE_INVALID`, `401 CHALLENGE_USED`, `401 CHALLENGE_EXPIRED`, `401 SIGNATURE_INVALID`, `502 CHAIN_UNAVAILABLE` (Horizon; el reto se puede reintentar), `503 AUTH_NOT_CONFIGURED` |
+| `PUT /perfil` | Sesión (`Authorization: Bearer`) | `{address?, nombre? (máx. 60), habilidades[] (máx. 8, 30 c/u), bio? (máx. 280)}`; solo el perfil de la dirección de la sesión | `401 SESSION_REQUIRED`, `403 NOT_PROFILE_OWNER`, `400 INVALID_REQUEST` |
+| `GET /programadores` | Ninguna | Lista de programadores con tareas `Released` confirmadas en el contrato: pagadas por el motor y manualmente, clientes distintos y calificación | `502 CHAIN_UNAVAILABLE` |
+| `GET /programadores/{address}` | Ninguna | Perfil público: métricas, historial (sin código, tokens ni dirección del cliente) y nombre, habilidades y bio si los publicó | `400 INVALID_REQUEST`, `502 CHAIN_UNAVAILABLE` |
+| `POST /tasks/{task_id}/calificacion` | `X-Client-Token` y sesión del cliente on-chain | `{estrellas (1 a 5), comentario? (máx. 280)}`, una vez, con la tarea `Released` | `403 INVALID_TOKEN`, `401 SESSION_REQUIRED`, `403 NOT_TASK_CLIENT`, `409 TASK_NOT_RELEASED`, `409 ALREADY_RATED`, `404 TASK_NOT_FOUND`, `502 CHAIN_UNAVAILABLE` |
+| `POST /propuestas` | `X-Client-Token` y sesión cuya dirección es el `client_address` de la tarea | `{task_id, programador}` para una tarea que nadie ha aceptado; devuelve la propuesta (`id`, `task_id`, `programador`, `estado: "pendiente"`, `created_at`) | `401 SESSION_REQUIRED`, `403 NOT_TASK_CLIENT`, `400 INVALID_REQUEST` (dirección inválida o propuesta a ti mismo), `404 TASK_NOT_FOUND`, `409 TASK_TAKEN`, `409 PROPOSAL_EXISTS` (misma tarea y programador, incluso rechazada) |
+| `GET /tasks/{task_id}/propuestas` | `X-Client-Token` y sesión del cliente | Las propuestas de esa tarea con su estado (`pendiente`, `aceptada` o `rechazada`) | `401 SESSION_REQUIRED`, `403 NOT_TASK_CLIENT`, `404 TASK_NOT_FOUND` |
+| `GET /buzon` | Sesión | Solo las propuestas dirigidas a la dirección de la sesión, con el resumen de la tarea: descripción, criterios, monto, programador amarrado y estado on-chain (o `onchain_error`). El contrato se lee en paralelo (máx. 8) con caché de estados terminales | `401 SESSION_REQUIRED` |
+| `POST /propuestas/{id}/aceptar` | Sesión del destinatario | Amarra la tarea con la misma función que `/accept` (exige trustline) y devuelve la propuesta `aceptada` con `freelancer_token`. Si la tarea ya está amarrada al destinatario (por esta propuesta o por la invitación), devuelve el mismo token | `401 SESSION_REQUIRED`, `403 NOT_PROPOSAL_RECIPIENT`, `404 PROPOSAL_NOT_FOUND`, `409 PROPOSAL_REJECTED`, `409 TASK_TAKEN` (la tomó otro), `409 NO_USDC_TRUSTLINE`, `502 CHAIN_UNAVAILABLE` |
+| `POST /propuestas/{id}/rechazar` | Sesión del destinatario | Marca la propuesta `rechazada`; ya no se puede aceptar | `401 SESSION_REQUIRED`, `403 NOT_PROPOSAL_RECIPIENT`, `404 PROPOSAL_NOT_FOUND`, `409 TASK_TAKEN` |
+
+- Una propuesta pendiente cuya tarea tomó otro programador se muestra como «Cerrada: la tomó otro programador» (estado calculado en el frontend, no se guarda).
+- Errores propios de estas rutas, además de los de arriba: `SESSION_REQUIRED` 401, `CHALLENGE_INVALID`/`CHALLENGE_USED`/`CHALLENGE_EXPIRED`/`SIGNATURE_INVALID` 401, `NOT_PROFILE_OWNER`/`NOT_TASK_CLIENT`/`NOT_PROPOSAL_RECIPIENT` 403, `PROPOSAL_NOT_FOUND` 404, `ALREADY_RATED`/`PROPOSAL_EXISTS`/`PROPOSAL_REJECTED` 409, `AUTH_NOT_CONFIGURED` 503.
+
 Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombre):
 
 ```json
@@ -360,10 +379,19 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `ARBITER_SECRET_KEY` (nunca sale del backend) | backend |
 | `CONTRACT_ID`, `USDC_SAC_ID`, `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE` | backend |
 | `FRONTEND_ORIGIN`, `STATE_FILE` (por defecto `backend/state.json`) | backend |
+| `SEP10_SIGNING_SECRET`, `SESSION_SECRET` (identidad; nunca salen del backend) y, opcionales, `SEP10_HOME_DOMAIN`, `SEP10_WEB_AUTH_DOMAIN`, `HORIZON_URL` | backend |
 | `NEXT_PUBLIC_POLLAR_API_KEY`, `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_API_URL` | frontend |
 | `NEXT_PUBLIC_WALLET` (`pollar` por defecto, `freighter` de respaldo), `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_USDC_ASSET` (`CÓDIGO:EMISOR`) | frontend |
 
 `.env` y `state.json` nunca se suben al repositorio; mantener un `.env.example`.
+
+Llaves de identidad:
+
+- `SEP10_SIGNING_SECRET`: una llave Stellar **nueva y sin fondos** que firma los retos SEP-10. **Nunca** la del árbitro: el backend responde `503 AUTH_NOT_CONFIGURED` si coinciden. Para generarla: `stellar keys generate cyc-sep10` y luego `stellar keys secret cyc-sep10`, o `python -c "from stellar_sdk import Keypair; print(Keypair.random().secret)"`.
+- `SESSION_SECRET`: secreto largo y aleatorio con el que se firman las sesiones (HMAC-SHA256, 12 h). Para generarlo: `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Cambiarlo invalida todas las sesiones.
+- Sin cualquiera de las dos, `/auth/challenge` y `/auth/token` responden `503 AUTH_NOT_CONFIGURED`, y las rutas con sesión (`/perfil`, `/tasks/{id}/calificacion`, `/propuestas`, `/tasks/{id}/propuestas`, `/buzon`, `/propuestas/{id}/aceptar` y `/rechazar`) responden lo mismo en cuanto reciben un token (sin header, `401 SESSION_REQUIRED`). El flujo del dinero (crear, invitar, depositar, `/accept`, `/evaluate`, pagar) no las necesita.
+- Opcionales, con valor por defecto: `SEP10_HOME_DOMAIN` (`localhost:3000`), `SEP10_WEB_AUTH_DOMAIN` (`localhost:8000`) y `HORIZON_URL` (`https://horizon-testnet.stellar.org`).
+- Nunca se imprimen ni se suben al repositorio: van en `backend/.env`, y `.env.example` las tiene vacías.
 
 ## Plan y reglas de corte
 
