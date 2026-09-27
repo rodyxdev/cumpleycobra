@@ -239,3 +239,45 @@ Incluye 20 casos nuevos y todos los tests anteriores. Las dos advertencias exist
 - Los documentos con invitaciones quedan ignorados y el ejemplo público no contiene enlaces. No se generaron tareas para jueces durante esta revisión.
 
 Advertencias fuera del alcance: deprecaciones existentes de TestClient/httpx y google-genai, aviso de Node sobre módulos TypeScript y aviso de Pollar durante prerenderizado. No se cambiaron dependencias ni componentes del frontend.
+
+
+## Diagnóstico y corrección del límite por IP (27 de septiembre de 2026)
+
+Antes de cambiar la fuente, 12 peticiones válidas a `/tasks/draft/review` sin
+`X-Forwarded-For` respondieron 200 en 2,05 s: ninguna fue limitada.
+Con `RATE_LIMIT_PER_MINUTE=10` confirmado, el diagnóstico temporal produjo estos
+hashes SHA-256 de 8 caracteres; no se registraron direcciones en claro:
+
+| Tanda | Peticiones | X-Real-IP | XFF primera entrada | XFF última entrada / clave anterior |
+| --- | ---: | --- | --- | --- |
+| X-Forwarded-For falso distinto | 5 | `1b2b9888` | `1b2b9888` | `38271534` |
+| Sin X-Forwarded-For | 5 | `1b2b9888` | `1b2b9888` | `38271534` |
+| Intento de falsificar también X-Real-IP, Forwarded y CF-Connecting-IP | 5 | `1b2b9888` | `1b2b9888` | `f1148831` |
+
+En las diez primeras peticiones, `request.client.host` tuvo siete hashes distintos:
+`9fee1dbd`, `786b0176`, `decbf196`, `4b13ea3e`, `d72676df`, `2241f04e` y `dacf3f4d`.
+XFF tuvo dos entradas. Los nombres recibidos fueron `x-forwarded-for`,
+`x-forwarded-host`, `x-forwarded-proto` y `x-real-ip`.
+
+Conclusión: la última entrada de XFF no identifica de forma estable al cliente.
+`X-Real-IP` se mantuvo estable y Railway reemplazó los cinco valores falsos enviados
+directamente en ese header. El limitador ahora usa esa fuente, bajo el supuesto de
+entrada exclusiva por el proxy de Railway documentado arriba. Esto verifica los
+intentos ensayados; no establece confianza en headers recibidos directamente desde
+Internet sin ese proxy.
+
+Después del cambio, el diagnóstico confirmó que la clave del limitador era
+`1b2b9888`. Doce peticiones válidas concurrentes a `/tasks/draft/review`, cada una
+con un X-Forwarded-For falso distinto, terminaron en **2,02 s**: **10 respuestas 200
+y 2 respuestas 429**. Ambas devolvieron `RATE_LIMITED`, el mensaje del límite por
+conexión y `Retry-After: 60`; no fue un agotamiento de cuota diaria.
+
+Los tests cubren la selección de X-Real-IP aunque cambien XFF y el host del proxy,
+el respaldo a `request.client.host` si falta X-Real-IP, y el 429 con CORS en las
+rutas del motor y escrituras. Pytest completo: **301 tests aprobados** con el
+endpoint temporal; **294 tests aprobados** tras retirar el endpoint y sus siete
+tests temporales (dos avisos de deprecación existentes).
+
+El endpoint `/_diag/ip` y su test fueron eliminados al concluir. Quitar `DIAG_IP`
+del dashboard de Railway; ya no tiene uso en el backend. No se modificaron las
+cuotas diarias ni los envíos del programador.
