@@ -142,3 +142,32 @@ Mismos requisitos: un solo proceso, volumen en `/data`, health check en `/health
 
 - **Render:** Web Service con Docker (Dockerfile path `backend/Dockerfile`, contexto en la raíz). Disco persistente montado en `/data`, 1 instancia, Health Check Path `/health`. Render inyecta `PORT`. Pon `SEP10_WEB_AUTH_DOMAIN` con el dominio `.onrender.com`, porque `RAILWAY_PUBLIC_DOMAIN` no existe ahí.
 - **Fly.io:** `fly launch` con el Dockerfile. Un volumen `fly volumes create data`, montado en `/data` en `fly.toml`, y **una sola máquina** (`fly scale count 1`). Pon `SEP10_WEB_AUTH_DOMAIN` con el dominio `.fly.dev`.
+
+## 6. Tareas para jueces (solo después de la prueba de punta a punta)
+
+`scripts/tareas_jueces.py` crea N tareas depositadas por `cyc-client`, de 1 USDC y 7 días cada una. Escribe sus enlaces de invitación e instrucciones para el juez en `docs/probar-en-linea.md`:
+
+1. entrar al enlace;
+2. iniciar sesión con Pollar;
+3. activar USDC;
+4. aceptar los criterios;
+5. enviar C y luego A;
+6. ver el pago.
+
+Primero, `--comprobar` revisa el backend y el saldo sin crear nada:
+
+```bash
+CYC_APP_URL=https://<frontend>.vercel.app CYC_API_URL=https://<backend>.up.railway.app \
+  backend/.venv/Scripts/python scripts/tareas_jueces.py --n 5 --comprobar
+CYC_APP_URL=https://<frontend>.vercel.app CYC_API_URL=https://<backend>.up.railway.app \
+  backend/.venv/Scripts/python scripts/tareas_jueces.py --n 5
+```
+
+Protecciones del script:
+
+- Se niega a generar enlaces con `localhost` o sin `https`.
+- Revisa que `cyc-client` tenga USDC suficiente antes de depositar.
+- Confirma en el contrato que cada tarea quedó `Funded`.
+- Los `client_token` quedan solo en `scripts/.logs/tareas-jueces.json` (ignorado por git).
+
+Cada enlace lo toma la primera wallet que acepta. Las tareas que nadie use se reembolsan a `cyc-client` con `timeout_refund` al vencer el plazo.
