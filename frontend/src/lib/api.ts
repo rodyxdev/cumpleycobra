@@ -1,8 +1,9 @@
+import { resolveApiUrl } from "@/lib/api-url";
 import type { Proposal, InboxProposal } from "@/lib/proposals";
 
 // Cliente del backend de Cumple&Cobra. El frontend nunca toca llaves ni la API de Gemini.
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL, process.env.NODE_ENV);
 
 export type Example = { input: string; output: string };
 export type Fx = { rate: string; as_of: string; source: string; fallback: boolean };
@@ -122,6 +123,9 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if (!API_URL) {
+    throw new ApiError(0, "NOT_CONFIGURED", "Falta NEXT_PUBLIC_API_URL: el frontend no sabe dónde está el backend.");
+  }
   let res: Response;
   try {
     res = await fetch(`${API_URL}${path}`, {

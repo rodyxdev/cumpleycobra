@@ -17,6 +17,7 @@ import hmac
 import os
 import threading
 import time
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 
 import httpx
@@ -32,8 +33,27 @@ from stellar_sdk.sep.stellar_web_authentication import (
 CHALLENGE_TTL = 300          # 5 minutos
 SESSION_TTL = 12 * 3600      # 12 horas
 HORIZON_URL = os.environ.get("HORIZON_URL", "https://horizon-testnet.stellar.org")
-HOME_DOMAIN = os.environ.get("SEP10_HOME_DOMAIN", "localhost:3000")
-WEB_AUTH_DOMAIN = os.environ.get("SEP10_WEB_AUTH_DOMAIN", "localhost:8000")
+
+
+def _host(url: str) -> str:
+    """«https://app.vercel.app/» → «app.vercel.app»; «http://localhost:3000» → «localhost:3000»."""
+    return urlsplit(url.strip()).netloc or url.strip().rstrip("/")
+
+
+def home_domain() -> str:
+    """Dominio del frontend. SEP10_HOME_DOMAIN o, si falta, el host del primer FRONTEND_ORIGIN."""
+    explicit = os.environ.get("SEP10_HOME_DOMAIN", "").strip()
+    if explicit:
+        return explicit
+    first_origin = os.environ.get("FRONTEND_ORIGIN", "").split(",")[0].strip()
+    return _host(first_origin) if first_origin else "localhost:3000"
+
+
+def web_auth_domain() -> str:
+    """Dominio del backend. SEP10_WEB_AUTH_DOMAIN o el dominio público que Railway inyecta."""
+    return (os.environ.get("SEP10_WEB_AUTH_DOMAIN", "").strip()
+            or os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+            or "localhost:8000")
 
 
 class AuthError(Exception):
@@ -81,13 +101,13 @@ class Challenges:
 
     def issue(self, keys: Keys, address: str, passphrase: str, now: float | None = None) -> dict:
         now = time.time() if now is None else now
-        xdr = build_challenge_transaction(keys.signing.secret, address, HOME_DOMAIN, WEB_AUTH_DOMAIN,
+        xdr = build_challenge_transaction(keys.signing.secret, address, home_domain(), web_auth_domain(),
                                           passphrase, timeout=CHALLENGE_TTL)
         with self.lock:
             self._purge(now)
             self.pending[_nonce(xdr, passphrase)] = (address, now + CHALLENGE_TTL)
-        return {"transaction": xdr, "network_passphrase": passphrase, "home_domain": HOME_DOMAIN,
-                "web_auth_domain": WEB_AUTH_DOMAIN, "expires_in": CHALLENGE_TTL}
+        return {"transaction": xdr, "network_passphrase": passphrase, "home_domain": home_domain(),
+                "web_auth_domain": web_auth_domain(), "expires_in": CHALLENGE_TTL}
 
     def _purge(self, now: float) -> None:
         for nonce in [n for n, (_, exp) in self.pending.items() if exp <= now - CHALLENGE_TTL]:
@@ -140,7 +160,7 @@ def verify_signed_challenge(signed_xdr: str, keys: Keys, address: str, passphras
     """Valida el reto (firma del servidor, plazo, dominio) y la firma de la cuenta. AuthError si no."""
     server = keys.signing.public_key
     try:
-        challenge = read_challenge_transaction(signed_xdr, server, HOME_DOMAIN, WEB_AUTH_DOMAIN, passphrase)
+        challenge = read_challenge_transaction(signed_xdr, server, home_domain(), web_auth_domain(), passphrase)
     except Exception as exc:  # noqa: BLE001 - InvalidSep10ChallengeError y XDR mal formado
         raise AuthError(401, "CHALLENGE_INVALID", f"El reto no es válido ({str(exc)[:120]})") from exc
     if challenge.client_account_id != address:
@@ -148,11 +168,11 @@ def verify_signed_challenge(signed_xdr: str, keys: Keys, address: str, passphras
     account = signers_lookup(address)
     try:
         if account is None:
-            verify_challenge_transaction_signed_by_client_master_key(signed_xdr, server, HOME_DOMAIN,
-                                                                    WEB_AUTH_DOMAIN, passphrase)
+            verify_challenge_transaction_signed_by_client_master_key(signed_xdr, server, home_domain(),
+                                                                    web_auth_domain(), passphrase)
         else:
             signers, med = account
-            verify_challenge_transaction_threshold(signed_xdr, server, HOME_DOMAIN, WEB_AUTH_DOMAIN,
+            verify_challenge_transaction_threshold(signed_xdr, server, home_domain(), web_auth_domain(),
                                                    passphrase, med, signers)
     except Exception as exc:  # noqa: BLE001
         raise AuthError(401, "SIGNATURE_INVALID", "La firma no es de la cuenta que pidió el reto") from exc

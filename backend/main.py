@@ -107,12 +107,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def frontend_origins(value: str) -> list[str]:
+    """«https://a.app, https://b.app/» → ["https://a.app", "https://b.app"] (sin barra final: CORS compara exacto)."""
+    return [o.strip().rstrip("/") for o in value.split(",") if o.strip()]
+
+
 settings_for_cors = load_settings()
 app = FastAPI(title="Cumple&Cobra", lifespan=lifespan)
 fx_reference = FxReference()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings_for_cors.frontend_origin],
+    # FRONTEND_ORIGIN admite varios orígenes separados por comas (p. ej. producción y una vista previa).
+    allow_origins=frontend_origins(settings_for_cors.frontend_origin),
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Content-Type", "X-Client-Token", "X-Freelancer-Token", "Authorization"],
 )

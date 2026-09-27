@@ -15,8 +15,8 @@ import puppeteer from "puppeteer-core";
 const FRONT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = path.resolve(FRONT, "..");
 const IMG = path.join(ROOT, "docs", "img");
-const APP = "http://localhost:3000";
-const API = "http://localhost:8000";
+const APP = process.env.CYC_APP_URL ?? "http://localhost:3000";
+const API = process.env.CYC_API_URL ?? "http://localhost:8000";
 const PROGRAMADOR = "GA7MXQO3OL6IMISROP3JJM3NBGOEDHPPK7B5Q2ASNIBNVAPVCE6FBEVJ";
 const PERFIL = {
   nombre: "Rodrigo Martínez",
@@ -90,12 +90,12 @@ try {
   await c.$eval('[data-testid="calificar"]', (e) => e.scrollIntoView({ block: "center" }));
   await shot(c, "identidad-05-calificar-pide-identidad.png", '[data-testid="calificar"]');
   // Sin sesión, el backend rechaza aunque se tenga el X-Client-Token.
-  const noSession = await c.evaluate(async (id) => {
+  const noSession = await c.evaluate(async (id, api) => {
     const ct = JSON.parse(localStorage.getItem(`cumpleycobra:cliente:${id}`)).client_token;
-    const r = await fetch(`http://localhost:8000/tasks/${id}/calificacion`, {
+    const r = await fetch(`${api}/tasks/${id}/calificacion`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-Client-Token": ct }, body: JSON.stringify({ estrellas: 1 }) });
     return (await r.json()).error;
-  }, taskId);
+  }, taskId, API);
   summary.sin_sesion = noSession;
 
   await c.click('[data-testid="calificar"] [data-testid="verificar-identidad"]');

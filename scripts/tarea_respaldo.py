@@ -11,6 +11,7 @@ scripts/.logs/tarea-respaldo-<task_id>.json (ignorado por git).
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -24,8 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from backend.plantilla import DEMO_RAW_REQUEST, DEMO_SPEC  # noqa: E402
 
-API = "http://localhost:8000"
-APP = "http://localhost:3000"
+API = os.environ.get("CYC_API_URL", "http://localhost:8000").rstrip("/")
+APP = os.environ.get("CYC_APP_URL", "http://localhost:3000").rstrip("/")
 
 
 def main() -> int:

@@ -13,8 +13,8 @@ import puppeteer from "puppeteer-core";
 const FRONT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = path.resolve(FRONT, "..");
 const IMG = path.join(ROOT, "docs", "img");
-const APP = "http://localhost:3000";
-const API = "http://localhost:8000";
+const APP = process.env.CYC_APP_URL ?? "http://localhost:3000";
+const API = process.env.CYC_API_URL ?? "http://localhost:8000";
 const COMMENT = "Cumplió los criterios acordados y el pago salió solo. Lo volvería a contratar.";
 const taskId = process.argv[2] ?? JSON.parse(readFileSync(path.join(ROOT, "scripts", ".logs", "fase5-ensayo.json"), "utf8")).task_id;
 

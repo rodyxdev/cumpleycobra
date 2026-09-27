@@ -19,7 +19,7 @@ cd "$(dirname "$0")/.."
 PY=backend/.venv/Scripts/python
 [ -x "$PY" ] || PY=backend/.venv/bin/python
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
-API="http://127.0.0.1:8000"
+API="${API:-http://127.0.0.1:8000}"
 NET="--network testnet"
 CONTRACT_ID="$(grep -E '^CONTRACT_ID=' backend/.env | cut -d= -f2 | tr -d '\r')"
 USDC="$(grep -E '^USDC_SAC_ID=' backend/.env | cut -d= -f2 | tr -d '\r')"

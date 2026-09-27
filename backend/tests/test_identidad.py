@@ -99,8 +99,8 @@ def test_xdr_alterado(auth, op_index):
 
 
 def test_reto_de_otro_servidor_o_mal_formado(auth):
-    foreign = build_challenge_transaction(Keypair.random().secret, A.public_key, identidad.HOME_DOMAIN,
-                                          identidad.WEB_AUTH_DOMAIN, P, timeout=300)
+    foreign = build_challenge_transaction(Keypair.random().secret, A.public_key, identidad.home_domain(),
+                                          identidad.web_auth_domain(), P, timeout=300)
     assert token(auth, sign(foreign, A)).json()["error"] == "CHALLENGE_INVALID"
     assert token(auth, "no-es-xdr").json()["error"] == "CHALLENGE_INVALID"
     assert auth.client.get("/auth/challenge", params={"address": "no-es-direccion"}).status_code == 400
