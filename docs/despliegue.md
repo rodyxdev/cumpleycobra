@@ -177,7 +177,7 @@ Mismos requisitos: un solo proceso, volumen en `/data`, health check en `/health
 
 ## 6. Tareas para jueces (solo después de la prueba de punta a punta)
 
-`scripts/tareas_jueces.py` crea N tareas depositadas por `cyc-client`, de 1 USDC y 7 días cada una. Escribe sus enlaces de invitación e instrucciones para el juez en `docs/probar-en-linea.md`:
+`scripts/tareas_jueces.py` crea N tareas depositadas por `cyc-client`, de 1 USDC y 7 días cada una. Escribe sus enlaces de invitación e instrucciones en `docs/probar-en-linea.md`, archivo privado excluido de Git. Comparte esas invitaciones solo con los jueces. El ejemplo público versionado y sin enlaces es `docs/probar-en-linea.ejemplo.md`:
 
 1. entrar al enlace;
 2. iniciar sesión con Pollar;
@@ -198,6 +198,7 @@ CYC_APP_URL=https://<frontend>.vercel.app CYC_API_URL=https://<backend>.up.railw
 Protecciones del script:
 
 - Se niega a generar enlaces con `localhost` o sin `https`.
+- `--usdc` debe ser un número finito mayor que cero y representar al menos una unidad del token; se valida antes de tocar la red.
 - Revisa que `cyc-client` tenga USDC suficiente antes de depositar.
 - Confirma en el contrato que cada tarea quedó `Funded`.
 - Los `client_token` quedan solo en `scripts/.logs/tareas-jueces.json` (ignorado por git).
@@ -226,3 +227,15 @@ Incluye 20 casos nuevos y todos los tests anteriores. Las dos advertencias exist
 ### Protección de escrituras e identidad
 
 `RATE_LIMIT_WRITES_PER_MINUTE` comparte una ventana por IP entre `POST /tasks`, `POST /propuestas`, `GET /auth/challenge`, `POST /auth/token`, `PUT /perfil` y `POST /tasks/{id}/calificacion`. Por defecto son 30 solicitudes cada 60 segundos, incluidas las rechazadas. No gasta cuota diaria ni la ventana por IP de Gemini. El 429 incluye CORS y `Retry-After`. `SESSION_SECRET` debe tener al menos 32 caracteres después de quitar espacios exteriores; la comprobación está en `main.auth_keys`, manteniendo `identidad.py` intacto.
+
+### Verificación local del endurecimiento de límites
+
+- `backend/.venv/Scripts/python -m pytest -q`: **294 passed**, 2 advertencias existentes, 35,41 s.
+- `npm test`: **19 pruebas aprobadas**.
+- `npx --no-install next typegen`, `npx --no-install tsc --noEmit`, `npm run lint` y `npm run build`: código de salida **0**.
+- `git diff --check`: sin errores. `/evaluate` conserva exactamente su función anterior; `identidad.py` no cambia.
+- Pruebas de cuota: 30 solicitudes inválidas no consumen cuota diaria; agotar un grupo no bloquea el otro; cuota agotada conserva los tres envíos; caché y rechazo determinista no llaman a Gemini; reintentos cuentan llamadas y conservan el 429 global con CORS.
+- Pruebas de IP y escrituras: las entradas falsas de la izquierda no cambian la IP del proxy; las seis rutas de escritura comparten su propia ventana; expiración elimina ventanas inactivas.
+- Los documentos con invitaciones quedan ignorados y el ejemplo público no contiene enlaces. No se generaron tareas para jueces durante esta revisión.
+
+Advertencias fuera del alcance: deprecaciones existentes de TestClient/httpx y google-genai, aviso de Node sobre módulos TypeScript y aviso de Pollar durante prerenderizado. No se cambiaron dependencias ni componentes del frontend.

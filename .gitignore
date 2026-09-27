@@ -27,3 +27,6 @@ scripts/.testnet.env
 backend/state.json.tmp
 scripts/.logs/
 .pytest_cache/
+
+# Invitaciones privadas para jueces (contienen tokens de aceptación)
+docs/probar-en-linea.md

@@ -11,7 +11,7 @@ Cada tarea usa la plantilla de la demo, la crea el backend con cyc-client como c
 con la Stellar CLI (la identidad cyc-client firma; el cliente on-chain coincide, así que /evaluate
 no responde TASK_MISMATCH). Luego se confirma on-chain que quedó Funded.
 
-Escribe los enlaces en docs/probar-en-linea.md. Los client_token quedan SOLO en
+Escribe los enlaces en docs/probar-en-linea.md (privado, ignorado por git). Los client_token quedan SOLO en
 scripts/.logs/tareas-jueces.json (ignorado por git). Cada enlace lo toma la primera wallet que acepta.
 Una tarea que nadie use devuelve su USDC a cyc-client con timeout_refund después del plazo.
 """
@@ -23,7 +23,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -101,8 +101,11 @@ y un plazo de **{days} días**. El primer juez que la acepta queda amarrado a el
 7. Opcional: en **Programadores** verás tu historial verificable; con **«Verificar identidad»** puedes firmar un reto SEP-10
    con tu wallet y publicar tu perfil.
 
-Límites de la demo: 3 envíos por tarea y un límite de peticiones al motor por conexión; si aparece «Demasiadas solicitudes»,
-espera un minuto.
+Límites de la demo: máximo 3 envíos evaluados por tarea. Hay límites por conexión en ventanas de 60 segundos:
+si aparece «Demasiadas solicitudes», espera el tiempo indicado y vuelve a intentar. Los rechazos por límite no consumen
+esos 3 envíos. Además, hay cuotas diarias independientes para preparar pedidos (borrador y revisión) y evaluar código;
+solo cuentan las llamadas reales a la IA, incluidos los reintentos. Si se agota la cuota diaria de tu operación, vuelve
+al día siguiente (UTC). Las peticiones inválidas y las respuestas de caché no gastan cuota diaria.
 
 ## Tareas
 
@@ -115,10 +118,20 @@ con `timeout_refund` cuando vence el plazo.
 """
 
 
+def positive_usdc(value: str) -> str:
+    try:
+        amount = Decimal(value)
+    except InvalidOperation:
+        raise argparse.ArgumentTypeError("--usdc debe ser un número mayor que 0") from None
+    if not amount.is_finite() or amount <= 0 or amount * 10_000_000 < 1:
+        raise argparse.ArgumentTypeError("--usdc debe ser mayor que 0 y representar al menos una unidad del token")
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, required=True, help="número de tareas")
-    parser.add_argument("--usdc", default="1")
+    parser.add_argument("--usdc", default="1", type=positive_usdc)
     parser.add_argument("--dias", type=int, default=7)
     parser.add_argument("--identidad", default="cyc-client")
     parser.add_argument("--comprobar", action="store_true", help="solo revisa requisitos; no crea nada")
