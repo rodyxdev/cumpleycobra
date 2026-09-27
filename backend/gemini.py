@@ -5,8 +5,10 @@ el modelo es manipulación: va a security_flags y se rechaza.
 """
 
 import asyncio
+import base64
 import json
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
@@ -15,9 +17,10 @@ import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
+from google.oauth2 import service_account
 from pydantic import BaseModel, ValidationError
 
-from .config import GEMINI_TIMEOUT_SECS, Settings
+from .config import ConfigError, GEMINI_TIMEOUT_SECS, Settings
 
 BACKOFF_SECS = (1, 3)  # 2 reintentos ante errores transitorios
 log = logging.getLogger("cumpleycobra.gemini")
@@ -100,9 +103,39 @@ def build_prompt(spec: dict, clean_code: str) -> str:
     )
 
 
+def _credentials_from_env() -> service_account.Credentials | None:
+    encoded = os.environ.get("GOOGLE_CREDENTIALS_B64")
+    if encoded is None:
+        return None  # Sin variable: conservar ADC local sin modificar el entorno.
+    try:
+        info = json.loads(base64.b64decode(encoded, validate=True).decode("utf-8"))
+        required = ("project_id", "private_key", "client_email", "token_uri")
+        if (not isinstance(info, dict) or info.get("type") != "service_account"
+                or any(not isinstance(info.get(k), str) or not info[k].strip() for k in required)):
+            raise ValueError("Formato de cuenta de servicio inválido")
+        return service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+    except Exception:  # noqa: BLE001 - errores del decodificador/SDK pueden contener secretos.
+        pass
+    # Fuera del except: no conservar como contexto la excepción que podría revelar la llave.
+    raise ConfigError(
+        "GOOGLE_CREDENTIALS_B64 inválida: se requiere base64 de un JSON de cuenta de servicio "
+        "con type=service_account, project_id, private_key, client_email y token_uri válidos."
+    )
+
+
 def make_client(settings: Settings) -> genai.Client:
+    credentials = _credentials_from_env()
+    if credentials is not None and not settings.use_vertex:
+        raise ConfigError("GOOGLE_CREDENTIALS_B64 requiere GOOGLE_GENAI_USE_VERTEXAI=true; "
+                          "elimina GOOGLE_CREDENTIALS_B64 para usar AI Studio.")
     http_options = types.HttpOptions(timeout=GEMINI_TIMEOUT_SECS * 1000)
     if settings.use_vertex:
+        if credentials is not None:
+            return genai.Client(vertexai=True, project=settings.gcp_project,
+                                location=settings.gcp_location, credentials=credentials,
+                                http_options=http_options)
         return genai.Client(vertexai=True, project=settings.gcp_project,
                             location=settings.gcp_location, http_options=http_options)
     return genai.Client(api_key=settings.gemini_api_key, http_options=http_options)
