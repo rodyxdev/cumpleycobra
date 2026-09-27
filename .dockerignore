@@ -1,0 +1,10 @@
+# Imagen del backend: solo backend/ (sin secretos, estado local ni entornos virtuales).
+*
+!backend/
+backend/.env
+backend/.env.*
+backend/.venv/
+backend/state.json
+backend/state.json.tmp
+backend/tests/
+**/__pycache__/
