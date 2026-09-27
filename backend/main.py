@@ -35,6 +35,7 @@ from .config import (
 from .deterministic import analyze
 from .hashing import code_hash, rules_hash, verdict_hash
 from .fx import FxReference
+from .limites import RateLimiter, RateLimitMiddleware
 from .video import normalize_video
 from .plantilla import DEMO_RAW_REQUEST, DEMO_SPEC
 from .state import StateStore
@@ -115,6 +116,10 @@ def frontend_origins(value: str) -> list[str]:
 settings_for_cors = load_settings()
 app = FastAPI(title="Cumple&Cobra", lifespan=lifespan)
 fx_reference = FxReference()
+# Límite de peticiones (RATE_LIMIT_PER_MINUTE por IP y RATE_LIMIT_DAILY global; desactivado si faltan).
+# Se registra ANTES de CORS para que CORS lo envuelva y el navegador pueda leer el 429.
+rate_limiter = RateLimiter()
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.add_middleware(
     CORSMiddleware,
     # FRONTEND_ORIGIN admite varios orígenes separados por comas (p. ej. producción y una vista previa).

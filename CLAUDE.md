@@ -304,6 +304,7 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
   - `TASK_NOT_RELEASED` 409 (`/delivery` antes de que el programador cobre)
   - `NO_REJECTED_DELIVERY` 409 (`/consent` sobre un `code_hash` que no es una entrega rechazada de esa tarea)
   - `TOO_MANY_SUBMISSIONS` 429
+  - `RATE_LIMITED` 429 (límite de peticiones a `/tasks/draft`, `/tasks/draft/review` y `/evaluate`: `RATE_LIMIT_PER_MINUTE` por IP y `RATE_LIMIT_DAILY` global; sin variables, sin límite)
   - `ENGINE_UNAVAILABLE` 502 (el motor de análisis no respondió)
   - `CHAIN_UNAVAILABLE` 502 (el RPC de Stellar no respondió)
 - `comparison` debe traer una entrada por criterio acordado, en el mismo orden.
