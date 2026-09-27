@@ -1,5 +1,9 @@
 # Cumple&Cobra
 
+Demo en línea: https://cumpleycobra.vercel.app
+
+Jueces: sigan el recorrido de [docs/probar-en-linea.ejemplo.md](docs/probar-en-linea.ejemplo.md) con la invitación privada que les comparte el equipo.
+
 **Si cumple lo acordado, cobras. Sin discusiones.**
 
 Cumple&Cobra es el acuerdo verificable para trabajo de código. MVP para GOYA HACK (reto Stellar BAF y pool de Pollar); todo corre en la testnet de Stellar.
