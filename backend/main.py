@@ -5,6 +5,7 @@ Arranque (desde la raíz del repositorio):
 """
 
 import asyncio
+import hashlib
 import hmac
 import logging
 import os
@@ -37,7 +38,7 @@ from .config import (
 from .deterministic import analyze
 from .hashing import code_hash, rules_hash, verdict_hash
 from .fx import FxReference
-from .limites import RateLimited, RateLimitMiddleware, limited_response, rate_limiter
+from .limites import RateLimited, RateLimitMiddleware, client_ip, limited_response, rate_limiter
 from .video import normalize_video
 from .plantilla import DEMO_RAW_REQUEST, DEMO_SPEC
 from .state import StateStore
@@ -215,6 +216,33 @@ async def seconds_left(deadline: int) -> int | None:
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+@app.get("/_diag/ip", include_in_schema=False)
+async def diag_ip(request: Request):
+    """Diagnóstico temporal: solo nombres y hashes, nunca direcciones en claro."""
+    if os.environ.get("DIAG_IP") != "true":
+        raise err(404, "NOT_FOUND", "No existe esa ruta")
+
+    def short_hash(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+
+    names = sorted({name for name in request.headers
+                    if name.startswith(("x-forwarded-", "x-envoy-"))
+                    or name in {"forwarded", "x-real-ip", "cf-connecting-ip",
+                                "true-client-ip", "fastly-client-ip", "x-client-ip"}})
+    entries = [part.strip() for part in request.headers.get("x-forwarded-for", "").split(",")
+               if part.strip()]
+    return JSONResponse({
+        "header_names": names,
+        "xff_count": len(entries),
+        "xff_hashes": [short_hash(part) for part in entries],
+        "client_host_hash": short_hash(request.client.host) if request.client else None,
+        "limiter_key_hash": short_hash(client_ip(request)),
+        # Permite comparar otras fuentes candidatas sin revelar sus valores.
+        "header_hashes": {name: [short_hash(value.strip()) for value in request.headers.getlist(name)]
+                          for name in names},
+    }, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/fx/usd-mxn")
