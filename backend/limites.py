@@ -40,10 +40,11 @@ def _limit(name: str, default: int = 0) -> int:
 
 
 def client_ip(request) -> str:
-    # Railway debe agregar la IP del cliente AL FINAL y ser la única entrada pública al servicio.
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded and forwarded.rsplit(",", 1)[-1].strip():
-        return forwarded.rsplit(",", 1)[-1].strip()
+    # Railway sobrescribe X-Real-IP en su entrada pública. No exponer el contenedor directamente.
+    # X-Forwarded-For también contiene saltos del proxy que pueden variar entre conexiones.
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
     return request.client.host if request.client else "desconocida"
 
 

@@ -133,7 +133,7 @@ Si una política de tu organización impide crear claves de cuentas de servicio,
 
 **Cuota:** `RATE_LIMIT_PER_MINUTE` cuenta peticiones por IP, incluso las inválidas. Las cuotas diarias se consumen justo antes de cada llamada real a Gemini (incluidos reintentos), después de validación, guardias, caché y análisis determinista. `RATE_LIMIT_DAILY_BORRADOR` comparte cuota entre draft y review; `RATE_LIMIT_DAILY_MOTOR` cuenta evaluate. Si falta un valor específico, usa `RATE_LIMIT_DAILY` para ese grupo, sin compartir contadores. Un valor 0 desactiva esa cuota. Agotarla devuelve 429 `RATE_LIMITED` con CORS y `Retry-After` y no consume un envío del programador. Las cuotas cambian al día UTC siguiente y se reinician al reiniciar el único proceso.
 
-**IP del cliente:** el middleware toma la última entrada de `X-Forwarded-For`, o `request.client.host` si no está presente. Se presupone que Railway agrega a la derecha la IP de la conexión y que toda entrada pública pasa por ese proxy. Cambiar las entradas de la izquierda no cambia la IP contada. No exponer el puerto del contenedor directamente. Se retiró la confianza universal `--forwarded-allow-ips='*'` de uvicorn. Las ventanas vacías se eliminan al comprobar la siguiente petición limitada. Uvicorn no publica su cabecera `Server` (`--no-server-header`).
+**IP del cliente:** el middleware usa `X-Real-IP`, que Railway sobrescribe en su entrada pública con la IP del cliente ([documentación de Railway](https://docs.railway.com/networking/public-networking/specs-and-limits)). Sin ese header usa `request.client.host`; no interpreta `X-Forwarded-For`, cuya última entrada varió entre conexiones durante el diagnóstico. Este supuesto requiere que toda entrada pública pase por Railway: no exponer el puerto del contenedor directamente ni usar esta confianza en otro proxy sin verificar que sobrescriba el header. Se retiró la confianza universal `--forwarded-allow-ips='*'` de uvicorn. Las ventanas vacías se eliminan al comprobar la siguiente petición limitada. Uvicorn no publica su cabecera `Server` (`--no-server-header`).
 
 ## 5. Verificación después de desplegar
 
@@ -235,7 +235,7 @@ Incluye 20 casos nuevos y todos los tests anteriores. Las dos advertencias exist
 - `npx --no-install next typegen`, `npx --no-install tsc --noEmit`, `npm run lint` y `npm run build`: código de salida **0**.
 - `git diff --check`: sin errores. `/evaluate` conserva exactamente su función anterior; `identidad.py` no cambia.
 - Pruebas de cuota: 30 solicitudes inválidas no consumen cuota diaria; agotar un grupo no bloquea el otro; cuota agotada conserva los tres envíos; caché y rechazo determinista no llaman a Gemini; reintentos cuentan llamadas y conservan el 429 global con CORS.
-- Pruebas de IP y escrituras: las entradas falsas de la izquierda no cambian la IP del proxy; las seis rutas de escritura comparten su propia ventana; expiración elimina ventanas inactivas.
+- Pruebas de IP y escrituras: cambiar X-Forwarded-For o el host del proxy no cambia la IP contada cuando X-Real-IP se mantiene; las seis rutas de escritura comparten su propia ventana; expiración elimina ventanas inactivas.
 - Los documentos con invitaciones quedan ignorados y el ejemplo público no contiene enlaces. No se generaron tareas para jueces durante esta revisión.
 
 Advertencias fuera del alcance: deprecaciones existentes de TestClient/httpx y google-genai, aviso de Node sobre módulos TypeScript y aviso de Pollar durante prerenderizado. No se cambiaron dependencias ni componentes del frontend.

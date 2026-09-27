@@ -88,13 +88,17 @@ def test_sin_limites_no_guarda_contadores():
     assert not rl.hits and sum(rl.day_count.values()) == 0
 
 
-def test_ip_usa_ultima_entrada_del_proxy_o_cliente():
-    def req(value=None):
-        return Request({"type": "http", "headers": [(b"x-forwarded-for", value.encode())] if value else [],
-                        "client": ("192.0.2.10", 1000)})
-    assert client_ip(req()) == "192.0.2.10"
-    for prefix in ("1.1.1.1", "8.8.8.8, 9.9.9.9", "falsa"):
-        assert client_ip(req(prefix + ", 198.51.100.20")) == "198.51.100.20"
+def test_ip_usa_real_ip_del_proxy_e_ignora_forwarded():
+    def req(headers, host="192.0.2.10"):
+        return Request({"type": "http", "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+                        "client": (host, 1000) if host else None})
+    for i in range(5):
+        assert client_ip(req({"x-real-ip": " 198.51.100.20 ",
+                              "x-forwarded-for": f"192.0.2.{i}, 203.0.113.{i}",
+                              "forwarded": f"for=192.0.2.{i}"}, host=f"203.0.113.{i}")) == "198.51.100.20"
+    assert client_ip(req({"x-forwarded-for": "198.51.100.99"})) == "192.0.2.10"
+    assert client_ip(req({"x-real-ip": " "})) == "192.0.2.10"
+    assert client_ip(req({}, host=None)) == "desconocida"
 
 
 @pytest.mark.parametrize("path", ["/tasks/draft", "/tasks/draft/review", "/evaluate"])
@@ -104,8 +108,8 @@ def test_429_por_ip_con_cors_y_sin_cuota(monkeypatch, path):
     client = TestClient(main.app)
     origin = main.frontend_origins(main.settings_for_cors.frontend_origin)[0]
     for i in range(2):
-        assert client.post(path, json={}, headers={"X-Forwarded-For": f"192.0.2.{i}, 198.51.100.20"}).status_code == 400
-    r = client.post(path, json={}, headers={"Origin": origin, "X-Forwarded-For": "192.0.2.99, 198.51.100.20"})
+        assert client.post(path, json={}, headers={"X-Real-IP": "198.51.100.20", "X-Forwarded-For": f"192.0.2.{i}, 203.0.113.{i}"}).status_code == 400
+    r = client.post(path, json={}, headers={"Origin": origin, "X-Real-IP": "198.51.100.20", "X-Forwarded-For": "192.0.2.99, 203.0.113.99"})
     assert r.status_code == 429 and r.json()["error"] == "RATE_LIMITED"
     assert int(r.headers["Retry-After"]) >= 1
     assert r.headers["access-control-allow-origin"] == origin

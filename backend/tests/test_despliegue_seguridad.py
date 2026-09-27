@@ -20,12 +20,12 @@ def test_escrituras_limitadas_por_ip_sin_cuota_diaria(monkeypatch, method, path)
     client = TestClient(main.app)
     origin = main.frontend_origins(main.settings_for_cors.frontend_origin)[0]
     for i in range(2):
-        assert client.request(method, path, json={}, headers={"X-Forwarded-For": f"192.0.2.{i}, 198.51.100.10"}).status_code != 429
-    r = client.request(method, path, json={}, headers={"Origin": origin, "X-Forwarded-For": "192.0.2.99, 198.51.100.10"})
+        assert client.request(method, path, json={}, headers={"X-Real-IP": "198.51.100.10", "X-Forwarded-For": f"192.0.2.{i}, 203.0.113.{i}"}).status_code != 429
+    r = client.request(method, path, json={}, headers={"Origin": origin, "X-Real-IP": "198.51.100.10", "X-Forwarded-For": "192.0.2.99, 203.0.113.99"})
     assert r.status_code == 429 and r.json()["error"] == "RATE_LIMITED"
     assert r.headers["access-control-allow-origin"] == origin
     assert int(r.headers["Retry-After"]) > 0
-    assert client.request(method, path, json={}, headers={"X-Forwarded-For": "198.51.100.11"}).status_code != 429
+    assert client.request(method, path, json={}, headers={"X-Real-IP": "198.51.100.11"}).status_code != 429
     assert sum(main.rate_limiter.day_count.values()) == 0
 
 

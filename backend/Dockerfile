@@ -16,6 +16,6 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt
 COPY backend backend
 
-# Railway inyecta PORT. El middleware lee la última IP agregada por su proxy a X-Forwarded-For.
+# Railway inyecta PORT. El middleware lee X-Real-IP, que su proxy sobrescribe con la IP del cliente.
 # No confiar en todas las fuentes de cabeceras reenviadas de uvicorn.
 CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --no-server-header"]

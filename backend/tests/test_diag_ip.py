@@ -33,7 +33,7 @@ def test_diagnostico_solo_nombres_y_hashes(monkeypatch):
     assert body["xff_count"] == 2
     assert body["xff_hashes"] == list(map(digest, addresses[:2]))
     assert body["client_host_hash"] == digest("testclient")
-    assert body["limiter_key_hash"] == digest(addresses[1])
+    assert body["limiter_key_hash"] == digest(addresses[2])
     assert body["header_names"] == ["cf-connecting-ip", "x-envoy-external-address", "x-forwarded-for", "x-real-ip"]
     assert body["header_hashes"]["x-real-ip"] == [digest(addresses[2])]
     assert all(value not in response.text for value in addresses + ["testclient", "valor-no-publicable", "authorization"])
