@@ -18,4 +18,4 @@ COPY backend backend
 
 # Railway inyecta PORT. El middleware lee la última IP agregada por su proxy a X-Forwarded-For.
 # No confiar en todas las fuentes de cabeceras reenviadas de uvicorn.
-CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers"]
+CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --no-server-header"]

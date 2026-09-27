@@ -40,7 +40,9 @@ El backend necesita el dominio del frontend (CORS y SEP-10), y el frontend neces
 | `CONTRACT_ID`, `USDC_SAC_ID`, `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE` | Los mismos de `.env.example` / `backend/.env` |
 | `FRONTEND_ORIGIN` | `https://<frontend>.vercel.app`, sin barra final. Admite varios separados por comas (por ejemplo, una vista previa de Vercel). |
 | `SEP10_SIGNING_SECRET` | Una llave **nueva y sin fondos**, **nunca** la del árbitro. Recomendado: una distinta de la local (cómo generarla, en CLAUDE.md). |
-| `SESSION_SECRET` | Un secreto largo y aleatorio, distinto del local |
+| `SESSION_SECRET` | Secreto aleatorio de al menos 32 caracteres, distinto del local. Más corto: identidad no configurada (`503 AUTH_NOT_CONFIGURED`) y aviso sin valor en el log. |
+| `RATE_LIMIT_WRITES_PER_MINUTE` | Ventana por IP para crear tareas/propuestas, retos/tokens de identidad, perfiles y calificaciones. Por defecto `30`; sin cuota diaria. |
+| `ENABLE_API_DOCS` | Solo `true` habilita `/docs`, `/redoc` y `/openapi.json`; por defecto responden 404. |
 | `RATE_LIMIT_PER_MINUTE` | Ventana deslizante de 60 s por IP para draft, review y evaluate. Recomendado: `10`. |
 | `RATE_LIMIT_DAILY_BORRADOR`, `RATE_LIMIT_DAILY_MOTOR` | Topes independientes de llamadas reales a Gemini por día UTC. Si falta uno, ese grupo usa `RATE_LIMIT_DAILY` (por ejemplo, `500`). |
 
@@ -131,7 +133,7 @@ Si una política de tu organización impide crear claves de cuentas de servicio,
 
 **Cuota:** `RATE_LIMIT_PER_MINUTE` cuenta peticiones por IP, incluso las inválidas. Las cuotas diarias se consumen justo antes de cada llamada real a Gemini (incluidos reintentos), después de validación, guardias, caché y análisis determinista. `RATE_LIMIT_DAILY_BORRADOR` comparte cuota entre draft y review; `RATE_LIMIT_DAILY_MOTOR` cuenta evaluate. Si falta un valor específico, usa `RATE_LIMIT_DAILY` para ese grupo, sin compartir contadores. Un valor 0 desactiva esa cuota. Agotarla devuelve 429 `RATE_LIMITED` con CORS y `Retry-After` y no consume un envío del programador. Las cuotas cambian al día UTC siguiente y se reinician al reiniciar el único proceso.
 
-**IP del cliente:** el middleware toma la última entrada de `X-Forwarded-For`, o `request.client.host` si no está presente. Se presupone que Railway agrega a la derecha la IP de la conexión y que toda entrada pública pasa por ese proxy. Cambiar las entradas de la izquierda no cambia la IP contada. No exponer el puerto del contenedor directamente. Se retiró la confianza universal `--forwarded-allow-ips='*'` de uvicorn. Las ventanas vacías se eliminan al comprobar la siguiente petición limitada.
+**IP del cliente:** el middleware toma la última entrada de `X-Forwarded-For`, o `request.client.host` si no está presente. Se presupone que Railway agrega a la derecha la IP de la conexión y que toda entrada pública pasa por ese proxy. Cambiar las entradas de la izquierda no cambia la IP contada. No exponer el puerto del contenedor directamente. Se retiró la confianza universal `--forwarded-allow-ips='*'` de uvicorn. Las ventanas vacías se eliminan al comprobar la siguiente petición limitada. Uvicorn no publica su cabecera `Server` (`--no-server-header`).
 
 ## 5. Verificación después de desplegar
 
@@ -161,7 +163,7 @@ CYC_APP_URL=https://<frontend>.vercel.app CYC_API_URL=https://<backend>.up.railw
 
 | Servicio | Variables |
 | --- | --- |
-| Railway | `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CREDENTIALS_B64`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (Vertex); `GEMINI_API_KEY` (alternativa AI Studio); `GEMINI_MODEL`, `ARBITER_SECRET_KEY`, `CONTRACT_ID`, `USDC_SAC_ID`, `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE`, `FRONTEND_ORIGIN`, `SEP10_SIGNING_SECRET`, `SESSION_SECRET`, `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_DAILY`. Opcionales: `STATE_FILE`, `SEP10_HOME_DOMAIN`, `SEP10_WEB_AUTH_DOMAIN`, `HORIZON_URL`. |
+| Railway | `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CREDENTIALS_B64`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (Vertex); `GEMINI_API_KEY` (alternativa AI Studio); `GEMINI_MODEL`, `ARBITER_SECRET_KEY`, `CONTRACT_ID`, `USDC_SAC_ID`, `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE`, `FRONTEND_ORIGIN`, `SEP10_SIGNING_SECRET`, `SESSION_SECRET`, `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_DAILY`, `RATE_LIMIT_DAILY_BORRADOR`, `RATE_LIMIT_DAILY_MOTOR`, `RATE_LIMIT_WRITES_PER_MINUTE`. Opcionales: `ENABLE_API_DOCS`, `STATE_FILE`, `SEP10_HOME_DOMAIN`, `SEP10_WEB_AUTH_DOMAIN`, `HORIZON_URL`. |
 | Vercel | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_POLLAR_API_KEY`, `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_WALLET`. Opcionales: `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_USDC_ASSET`. |
 | Pollar | Dominio `https://<frontend>.vercel.app` (y URIs de redirección si usas Google). |
 | Google Cloud / AI Studio | Cuenta de servicio con solo Vertex AI User; alternativamente una API key de AI Studio. Los secretos van solo en Railway. |
@@ -220,3 +222,7 @@ backend/.venv/Scripts/python -m pytest -q
 ```
 
 Incluye 20 casos nuevos y todos los tests anteriores. Las dos advertencias existentes son deprecaciones de TestClient/httpx y google-genai (`_UnionGenericAlias`); no se cambiaron esas dependencias por estar fuera del alcance. `git diff --check` terminó sin errores.
+
+### Protección de escrituras e identidad
+
+`RATE_LIMIT_WRITES_PER_MINUTE` comparte una ventana por IP entre `POST /tasks`, `POST /propuestas`, `GET /auth/challenge`, `POST /auth/token`, `PUT /perfil` y `POST /tasks/{id}/calificacion`. Por defecto son 30 solicitudes cada 60 segundos, incluidas las rechazadas. No gasta cuota diaria ni la ventana por IP de Gemini. El 429 incluye CORS y `Retry-After`. `SESSION_SECRET` debe tener al menos 32 caracteres después de quitar espacios exteriores; la comprobación está en `main.auth_keys`, manteniendo `identidad.py` intacto.

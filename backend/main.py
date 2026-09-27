@@ -7,6 +7,7 @@ Arranque (desde la raíz del repositorio):
 import asyncio
 import hmac
 import logging
+import os
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -31,6 +32,7 @@ from .config import (
     MIN_SECONDS_TO_EVALUATE,
     RELEASE_BUDGET_SECS,
     load_settings,
+    api_docs_options,
 )
 from .deterministic import analyze
 from .hashing import code_hash, rules_hash, verdict_hash
@@ -114,7 +116,7 @@ def frontend_origins(value: str) -> list[str]:
 
 
 settings_for_cors = load_settings()
-app = FastAPI(title="Cumple&Cobra", lifespan=lifespan)
+app = FastAPI(title="Cumple&Cobra", lifespan=lifespan, **api_docs_options())
 fx_reference = FxReference()
 # Ventanas por IP; las cuotas diarias se consumen únicamente al llamar a Gemini.
 # Se registra ANTES de CORS para que CORS lo envuelva y el navegador pueda leer el 429.
@@ -522,6 +524,9 @@ async def programmer_profile(address: str):
 # Identidad (SEP-10) y perfil: aditivo, el flujo del dinero no la exige
 # ---------------------------------------------------------------------------
 def auth_keys() -> identidad.Keys:
+    if len(os.environ.get("SESSION_SECRET", "").strip()) < 32:
+        log.warning("Identidad no configurada: SESSION_SECRET debe tener al menos 32 caracteres")
+        raise err(503, "AUTH_NOT_CONFIGURED", "La verificación de identidad no está configurada en el servidor")
     try:
         return identidad.load_keys(getattr(app.state.settings, "arbiter_secret", None))
     except identidad.AuthError as exc:

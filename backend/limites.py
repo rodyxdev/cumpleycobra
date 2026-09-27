@@ -1,6 +1,7 @@
 """Ventanas por IP y cuotas diarias independientes, en memoria del único proceso."""
 
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -10,7 +11,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 LIMITED_PATHS = {"/tasks/draft", "/tasks/draft/review", "/evaluate"}
+WRITE_PATHS = {("POST", "/tasks"), ("POST", "/propuestas"), ("GET", "/auth/challenge"),
+               ("POST", "/auth/token"), ("PUT", "/perfil")}
 WINDOW_SECS = 60
+MSG_WRITES = "Demasiadas solicitudes desde tu conexión. Espera un minuto y vuelve a intentarlo."
 MSG_PER_IP = ("Demasiadas solicitudes al motor de análisis desde tu conexión. "
               "Espera un minuto y vuelve a intentarlo.")
 MSG_DAILY = ("Se alcanzó el límite diario de {group} de esta demo. "
@@ -65,7 +69,8 @@ class RateLimiter:
             key = (bucket, ip)
             window = self.hits.setdefault(key, deque())
             if len(window) >= per_minute:
-                return RateLimited(MSG_PER_IP, max(1, int(window[0] + WINDOW_SECS - now) + 1))
+                return RateLimited(MSG_WRITES if bucket == "writes" else MSG_PER_IP,
+                                   max(1, int(window[0] + WINDOW_SECS - now) + 1))
             window.append(now)
         return None
 
@@ -95,8 +100,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.limiter = limiter or rate_limiter
 
     async def dispatch(self, request, call_next):
-        if request.method == "POST" and request.url.path.rstrip("/") in LIMITED_PATHS:
+        path = request.url.path.rstrip("/")
+        is_write = ((request.method, path) in WRITE_PATHS or
+                    (request.method == "POST" and re.fullmatch(r"/tasks/[^/]+/calificacion", path)))
+        if is_write:
+            refused = self.limiter.check_ip(client_ip(request), _limit("RATE_LIMIT_WRITES_PER_MINUTE", 30), "writes")
+        elif request.method == "POST" and path in LIMITED_PATHS:
             refused = self.limiter.check_ip(client_ip(request), _limit("RATE_LIMIT_PER_MINUTE"))
-            if refused:
-                return limited_response(refused)
+        else:
+            refused = None
+        if refused:
+            return limited_response(refused)
         return await call_next(request)

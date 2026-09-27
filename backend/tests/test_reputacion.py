@@ -56,7 +56,7 @@ class FakeEvents:
 def world(tmp_path, monkeypatch):
     # Llaves de prueba para las sesiones SEP-10 (calificar exige la del cliente on-chain).
     monkeypatch.setenv("SEP10_SIGNING_SECRET", Keypair.random().secret)
-    monkeypatch.setenv("SESSION_SECRET", "secreto-de-prueba")
+    monkeypatch.setenv("SESSION_SECRET", "secreto-ficticio-de-prueba-32-caracteres")
     chain = MultiChain()
     main.app.state.store = StateStore(tmp_path / "state.json")
     main.app.state.chain = chain

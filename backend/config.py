@@ -85,3 +85,11 @@ def load_settings() -> Settings:
         frontend_origin=os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000"),
         state_file=state_file,
     )
+
+
+def api_docs_options() -> dict:
+    """Las rutas de documentación se publican solo por habilitación explícita."""
+    enabled = os.environ.get("ENABLE_API_DOCS", "").strip().lower() == "true"
+    return {"docs_url": "/docs" if enabled else None,
+            "redoc_url": "/redoc" if enabled else None,
+            "openapi_url": "/openapi.json" if enabled else None}
