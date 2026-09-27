@@ -152,7 +152,7 @@ async def _generate(client, model, instruction, schema, prompt, valid=lambda val
             return None
 
     value, _ = await gemini.generate_structured(
-        client, model, prompt, config, parse, before_attempt=before_attempt,
+        client, model, prompt, config, parse, before_attempt=before_attempt, quota_group="borrador",
     )
     return value
 

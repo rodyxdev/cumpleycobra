@@ -21,6 +21,7 @@ from google.oauth2 import service_account
 from pydantic import BaseModel, ValidationError
 
 from .config import ConfigError, GEMINI_TIMEOUT_SECS, Settings
+from .limites import rate_limiter
 
 BACKOFF_SECS = (1, 3)  # 2 reintentos ante errores transitorios
 log = logging.getLogger("cumpleycobra.gemini")
@@ -189,6 +190,7 @@ async def generate_structured(
     parse: Callable[[str | None], Result | None],
     time_ok: Callable[[], Awaitable[bool]] | None = None,
     before_attempt: Callable[[], Awaitable[None]] | None = None,
+    *, quota_group: str = "motor",
 ) -> tuple[Result, float]:
     """Política única para evaluación, borrador y revisión; 20 s por intento.
 
@@ -206,6 +208,8 @@ async def generate_structured(
             raise OutOfTime()
         attempt += 1
         t0 = time.monotonic()
+        # Fuera del try: RateLimited llega al manejador global, sin contar envíos ni reintentar.
+        rate_limiter.consume_daily(quota_group)
         try:
             resp = await asyncio.wait_for(
                 client.aio.models.generate_content(model=model, contents=prompt, config=config),

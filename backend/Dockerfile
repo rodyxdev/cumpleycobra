@@ -16,6 +16,6 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt
 COPY backend backend
 
-# Railway inyecta PORT. --proxy-headers y --forwarded-allow-ips para ver la IP real del cliente
-# detrás del proxy de Railway (la usa el límite de peticiones por IP).
-CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips='*'"]
+# Railway inyecta PORT. El middleware lee la última IP agregada por su proxy a X-Forwarded-For.
+# No confiar en todas las fuentes de cabeceras reenviadas de uvicorn.
+CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers"]

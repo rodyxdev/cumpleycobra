@@ -41,7 +41,8 @@ El backend necesita el dominio del frontend (CORS y SEP-10), y el frontend neces
 | `FRONTEND_ORIGIN` | `https://<frontend>.vercel.app`, sin barra final. Admite varios separados por comas (por ejemplo, una vista previa de Vercel). |
 | `SEP10_SIGNING_SECRET` | Una llave **nueva y sin fondos**, **nunca** la del árbitro. Recomendado: una distinta de la local (cómo generarla, en CLAUDE.md). |
 | `SESSION_SECRET` | Un secreto largo y aleatorio, distinto del local |
-| `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_DAILY` | Límite de peticiones al motor (punto 4). Recomendado para la entrega: `10` y `500`. |
+| `RATE_LIMIT_PER_MINUTE` | Ventana deslizante de 60 s por IP para draft, review y evaluate. Recomendado: `10`. |
+| `RATE_LIMIT_DAILY_BORRADOR`, `RATE_LIMIT_DAILY_MOTOR` | Topes independientes de llamadas reales a Gemini por día UTC. Si falta uno, ese grupo usa `RATE_LIMIT_DAILY` (por ejemplo, `500`). |
 
    **Opcionales**, porque ya tienen buen valor por defecto:
    - `STATE_FILE`: la imagen ya trae `/data/state.json`.
@@ -128,7 +129,9 @@ Si una política de tu organización impide crear claves de cuentas de servicio,
 2. Configura `GOOGLE_GENAI_USE_VERTEXAI=false` y **elimina** `GOOGLE_CREDENTIALS_B64`. En este modo no se requieren `GOOGLE_CLOUD_PROJECT` ni `GOOGLE_CLOUD_LOCATION`. El backend conserva `genai.Client(api_key=...)`. Si dejas credenciales explícitas de cuenta de servicio con Vertex desactivado, el arranque informa de la configuración incompatible sin mostrar el secreto.
 3. Elige un modelo disponible para tu clave en `GEMINI_MODEL`. La prueba de punta a punta confirma que responde; el test existente de AI Studio se conserva.
 
-**Cuota:** los límites dependen del proyecto, modelo y proveedor elegidos. `RATE_LIMIT_PER_MINUTE` y `RATE_LIMIT_DAILY` limitan las peticiones al motor por IP/minuto y por día globalmente.
+**Cuota:** `RATE_LIMIT_PER_MINUTE` cuenta peticiones por IP, incluso las inválidas. Las cuotas diarias se consumen justo antes de cada llamada real a Gemini (incluidos reintentos), después de validación, guardias, caché y análisis determinista. `RATE_LIMIT_DAILY_BORRADOR` comparte cuota entre draft y review; `RATE_LIMIT_DAILY_MOTOR` cuenta evaluate. Si falta un valor específico, usa `RATE_LIMIT_DAILY` para ese grupo, sin compartir contadores. Un valor 0 desactiva esa cuota. Agotarla devuelve 429 `RATE_LIMITED` con CORS y `Retry-After` y no consume un envío del programador. Las cuotas cambian al día UTC siguiente y se reinician al reiniciar el único proceso.
+
+**IP del cliente:** el middleware toma la última entrada de `X-Forwarded-For`, o `request.client.host` si no está presente. Se presupone que Railway agrega a la derecha la IP de la conexión y que toda entrada pública pasa por ese proxy. Cambiar las entradas de la izquierda no cambia la IP contada. No exponer el puerto del contenedor directamente. Se retiró la confianza universal `--forwarded-allow-ips='*'` de uvicorn. Las ventanas vacías se eliminan al comprobar la siguiente petición limitada.
 
 ## 5. Verificación después de desplegar
 
