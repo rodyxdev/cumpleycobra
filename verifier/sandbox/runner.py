@@ -210,9 +210,23 @@ def _extract_out(name: str, output_dir: Path) -> list[str]:
         return []
     output_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tar:
-        # filtro "data": rechaza rutas absolutas, `..`, enlaces fuera del destino y dispositivos.
         members = [m for m in tar.getmembers() if m.isfile() or m.isdir()]
-        tar.extractall(output_dir, members=members, filter="data")
+        if hasattr(tarfile, "data_filter"):
+            # filtro "data": rechaza rutas absolutas, `..`, enlaces fuera del destino y dispositivos.
+            tar.extractall(output_dir, members=members, filter="data")
+        else:
+            # Python sin filtros de tarfile (Debian 12 trae 3.11.2): la misma defensa a mano.
+            root = output_dir.resolve()
+            for m in members:
+                target = (root / m.name).resolve()
+                if m.name.startswith("/") or not target.is_relative_to(root):
+                    raise SandboxUnavailable(f"ruta no permitida en /out: {m.name!r}")
+                if m.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tar.extractfile(m) as src, target.open("wb") as dst:
+                    dst.write(src.read())
         return sorted(m.name.removeprefix("./") for m in members if m.isfile())
 
 

@@ -148,6 +148,7 @@ def test_build_refuses_sdist_only_packages(tmp_path):
 
 
 def test_gvisor_runtime_from_settings(tmp_path, monkeypatch):
+    monkeypatch.delenv("SANDBOX_RUNTIME", raising=False)
     assert "--runtime" not in build_docker_args("n", "img", tmp_path, LIMITS)
     monkeypatch.setenv("SANDBOX_RUNTIME", "runsc")
     args = build_docker_args("n", "img", tmp_path, LIMITS)
@@ -170,3 +171,30 @@ def test_build_uses_configured_network_and_proxy(tmp_path, monkeypatch):
     assert seen["network"] == "cc-build"
     assert seen["env"]["HTTPS_PROXY"] == "http://proxy:3128"
     assert "--only-binary=:all:" in seen["command"]
+
+
+def test_extraccion_sin_filtro_de_tarfile_rechaza_rutas_fuera(tmp_path, monkeypatch):
+    """Camino para Python sin `tarfile.data_filter` (Debian 12): misma defensa que filter="data"."""
+    import io
+    import tarfile
+    import types
+
+    import verifier.sandbox.runner as runner
+
+    def tar_bytes(names):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for n in names:
+                info = tarfile.TarInfo(n)
+                info.size = 2
+                tar.addfile(info, io.BytesIO(b"ok"))
+        return buf.getvalue()
+
+    monkeypatch.delattr(tarfile, "data_filter", raising=False)
+    monkeypatch.setattr(runner, "_docker", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=tar_bytes(["./a/b.txt"])))
+    assert runner._extract_out("x", tmp_path / "out") == ["a/b.txt"]
+    assert (tmp_path / "out" / "a" / "b.txt").read_bytes() == b"ok"
+    monkeypatch.setattr(runner, "_docker", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=tar_bytes(["../fuera.txt"])))
+    with pytest.raises(runner.SandboxUnavailable):
+        runner._extract_out("x", tmp_path / "out2")
+    assert not (tmp_path / "fuera.txt").exists()
