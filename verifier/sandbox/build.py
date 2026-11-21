@@ -92,6 +92,8 @@ def build_dependencies(requirements: list[str], volume: DepsVolume, image: str) 
     limits = replace(SandboxLimits.from_settings(), timeout_s=s.build_timeout_s, memory=s.build_memory)
     with tempfile.TemporaryDirectory(prefix="cc-req-") as tmp:
         req_dir = Path(tmp)
+        # mkdtemp crea 0700; el contenedor corre como nobody y necesita leer requirements.txt.
+        req_dir.chmod(0o755)
         (req_dir / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
         env = {}
         proxy = s.build_proxy

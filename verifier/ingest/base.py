@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,4 +59,7 @@ def rmtree_force(path: Path) -> None:
         func(p)
 
     if path.exists():
-        shutil.rmtree(path, onexc=onexc)
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=onexc)
+        else:  # Debian 12 en la VM trae Python 3.11
+            shutil.rmtree(path, onerror=onexc)
