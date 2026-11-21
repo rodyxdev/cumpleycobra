@@ -17,3 +17,6 @@ export const SHOW_DEV_HINTS = APP_MODE === "local";
 
 /** Faucet de USDC de testnet (Circle): se elige la red Stellar y se pega la dirección. */
 export const USDC_FAUCET_URL = "https://faucet.circle.com/";
+
+/** Fase 3: verificación por ejecución (apagada por defecto, igual que VERIFIER_ENABLED del backend). */
+export const VERIFIER_ENABLED = (process.env.NEXT_PUBLIC_VERIFIER_ENABLED ?? "").trim().toLowerCase() === "true";

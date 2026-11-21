@@ -75,6 +75,10 @@ def fake_llm(monkeypatch):
 
     async def fake_structured(role, system, turns, output, **kw):
         calls[role] += 1
+        if output is suite_mod.ReferenceImplementation:
+            calls["referencia"] = calls.get("referencia", 0) + 1
+            return suite_mod.ReferenceImplementation(modules=[suite_mod.ReferenceModule(
+                module="descuentos", code=(CASOS / "a_feliz.py").read_text(encoding="utf-8"))])
         if role == "suite":
             import json
             index = json.loads(turns[0]["content"])["criterio_objetivo"]
@@ -328,8 +332,12 @@ def test_aceptar_exige_la_suite_lista(world):
     assert r.status_code == 409 and r.json()["error"] == "SUITE_NOT_READY"
 
 
-def drive_suite(client, task_id, stub_passes=False):
-    """Hace de trabajador para el trabajo de suite, con resultados fabricados."""
+def drive_suite(client, task_id, stub_passes=False, reference_fails=(), steps=None):
+    """Hace de trabajador para el trabajo de suite, con resultados fabricados.
+
+    `reference_fails`: archivos que fallan contra la referencia en la primera ronda; "*" = todos
+    (referencia rota). `steps` recibe cada paso de validación.
+    """
     job = client.post("/verifier/claim", headers=worker_headers()).json()
     assert job["kind"] == "suite"
     step = client.post(f"/verifier/jobs/{job['id']}/suite/generate", headers=worker_headers(),
@@ -337,10 +345,15 @@ def drive_suite(client, task_id, stub_passes=False):
     rounds = 0
     while step["next"] == "validate":
         rounds += 1
+        if steps is not None:
+            steps.append(step)
         outs = [outcome(f, "test_x", "failed") for f in step["tests"]]
         stub = [outcome(f, "test_x", "passed" if stub_passes else "failed") for f in step["tests"]]
+        fails = set(step["tests"]) if "*" in reference_fails else set(reference_fails)
+        ref = [outcome(f, "test_x", "failed" if rounds == 1 and f in fails else "passed") for f in step["tests"]]
         step = client.post(f"/verifier/jobs/{job['id']}/suite/validation", headers=worker_headers(),
-                           json={"lease_id": job["lease_id"], "empty": run(outs), "stub": run(stub)}).json()
+                           json={"lease_id": job["lease_id"], "empty": run(outs), "stub": run(stub),
+                                 "reference": run(ref) if step.get("reference") else None}).json()
     return rounds
 
 
@@ -350,7 +363,37 @@ def test_suite_se_regenera_y_se_rechaza_si_nunca_valida(world, fake_llm):
     assert rounds == 1 + suite_mod.MAX_REGENERATIONS
     plan = world.get(f"/tasks/{created['task_id']}/suite").json()
     assert plan["status"] == "rechazada" and plan["suite_hash"] is None
-    assert fake_llm["suite"] == 6 + 5 * suite_mod.MAX_REGENERATIONS  # el criterio de lectura no se regenera
+    # el criterio de lectura no se regenera; la referencia se genera una vez
+    assert fake_llm["suite"] == 6 + 5 * suite_mod.MAX_REGENERATIONS + 1
+
+
+def test_un_test_que_falla_contra_la_referencia_se_regenera(world, fake_llm):
+    created = create_task(world)
+    steps = []
+    rounds = drive_suite(world, created["task_id"], reference_fails={"test_c3.py"}, steps=steps)
+    assert rounds == 2 and steps[0]["reference"][0]["module"] == "descuentos"
+    task = main.app.state.store.tasks[created["task_id"]]
+    assert task["suite"]["status"] == "lista"
+    assert [c["attempts"] for c in task["suite"]["criteria"]] == [1, 1, 2, 1, 1, 1]
+    assert set(steps[1]["tests"]) == {f"test_c{i}.py" for i in TESTS}
+    assert "referencia.json" in suite_mod.hashed_files(task["suite"])
+
+
+def test_una_referencia_rota_no_culpa_a_los_tests(world, fake_llm):
+    created = create_task(world)
+    rounds = drive_suite(world, created["task_id"], reference_fails={"*"})
+    task = main.app.state.store.tasks[created["task_id"]]
+    assert rounds == 2 and task["suite"]["status"] == "lista"
+    assert [c["attempts"] for c in task["suite"]["criteria"]] == [1, 1, 1, 1, 1, 1]  # no se regeneró ningún test
+    assert fake_llm["referencia"] == 2
+
+
+def test_validacion_exige_pasar_contra_la_referencia():
+    f = "test_c2.py"
+    ref = {"report_found": True, "outcomes": [outcome(f, "test_a", "passed"), {**outcome(f, "test_b", "failed"),
+                                                                                "message": "assert [19.47] == [19.48]"}]}
+    problems = suite_mod.validation_problems(f, run([outcome(f, "test_a", "failed")]), run([outcome(f, "test_a", "failed")]), ref)
+    assert len(problems) == 1 and "FALLA contra una implementación correcta" in problems[0] and "19.47" in problems[0]
 
 
 def test_el_plan_publico_nunca_trae_el_codigo_de_los_tests(world):

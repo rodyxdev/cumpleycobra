@@ -148,7 +148,15 @@ def run_suite_job(job: Job) -> None:
             write_suite_dir(suite, step["tests"])
             empty_run = run_blackbox(empty, suite, spec)
             stub_run = run_blackbox(stub, suite, spec)
-        step = job.send("suite/validation", {"empty": run_summary(empty_run), "stub": run_summary(stub_run)})
+            body = {"empty": run_summary(empty_run), "stub": run_summary(stub_run)}
+            if step.get("reference"):
+                # Implementación de referencia (la escribió el modelo): corre igual de aislada.
+                ref = tmp / "referencia"
+                ref.mkdir()
+                for m in step["reference"]:
+                    write_pasted(ref, m["module"], m["code"])
+                body["reference"] = run_summary(run_blackbox(ref, suite, spec))
+        step = job.send("suite/validation", body)
 
 
 def _ingest(job: Job, spec: ExecutionSpec, source: dict, work: Path):

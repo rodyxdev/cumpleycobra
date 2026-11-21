@@ -93,6 +93,7 @@ class RunIn(BaseModel):
 class ValidationIn(LeaseIn):
     empty: RunIn
     stub: RunIn
+    reference: RunIn | None = None
 
 
 class ResultIn(LeaseIn):
@@ -159,7 +160,8 @@ async def _advance_suite(job_id: str, lease_id: str, task: dict) -> dict:
             suite_mod.criterion_index(f) for f in suite["files"]}
         if to_check:
             m.store().save()
-            return {"next": "validate", "round": suite["round"], "tests": dict(suite["files"])}
+            return {"next": "validate", "round": suite["round"], "tests": dict(suite["files"]),
+                    "reference": suite.get("reference")}
         # Nada nuevo que validar: todo era lectura, o la ronda solo dejó problemas estáticos.
         if suite_mod.pending(suite) and suite["round"] <= suite_mod.MAX_REGENERATIONS:
             suite["status"] = "pendiente"
@@ -187,7 +189,8 @@ async def suite_validation(job_id: str, body: ValidationIn, authorization: str |
     m = api()
     task = m.get_task_or_404(job["task_id"])
     async with m.store().lock(task["task_id"]):
-        again = suite_mod.apply_validation(task["suite"], body.empty.model_dump(), body.stub.model_dump())
+        again = suite_mod.apply_validation(task["suite"], body.empty.model_dump(), body.stub.model_dump(),
+                                           body.reference.model_dump() if body.reference else None)
         m.store().save()
         if again:
             return await _advance_suite(job_id, body.lease_id, task)

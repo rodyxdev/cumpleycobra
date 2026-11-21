@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
+import { SuitePlanCard } from "@/components/suite-plan-card";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type ClientVerdict } from "@/lib/api";
 import { manualApproval } from "@/lib/approval";
@@ -122,6 +123,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
 
   return (
     <div className="space-y-6">
+      {task?.verification === "execution" && task.suite && <SuitePlanCard suite={task.suite} criteria={task.criteria} />}
       {task ? <StatusCard task={task} secondsLeft={secondsLeft} /> : error ? (
         <p className="text-sm text-[var(--alert-foreground)]" role="alert">
           {loadProblem(error.code, error.status, error.message).text}

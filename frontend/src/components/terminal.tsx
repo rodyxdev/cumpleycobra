@@ -4,16 +4,36 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, type Verdict } from "@/lib/api";
 import { explorerTx } from "@/lib/format";
+import { STAGE_LABEL } from "@/lib/verification";
 
 // Terminal honesta: cada línea sale de un hecho real (la petición enviada, el tiempo medido
 // con el reloj del navegador o un campo de la respuesta del backend). Nada inventado.
 
-type Line =
+export type Line =
   | { kind: "cmd" | "muted" | "text" | "ok" | "err" | "warn"; text: string }
-  | { kind: "wait"; startedAt: number }
+  | { kind: "wait"; startedAt: number; label?: string }
   | { kind: "link"; text: string; href: string };
 
-const LINE_DELAY_MS = 45; // solo ritmo de impresión; el contenido ya llegó completo
+export const LINE_DELAY_MS = 45; // solo ritmo de impresión; el contenido ya llegó completo
+
+/** Líneas del veredicto, todas tomadas de campos de la respuesta del backend. */
+export function verdictLines(v: Verdict): Line[] {
+  const out: Line[] = [
+    ...v.analysis.map((a): Line => ({ kind: lineKind(a), text: a })),
+    ...v.security_flags.map((f): Line => ({ kind: "warn", text: `Alerta de seguridad: ${f}` })),
+    { kind: v.approved ? "ok" : "err", text: v.approved ? "Veredicto: APROBADO" : "Veredicto: RECHAZADO" },
+    { kind: "text", text: v.reason },
+    { kind: "muted", text: `code_hash ${v.code_hash}` },
+    { kind: "muted", text: `verdict_hash ${v.verdict_hash}` },
+  ];
+  if (v.transaction_hash) {
+    out.push({ kind: "ok", text: "Pago liberado en el contrato." });
+    out.push({ kind: "link", text: `Transacción ${v.transaction_hash}`, href: explorerTx(v.transaction_hash) });
+  } else {
+    out.push({ kind: "muted", text: "Sin pago: transaction_hash = null" });
+  }
+  return out;
+}
 
 export function useTerminal() {
   const [lines, setLines] = useState<Line[]>([]);
@@ -58,21 +78,7 @@ export function useTerminal() {
         ...prev.filter((l) => l.kind !== "wait"),
         { kind: "muted", text: `Respuesta en ${secs} s · capa: ${stageLabel(v.stage)} · envíos usados: ${v.submissions_used}` },
       ]);
-      const out: Line[] = [
-        ...v.analysis.map((a): Line => ({ kind: lineKind(a), text: a })),
-        ...v.security_flags.map((f): Line => ({ kind: "warn", text: `Alerta de seguridad: ${f}` })),
-        { kind: v.approved ? "ok" : "err", text: v.approved ? "Veredicto: APROBADO" : "Veredicto: RECHAZADO" },
-        { kind: "text", text: v.reason },
-        { kind: "muted", text: `code_hash ${v.code_hash}` },
-        { kind: "muted", text: `verdict_hash ${v.verdict_hash}` },
-      ];
-      if (v.transaction_hash) {
-        out.push({ kind: "ok", text: "Pago liberado en el contrato." });
-        out.push({ kind: "link", text: `Transacción ${v.transaction_hash}`, href: explorerTx(v.transaction_hash) });
-      } else {
-        out.push({ kind: "muted", text: "Sin pago: transaction_hash = null" });
-      }
-      for (const l of out) {
+      for (const l of verdictLines(v)) {
         await new Promise((r) => setTimeout(r, LINE_DELAY_MS));
         push(l);
       }
@@ -84,8 +90,8 @@ export function useTerminal() {
   return { lines, busy, now, run };
 }
 
-function stageLabel(stage: Verdict["stage"]): string {
-  return { deterministic: "determinista", llm: "Gemini", cache: "caché" }[stage] ?? stage;
+export function stageLabel(stage: Verdict["stage"]): string {
+  return STAGE_LABEL[stage] ?? stage;
 }
 
 function lineKind(text: string): "ok" | "err" | "text" {
@@ -113,7 +119,7 @@ export function Terminal({ lines, now }: { lines: Line[]; now: number }) {
           const secs = (Math.max(0, now - l.startedAt) / 1000).toFixed(1);
           return (
             <div key={i} className="text-[#B2CCFF]">
-              Enviando al motor de análisis… {secs} s
+              {l.label ?? "Enviando al motor de análisis…"} {secs} s
             </div>
           );
         }

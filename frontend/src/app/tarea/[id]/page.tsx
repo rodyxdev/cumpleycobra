@@ -8,6 +8,8 @@ import { SubmissionResult } from "@/components/submission-result";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CriteriaCard } from "@/components/criteria-card";
+import { ExecSubmitPanel } from "@/components/exec-submit-panel";
+import { SuitePlanCard } from "@/components/suite-plan-card";
 import { EmptyState } from "@/components/empty-state";
 import { StatusCard } from "@/components/status-card";
 import { useTerminal } from "@/components/terminal";
@@ -59,6 +61,7 @@ export default function TareaPage({
   const accepted =
     mine && task.freelancer_address === mine.freelancer_address && wallet.address === mine.freelancer_address;
   const takenByOther = task.freelancer_address && task.freelancer_address !== wallet.address;
+  const execution = task.verification === "execution";
 
   return (
     <div className="space-y-6">
@@ -74,8 +77,11 @@ export default function TareaPage({
         {() => (
           <div className="grid gap-6">
             <div className="order-2 min-w-0"><CriteriaCard spec={task} /></div>
+            {execution && task.suite && <div className="order-2 min-w-0"><SuitePlanCard suite={task.suite} criteria={task.criteria} /></div>}
             {accepted ? (
-              <SubmitPanel task={task} mine={mine} secondsLeft={secondsLeft} onDone={refresh} />
+              execution
+                ? <ExecSubmitPanel task={task} mine={mine} secondsLeft={secondsLeft} onDone={refresh} />
+                : <SubmitPanel task={task} mine={mine} secondsLeft={secondsLeft} onDone={refresh} />
             ) : takenByOther ? (
               <div className="order-3">
                 <EmptyState icon={UserCheck} title="Otra wallet ya aceptó esta tarea" testId="tarea-tomada"
@@ -84,7 +90,8 @@ export default function TareaPage({
                 </EmptyState>
               </div>
             ) : (
-              <div className="order-3"><AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} isClient={!!mineAsClient} /></div>
+              <div className="order-3"><AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} isClient={!!mineAsClient}
+                suiteReady={!execution || task.suite?.status === "lista"} /></div>
             )}
           </div>
         )}
@@ -96,7 +103,9 @@ export default function TareaPage({
 // ---------------------------------------------------------------------------
 // Aceptar criterios
 // ---------------------------------------------------------------------------
-function AcceptPanel({ taskId, invite, onAccepted, isClient }: { taskId: string; invite: string | null; onAccepted: () => void; isClient: boolean }) {
+function AcceptPanel({ taskId, invite, onAccepted, isClient, suiteReady }: {
+  taskId: string; invite: string | null; onAccepted: () => void; isClient: boolean; suiteReady: boolean;
+}) {
   const wallet = useWallet();
   const [error, setError] = useState<ApiError | null>(null);
   const [sending, setSending] = useState(false);
@@ -147,7 +156,12 @@ function AcceptPanel({ taskId, invite, onAccepted, isClient }: { taskId: string;
         ) : error ? (
           <p className="text-sm text-[var(--alert-foreground)]">{error.message}</p>
         ) : null}
-        <Button disabled={!invite || !addr || sending} onClick={accept} data-testid="aceptar">
+        {!suiteReady && (
+          <p className="text-sm text-muted-foreground" role="status">
+            Podrás aceptar cuando la suite oculta esté lista: aceptas los criterios y también el plan de tests que te va a juzgar.
+          </p>
+        )}
+        <Button disabled={!invite || !addr || sending || !suiteReady} onClick={accept} data-testid="aceptar">
           {sending ? "Aceptando…" : "Acepto los criterios"}
         </Button>
       </CardContent>
