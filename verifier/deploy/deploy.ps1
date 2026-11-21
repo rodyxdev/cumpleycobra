@@ -25,7 +25,9 @@ param(
     [switch]$SoloCodigo,
     [switch]$Aplicar
 )
-$ErrorActionPreference = "Stop"
+# "Continue": en Windows PowerShell 5.1 la salida de progreso de gcloud (stderr) se tomaría como error.
+# Cada paso se juzga por su código de salida.
+$ErrorActionPreference = "Continue"
 
 function Paso([string]$texto, [string[]]$comando) {
     Write-Host "`n# $texto"
@@ -55,7 +57,7 @@ if (-not $SoloCodigo) {
     Write-Host "`n# Token de la cola: se lee de Secret Manager ($SecretoToken) y no se imprime"
     $token = ""
     if ($Aplicar) {
-        $token = (& gcloud secrets versions access latest --secret=$SecretoToken).Trim()
+        $token = (& gcloud secrets versions access latest --secret=$SecretoToken 2>$null | Out-String).Trim()
         if (-not $token) { throw "El secreto $SecretoToken está vacío" }
     }
     $metadata = "verifier-api-url=$ApiUrl,verifier-queue-token=" + ($(if ($Aplicar) { $token } else { "<token>" }))
