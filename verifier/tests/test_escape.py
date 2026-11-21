@@ -62,6 +62,7 @@ def intentar():
     r["secretos_en_entorno"] = sorted(k for k in os.environ if k != "GPG_KEY" and any(
         s in k for s in ("SECRET", "TOKEN", "KEY", "PASSWORD", "GOOGLE", "DATABASE", "ARBITER")))
     r["usuario"] = os.getuid()
+    r["kernel_visto"] = os.uname().release  # bajo gVisor, el kernel simulado (no el de la VM)
     try:
         procs = []
         for _ in range(400):

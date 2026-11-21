@@ -11,8 +11,13 @@ def pytest_configure(config):
 @pytest.fixture(autouse=True)
 def _isolated_work_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("VERIFIER_WORK_DIR", str(tmp_path / "work"))
-    # Los tests locales corren con el runtime por defecto; la VM prueba gVisor aparte.
-    monkeypatch.delenv("SANDBOX_RUNTIME", raising=False)
+    # Runtime de los contenedores: el por defecto (runc) salvo que se pida otro a propósito, p. ej.
+    # en la VM: CYC_TEST_RUNTIME=runsc (gVisor).
+    runtime = __import__("os").environ.get("CYC_TEST_RUNTIME")
+    if runtime:
+        monkeypatch.setenv("SANDBOX_RUNTIME", runtime)
+    else:
+        monkeypatch.delenv("SANDBOX_RUNTIME", raising=False)
 
 
 def make_zip(entries: dict[str, bytes], *, symlinks: dict[str, str] | None = None) -> bytes:
