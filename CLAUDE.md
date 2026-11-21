@@ -23,7 +23,7 @@ Nació como MVP para GOYA HACK (septiembre de 2026). Desde noviembre de 2026 sig
 - USDC de testnet disponible en el faucet de Circle (confirmado).
 - Pollar es prioridad: el reto reparte un pool de 200 USD a quien lo integre. Nunca se recorta por completo.
 - Estado del backend: `backend/state.json` por defecto, o Postgres con `STATE_BACKEND=postgres` (ver "Estado del backend").
-- Producción: backend en Cloud Run (`cumpleycobra-api`, `us-central1`) y frontend en Vercel. Railway se dejó el 20 de noviembre de 2026 ([`docs/mejora/puente-cloud-run.md`](docs/mejora/puente-cloud-run.md)).
+- Producción: backend en Cloud Run (`cumpleycobra-api`, `us-central1`) con Postgres en Cloud SQL (`cyc-pg`, base `cyc_prod`; staging usa la base `cyc`) desde el 21 de noviembre de 2026, y frontend en Vercel (Hobby). La API se queda en su URL de `run.app`. Railway se dejó el 20 de noviembre de 2026 ([`docs/mejora/puente-cloud-run.md`](docs/mejora/puente-cloud-run.md)).
 - Cada tarea se amarra a un solo programador, invitado por el cliente (ver "Tokens").
 
 ## Estructura del repositorio

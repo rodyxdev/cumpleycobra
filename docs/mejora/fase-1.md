@@ -1,6 +1,6 @@
-# Fase 1 del plan de mejora: base de producción (parte A, código)
+# Fase 1 del plan de mejora: base de producción
 
-Fecha: 21 de noviembre de 2026. Rama `mejora/fase-1`. **No se desplegó:** la cumbre es el 23 de noviembre y producción sigue con el puente de Cloud Run (`state.json` en Cloud Storage). Todo lo nuevo queda apagado por defecto (`STATE_BACKEND=json`).
+Fecha: 21 de noviembre de 2026. Rama `mejora/fase-1`, cerrada con el tag `mejora-1`. Partes: A (código), B (Cloud SQL y staging), C (modo demo del frontend) y D (corte de producción a Postgres). En local todo sigue apagado por defecto (`STATE_BACKEND=json`); producción corre con Postgres desde la parte D.
 
 ## Qué se hizo
 
@@ -89,13 +89,9 @@ Nota: staging y producción firman con la misma llave de árbitro (el contrato t
 
 ## Pendiente de la fase 1
 
-1. **Corte de producción** (después de la cumbre, con tu visto bueno):
-   - `STATE_BACKEND=postgres` en `cumpleycobra-api`;
-   - quitar el volumen de Cloud Storage y `--max-instances=1`;
-   - `--min-instances` de vuelta a 0.
-   - Antes del corte: volver a correr el job `cyc-estado` con `--forzar`, para traer el estado más reciente.
+1. ~~Corte de producción~~: hecho el 21 de noviembre, con el visto bueno de Rodrigo (ver «Parte D»).
 2. ~~Dominio propio de la API~~: sale de la fase 1. `api.rodyxdev.com` es de un proyecto personal de Rodrigo y no se usa; la API sigue en `run.app` hasta que haya un dominio del producto (ver «Decisiones de hosting» en el plan). Nota para entonces: la sesión de `wrangler` solo trae `zone:read` y no puede crear registros DNS; hará falta un token con «Zone → DNS → Edit» para esa zona.
-3. Alertas de presupuesto en Google Cloud: son de la cuenta de facturación. En el proyecto no están activas las APIs `cloudbilling.googleapis.com` ni `billingbudgets.googleapis.com`; hay que activarlas (gratis) con tu permiso y crear el presupuesto.
+3. ~~Alertas de presupuesto en Google Cloud~~: Rodrigo ya tiene una alerta de presupuesto en la cuenta de facturación (confirmado por él el 21 de noviembre; no la pude leer porque la API de facturación no está activa en el proyecto).
 4. ~~Modo `demo` en el frontend~~: hecho el 21 de noviembre (ver «Parte C»).
 5. ~~Borrar los recursos temporales del ensayo~~: la instancia `cyc-pg-restauracion`, el secreto `cyc-database-url-restauracion` y el job `cyc-verificar-restauracion` se borraron el 21 de noviembre.
 
@@ -126,7 +122,40 @@ Verificación (build de producción con `next start`, es decir, modo `demo`, con
 - Escritorio: programadores con el backend apagado («No se pudo conectar con el servidor») y recuperación sola al volver a encenderlo.
 - `npm test`: 21 de 21 (2 nuevos: modo de la app y textos de carga). `tsc`, `eslint` y `next build` sin errores.
 
+## Parte D: corte de producción a Postgres (21 de noviembre de 2026)
+
+| Paso | Resultado |
+| --- | --- |
+| Respaldo | `gs://…-cyc-state/respaldos/state-20261121-antes-de-postgres.json` (6130 bytes, copia de `state.json`, que no cambió desde las 03:43 UTC) |
+| Base propia de producción | Base `cyc_prod` y usuario `cyc_api_prod` en `cyc-pg`, secreto `cyc-database-url-prod` (contraseña al azar, nunca impresa). Staging se queda con la base `cyc`: sus tareas de prueba no entran a producción |
+| Importación | Job nuevo `cyc-estado-prod` (imagen `api:feb8cd2`, bucket de producción solo lectura, secreto de producción): `tasks: 1, profiles: 0, proposals: 0` |
+| Nueva revisión | `cumpleycobra-api-00003-cez`, imagen `api:feb8cd2` (el backend no cambió desde ese commit). `STATE_BACKEND=postgres`, `APP_MODE=demo`, sin `STATE_FILE` ni volumen, Cloud SQL por conector, de 0 a 3 instancias. Se desplegó sin tráfico (etiqueta `postgres`), se probó y luego recibió el 100 % |
+| Revisión anterior | `cumpleycobra-api-00002-7w2` (puente con `state.json`, imagen `api:159f336-limites`) |
+
+### Salida real
+
+1. Revisión nueva sin tráfico: `/health` → `{"ok":true}`; la tarea importada `IOBR3hBqNPWoM6Ko` responde; `/programadores` lista al programador con su pago.
+2. Con tráfico, en la URL pública de la API:
+   - la tarea importada devuelve su veredicto con la tx `e5284043bdfd…`;
+   - tarea nueva `yI2oLY2sHxAheJd-` con 1 USDC, depósito `03dad77536d257a646a2a21e64dfff4715695ec25d243e44ee88d0ed9bed040b`;
+   - caso B: rechazado, 3.9 s, envío 1;
+   - caso A: aprobado y pagado, 10.1 s, envío 2, tx `c51f1695362d346ca13aa418b225dce39271455fa48349ea9e2906acd63a271b`;
+   - caso A otra vez: `stage: cache`, 0.5 s, no cuenta como envío;
+   - el contrato quedó en `Released`.
+3. Reto SEP-10 desde Postgres: correcto (`home_domain` `cumpleycobra.vercel.app`). CORS: `access-control-allow-origin: https://cumpleycobra.vercel.app`.
+4. Frontend en Vercel: `/tarea/yI2oLY2sHxAheJd-` muestra la tarea con depósito, aceptación y verificación hechos.
+5. Tests antes del cierre: backend 312 pasados con `state.json` y 320 con Postgres; frontend 21 de 21, `tsc` y `eslint` sin errores.
+
+### Cómo volver atrás
+
+- **API al puente con `state.json`:** `gcloud run services update-traffic cumpleycobra-api --region us-central1 --to-revisions cumpleycobra-api-00002-7w2=100`.
+  - Si nada cambió desde el corte, basta eso: `state.json` sigue intacto en el bucket.
+  - Si hubo escrituras, antes se exportan: una copia del job `cyc-estado-prod` con el bucket montado **con escritura** y `--args=-m,backend.storage.transfer,exportar,/prod/state.json` (el job actual lo monta en solo lectura a propósito).
+- **Frontend:** `vercel promote https://cumpleycobra-l5qvy4vlg-rodyx-dev.vercel.app`.
+- **Código:** `main` en el tag `mejora-0`.
+
 ## Riesgos
 
 - Cloud SQL `db-f1-micro` no tiene SLA. Para la demo y el piloto alcanza; para mainnet hay que subir de tamaño.
 - Con varias instancias, las cuotas diarias son por instancia (ver Decisiones).
+- Staging y producción usan la misma cuenta de servicio (`cyc-api`), así que staging podría leer el secreto de la base de producción. Están en bases separadas, pero no aisladas por permisos; separar las cuentas cuando haya usuarios reales.
