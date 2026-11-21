@@ -42,6 +42,7 @@ from ..llm import LLMError, Usage
 
 router = APIRouter()
 
+SUITE_JOB_ATTEMPTS = 3
 REPO_RE = r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"
 
 
@@ -179,6 +180,14 @@ async def suite_generate(job_id: str, body: LeaseIn, authorization: str | None =
     m = api()
     task = m.get_task_or_404(job["task_id"])
     async with m.store().lock(task["task_id"]):
+        suite = task["suite"]
+        pending_files = {c["index"] for c in suite_mod.pending(suite)} & {
+            suite_mod.criterion_index(f) for f in suite["files"]}
+        if suite["status"] == "validando" and pending_files:
+            # Un trabajo anterior generó esta ronda y el verificador falló al validarla: se reanuda
+            # la validación sin volver a pedirle tests al modelo.
+            return {"next": "validate", "round": suite["round"], "tests": dict(suite["files"]),
+                    "reference": suite.get("reference")}
         return await _advance_suite(job_id, body.lease_id, task)
 
 
@@ -212,8 +221,20 @@ async def source(job_id: str, lease_id: str, authorization: str | None = Header(
 @router.post("/verifier/jobs/{job_id}/fail")
 async def fail(job_id: str, body: FailIn, authorization: str | None = Header(default=None)):
     guard_worker(authorization)
-    leased(job_id, body.lease_id)
+    job = leased(job_id, body.lease_id)
     queue().finish(job_id, body.lease_id, "failed", {"error": body.message})
+    if job["kind"] == "suite":
+        # Falla de infraestructura, no de la suite: se reintenta con otro trabajo (hasta 3 en total).
+        m = api()
+        task = m.get_task_or_404(job["task_id"])
+        async with m.store().lock(task["task_id"]):
+            tries = sum(1 for j in queue().for_task(task["task_id"]) if j["kind"] == "suite")
+            if tries < SUITE_JOB_ATTEMPTS:
+                task["suite_job"] = queue().enqueue("suite", task["task_id"], job["payload"])["id"]
+            else:
+                task["suite"]["status"] = "rechazada"
+                task["suite"]["error"] = f"el verificador no pudo ejecutar la suite: {body.message[:200]}"
+            m.store().save()
     return {"ok": True}
 
 

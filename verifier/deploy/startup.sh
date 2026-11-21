@@ -74,11 +74,14 @@ if [ ! -x /opt/cyc/.venv/bin/python ]; then
 fi
 
 # --- 4. Trabajador -----------------------------------------------------------------------------
+# El trabajador corre con PrivateTmp: sus temporales van fuera de /tmp para que Docker los vea.
+mkdir -p /var/lib/cyc/tmp /var/lib/cyc/verifier
 umask 077
 cat > /etc/cyc-verificador.env <<ENV
 VERIFIER_API_URL=$(meta verifier-api-url)
 VERIFIER_QUEUE_TOKEN=$(meta verifier-queue-token)
 VERIFIER_WORK_DIR=/var/lib/cyc/verifier
+TMPDIR=/var/lib/cyc/tmp
 SANDBOX_RUNTIME=runsc
 RUNNER_IMAGE=cumpleycobra-runner:vm
 BUILD_NETWORK=cc-build

@@ -12,6 +12,7 @@ RestartSec=5
 # Root solo para hablar con Docker; el código ajeno nunca corre aquí, sino en contenedores runsc.
 NoNewPrivileges=true
 ProtectHome=true
+# Sus temporales (montados en los contenedores) van en TMPDIR=/var/lib/cyc/tmp: Docker no ve un /tmp privado.
 PrivateTmp=true
 
 [Install]

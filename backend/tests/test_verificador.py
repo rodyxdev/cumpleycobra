@@ -396,6 +396,32 @@ def test_validacion_exige_pasar_contra_la_referencia():
     assert len(problems) == 1 and "FALLA contra una implementación correcta" in problems[0] and "19.47" in problems[0]
 
 
+def test_si_el_verificador_falla_la_suite_se_reintenta_sin_regenerar(world, fake_llm):
+    created = create_task(world)
+    tid = created["task_id"]
+    job = world.post("/verifier/claim", headers=worker_headers()).json()
+    step = world.post(f"/verifier/jobs/{job['id']}/suite/generate", headers=worker_headers(),
+                      json={"lease_id": job["lease_id"]}).json()
+    assert step["next"] == "validate"
+    calls = fake_llm["suite"]
+    world.post(f"/verifier/jobs/{job['id']}/fail", headers=worker_headers(),
+               json={"lease_id": job["lease_id"], "message": "docker no disponible"})
+    rounds = drive_suite(world, tid)  # otro trabajo: reanuda la validación de la misma ronda
+    assert rounds == 1 and fake_llm["suite"] == calls
+    assert main.app.state.store.tasks[tid]["suite"]["status"] == "lista"
+
+
+def test_tres_fallas_del_verificador_rechazan_la_suite(world):
+    created = create_task(world)
+    for _ in range(3):
+        job = world.post("/verifier/claim", headers=worker_headers()).json()
+        world.post(f"/verifier/jobs/{job['id']}/fail", headers=worker_headers(),
+                   json={"lease_id": job["lease_id"], "message": "docker no disponible"})
+    plan = world.get(f"/tasks/{created['task_id']}/suite").json()
+    assert plan["status"] == "rechazada"
+    assert world.post("/verifier/claim", headers=worker_headers()).status_code == 204
+
+
 def test_el_plan_publico_nunca_trae_el_codigo_de_los_tests(world):
     created = create_task(world)
     drive_suite(world, created["task_id"])
