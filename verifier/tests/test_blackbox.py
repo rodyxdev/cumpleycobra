@@ -99,12 +99,12 @@ def espia():
     for ruta in ("/hidden", "/cc/cc_channel.py", "/out", "/tests"):
         vistos[ruta] = os.path.exists(ruta)
     try:
-        socket.create_connection(("1.1.1.1", 53), timeout=2)
+        socket.create_connection(("1.1.1.1", 53), timeout=0.5)
         vistos["internet"] = True
     except OSError:
         vistos["internet"] = False
     try:
-        socket.create_connection(("pypi.org", 443), timeout=2)
+        socket.create_connection(("pypi.org", 443), timeout=0.5)
         vistos["dns_externo"] = True
     except OSError:
         vistos["dns_externo"] = False
