@@ -1,0 +1,4 @@
+
+# Código que corre en Linux (VM del verificador y contenedores): siempre LF, también en git archive.
+verifier/** text eol=lf
+*.sh text eol=lf
