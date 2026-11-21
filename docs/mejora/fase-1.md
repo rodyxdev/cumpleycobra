@@ -57,23 +57,47 @@ $ CYC_TEST_DATABASE_URL=postgresql://cyc:…@localhost:55432/cyc_test backend/.v
 2. `cyc-freelancer` aceptó la tarea y envió el caso A: aprobado (`stage: llm`) en 10.7 s, y el release pagó con la tx `1d5633bc0083359b366d49783c9103ec3a1f23ba6fbaf64c9132dcd71308524b`.
 3. `docker compose restart api` y luego `GET /tasks/{id}/verdicts`: el veredicto con su transacción sigue ahí. El contrato reporta `Released`. La tabla `tasks` tiene 1 fila y `schema_migrations` tiene `001_inicial`.
 
-## Pendiente de la fase 1 (parte B, infraestructura)
+## Parte B: Cloud SQL y staging (21 de noviembre de 2026, hecho)
 
-Requiere tu visto bueno y va **después de la cumbre**:
+Producción no se tocó: `cumpleycobra-api` sigue con el puente de Cloud Storage.
 
-1. **Cloud SQL** (Postgres 17, `db-f1-micro`, respaldos diarios automáticos y recuperación a un punto en el tiempo).
-2. **Ensayo de migración en un servicio de staging** (`cumpleycobra-api-staging`) conectado a Cloud SQL:
-   - importar el `state.json` actual del bucket;
-   - recorrido con pago;
-   - **restaurar un respaldo** en una instancia temporal, con captura (evidencia del SOW).
-3. **Corte de producción:**
+| Recurso | Configuración |
+| --- | --- |
+| Cloud SQL `cyc-pg` | Postgres 17, Enterprise, `db-f1-micro`, 10 GB SSD con crecimiento automático. Respaldo diario a las 08:00 UTC (se guardan 7) y recuperación a un punto en el tiempo (7 días de bitácora). IP pública **sin redes autorizadas** y `ssl-mode=ENCRYPTED_ONLY`: solo se entra por el conector de Cloud SQL, con IAM y TLS. Base `cyc` y usuario `cyc_api` |
+| Secreto `cyc-database-url` | URL con socket `/cloudsql/<conexión>`; la contraseña se generó al azar y nunca se imprimió |
+| Cuenta `cyc-api` | Se agregó `roles/cloudsql.client` y acceso al secreto |
+| Imagen | `cumpleycobra/api:feb8cd2` (rama `mejora/fase-1`) |
+| Servicio `cumpleycobra-api-staging` | `https://cumpleycobra-api-staging-1017372721585.us-central1.run.app`; `STATE_BACKEND=postgres`, `APP_MODE=demo`, de 0 a 2 instancias, Cloud SQL por conector |
+| Job `cyc-estado` | La misma imagen; monta el bucket de producción **solo lectura** en `/prod` y corre `python -m backend.storage.transfer` (importar, contar o exportar) |
+
+### Salida real
+
+1. **Migraciones:** al arrancar, staging aplicó `001_inicial` en Cloud SQL (`/health` → `{"ok":true}`).
+2. **Importación desde producción:** el job `cyc-estado` dio `tasks: 1, profiles: 0, proposals: 0`, igual que el `state.json` del bucket. En staging, la tarea importada `IOBR3hBqNPWoM6Ko` devuelve su veredicto con la tx `e5284043bdfd…`.
+3. **Recorrido con pago en staging** (tarea `_9Jlc_YIYzlyI4rb`, depósito `5fa5a437b0132d15964f03eedeba6484886b02fa6479b89c81436631eac4c980`):
+   - caso B: rechazado, 4.4 s, envío 1;
+   - caso A: aprobado y pagado, 8.1 s, envío 2, tx `c6e8da3d5fe22935f92bfd022ed022c70cfb3473c13694ebee2f084541597c0a`;
+   - caso A otra vez: `stage: cache`, 1.6 s, no cuenta como envío.
+   - El contrato quedó en `Released`.
+4. **Respaldo y restauración** (evidencia del SOW):
+   - Antes del respaldo, `contar` en `cyc-pg` daba `tasks: 2, profiles: 0, proposals: 0`.
+   - Respaldo a pedido `1795241023879` (`ON_DEMAND`, `SUCCESSFUL`, 06:03 UTC).
+   - Se restauró en la instancia temporal `cyc-pg-restauracion`: operación `RESTORE_VOLUME` en estado `DONE` a las 06:26 UTC.
+   - El job `cyc-verificar-restauracion` contó la copia restaurada: `tasks: 2, profiles: 0, proposals: 0`, igual que el original.
+
+Nota: staging y producción firman con la misma llave de árbitro (el contrato tiene un solo árbitro). Si los dos pagaran en el mismo segundo, uno podría fallar por número de secuencia y se reintentaría. **No usar staging durante la cumbre.**
+
+## Pendiente de la fase 1
+
+1. **Corte de producción** (después de la cumbre, con tu visto bueno):
    - `STATE_BACKEND=postgres` en `cumpleycobra-api`;
    - quitar el volumen de Cloud Storage y `--max-instances=1`;
    - `--min-instances` de vuelta a 0.
-   - Antes del corte, exportar como respaldo.
-4. `api.rodyxdev.com`: necesita tu acceso a Cloudflare.
-5. Alertas de presupuesto en Google Cloud: son de la cuenta de facturación y necesitan tu permiso.
-6. Modo `demo` en el frontend: estados vacíos y sin páginas sin salida, revisado en celular.
+   - Antes del corte: volver a correr el job `cyc-estado` con `--forzar`, para traer el estado más reciente.
+2. `api.rodyxdev.com`: necesita tu acceso a Cloudflare.
+3. Alertas de presupuesto en Google Cloud: son de la cuenta de facturación y necesitan tu permiso.
+4. Modo `demo` en el frontend: estados vacíos y sin páginas sin salida, revisado en celular.
+5. Borrar los recursos temporales del ensayo: la instancia `cyc-pg-restauracion`, el secreto `cyc-database-url-restauracion` y el job `cyc-verificar-restauracion`.
 
 ## Riesgos
 
