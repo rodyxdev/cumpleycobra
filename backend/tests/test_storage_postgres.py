@@ -47,7 +47,8 @@ def test_migraciones_idempotentes(make_store):
     assert pgm.migrate(store.pool) == []  # ya aplicadas por el primer store
     with store.pool.connection() as conn:
         versions = [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
-    assert versions == ["001_inicial"]
+    assert versions == sorted(f.stem for f in pgm.MIGRATIONS_DIR.glob("*.sql"))
+    assert versions[:2] == ["001_inicial", "002_verificador"]
 
 
 def test_guarda_y_relee_conservando_el_orden_de_claves_y_filas(make_store):

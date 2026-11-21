@@ -12,7 +12,7 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import anyio.from_thread
 from fastapi import FastAPI, Header, Request
@@ -24,7 +24,10 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from starlette.concurrency import run_in_threadpool
 from stellar_sdk import StrKey
 
-from . import drafting, gemini, identidad, reputacion
+from . import drafting, ejecucion, gemini, identidad, reputacion
+from .ejecucion import suite as exec_suite
+from .ejecucion.cola import make_queue
+from verifier.contract import Interface
 from .config import (
     GEMINI_ATTEMPT_BUDGET_SECS,
     MAX_DEADLINE_MINUTES,
@@ -85,6 +88,9 @@ class CreateTaskIn(Strict):
     amount: StrictInt = Field(gt=0)
     # 7 días: muy lejos del TTL de 30 días que el contrato extiende en cada escritura.
     deadline_minutes: StrictInt = Field(gt=0, le=MAX_DEADLINE_MINUTES)
+    # Fase 3 (detrás de VERIFIER_ENABLED): verificar ejecutando el código contra una suite oculta.
+    verification: Literal["static", "execution"] = "static"
+    interface: Interface | None = None
 
 
 class AcceptIn(Strict):
@@ -113,6 +119,7 @@ async def lifespan(app: FastAPI):
         app.state.challenges = identidad.PgChallenges(app.state.store.pool)
         stellar_client.RELEASE_LOCK = app.state.store.sync_lock("cyc:release-arbitro")
     app.state.chain = StellarClient(settings)
+    app.state.queue = make_queue(app.state.store)
     app.state.gemini = gemini.make_client(settings)
     log.info("Backend listo (modo %s, estado en %s): %r", mode, storage_backend(), settings)
     try:
@@ -271,6 +278,18 @@ async def create_task(body: CreateTaskIn):
         "allowed_deps": sorted(set(body.allowed_deps)),
         "examples": [e.model_dump() for e in body.examples],
     }
+    execution = body.verification == "execution"
+    if execution:
+        if not ejecucion.enabled():
+            raise err(400, "INVALID_REQUEST", "La verificación por ejecución no está habilitada")
+        if body.interface is None:
+            raise err(400, "INVALID_REQUEST", "Una tarea con verificación por ejecución necesita 'interface'")
+        if any(sym.kind == "asgi_app" for sym in body.interface.symbols):
+            raise err(400, "INVALID_REQUEST", "Por ahora la verificación por ejecución solo acepta funciones y clases")
+        spec["verification"] = "execution"
+        spec["interface"] = body.interface.model_dump(mode="json")
+    elif body.interface is not None:
+        raise err(400, "INVALID_REQUEST", "'interface' solo aplica con verification: 'execution'")
     task_id = secrets.token_urlsafe(12)
     task = {
         "task_id": task_id,
@@ -291,14 +310,25 @@ async def create_task(body: CreateTaskIn):
         "codes": {},
         "release": None,
     }
+    if execution:
+        task["verification"] = "execution"
+        task["suite"] = exec_suite.new_suite_state(spec)
     store().tasks[task_id] = task
     store().save()
-    return {
+    if execution:
+        job = app.state.queue.enqueue("suite", task_id, {"spec": {
+            "profile": "script", "interface": spec["interface"], "allowed_dependencies": spec["allowed_deps"]}})
+        task["suite_job"] = job["id"]
+        store().save()
+    out = {
         "task_id": task_id,
         "rules_hash": task["rules_hash"],
         "client_token": task["client_token"],
         "invite_token": task["invite_token"],
     }
+    if execution:
+        out["suite_status"] = task["suite"]["status"]
+    return out
 
 
 @app.post("/tasks/draft", response_model=drafting.Draft)
@@ -346,6 +376,8 @@ async def get_task(task_id: str):
         "latest_rejected": bool(task.get("latest_code_hash") and not task["codes"][task["latest_code_hash"]].get("approved")),
         # Calificación pública del cliente (también aparece en el perfil del programador).
         "rating": task.get("rating"),
+        "verification": task.get("verification", "static"),
+        "suite": exec_suite.public_plan(task.get("suite")),
     }
 
 
@@ -356,6 +388,7 @@ async def accept(task_id: str, body: AcceptIn):
     async with store().lock(task_id):
         if not token_ok(task["invite_token"], body.invite_token):
             raise err(403, "INVALID_TOKEN", "La invitación no es válida para esta tarea")
+        suite_not_ready(task)
         bound = task["freelancer_address"]
         if bound and bound != body.freelancer_address:
             raise err(409, "TASK_TAKEN", "Esta tarea ya la aceptó otro programador")
@@ -373,6 +406,13 @@ async def accept(task_id: str, body: AcceptIn):
             task["accepted_at"] = int(time.time())
             store().save()
         return {"freelancer_token": task["freelancer_token"]}
+
+
+def suite_not_ready(task: dict) -> None:
+    """Una tarea por ejecución solo se acepta con la suite oculta lista: el programador acepta
+    los criterios y también el plan de tests que lo va a juzgar."""
+    if task.get("verification") == "execution" and task["suite"]["status"] != "lista":
+        raise err(409, "SUITE_NOT_READY", "La suite oculta de esta tarea todavía no está lista")
 
 
 CASOS_DIR = Path(__file__).resolve().parent / "casos"
@@ -672,6 +712,8 @@ def comparison_placeholder(spec: dict, why: str) -> list[str]:
 async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(default=None)):
     task = get_task_or_404(body.task_id)
     spec = task["spec"]
+    if task.get("verification") == "execution":
+        raise err(409, "EXECUTION_TASK", "Esta tarea se verifica ejecutando el código: usa POST /tasks/{id}/verificaciones")
     async with store().lock(body.task_id):
         # --- Guardias ----------------------------------------------------------
         if not task["freelancer_address"]:
@@ -1060,3 +1102,12 @@ async def reject_proposal(proposal_id: str, authorization: str | None = Header(d
             proposal["estado"] = "rechazada"
             store().save()
         return public_proposal(proposal)
+
+
+# ---------------------------------------------------------------------------
+# Verificación por ejecución (fase 3): rutas del trabajador y de las entregas.
+# Detrás de VERIFIER_ENABLED; sin la variable responden 404.
+# ---------------------------------------------------------------------------
+from .ejecucion.rutas import router as verifier_router  # noqa: E402
+
+app.include_router(verifier_router)

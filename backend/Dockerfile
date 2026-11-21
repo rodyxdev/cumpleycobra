@@ -15,6 +15,7 @@ WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt
 COPY backend backend
+COPY verifier verifier
 
 # Railway inyecta PORT. El middleware lee X-Real-IP, que su proxy sobrescribe con la IP del cliente.
 # No confiar en todas las fuentes de cabeceras reenviadas de uvicorn.
