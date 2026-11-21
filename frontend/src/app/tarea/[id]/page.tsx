@@ -45,9 +45,10 @@ export default function TareaPage({
   return (
     <div className="space-y-6">
       <div className="page-heading">
-        <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Vista del programador</h1>
+        <span className="justify-self-start rounded-full bg-secondary px-3 py-1 text-xs font-bold tracking-[0.06em] text-primary uppercase">Vista del programador</span>
+        <h1 className="line-clamp-2 text-[clamp(1.4rem,2.6vw,1.9rem)]">{task.description}</h1>
         <p className="text-base text-muted-foreground">
-          Tarea {id}. Estos son los criterios que el motor va a verificar; el monto es el que está en el contrato.
+          <span className="font-mono text-sm">Tarea {id}</span> · Estos son los criterios que el motor va a verificar; el monto es el que está en el contrato.
         </p>
       </div>
       <StatusCard task={task} secondsLeft={secondsLeft} />
@@ -217,11 +218,11 @@ function SubmitPanel({
           <div className="space-y-2">
             <Label htmlFor="video-demo">Enlace de Google Drive al video demo (opcional)</Label>
             <Input id="video-demo" type="url" maxLength={1000} value={video} disabled={busy} onChange={(e) => setVideo(e.target.value)} placeholder="https://drive.google.com/file/d/…/view" />
-            <p className="text-xs text-muted-foreground">Compártelo como &apos;cualquier persona con el enlace&apos; y que dure máximo 3 minutos. El video no condiciona un pago aprobado por el motor.</p>
+            <p className="text-xs text-muted-foreground">Compártelo como &apos;cualquier persona con el enlace&apos; y que dure máximo 3 minutos. Es tu prueba de confianza para el cliente; no condiciona un pago aprobado por el motor.</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={send} disabled={busy || !!blocked || !code.trim()} data-testid="enviar">
-              {busy ? "Enviando…" : "Enviar"}
+            <Button variant="success" size="lg" onClick={send} disabled={busy || !!blocked || !code.trim()} data-testid="enviar">
+              {busy ? "Enviando…" : "Enviar al motor"}
             </Button>
             {blocked && <span className="text-sm text-muted-foreground">{blocked}</span>}
           </div>

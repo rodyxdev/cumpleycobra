@@ -9,7 +9,13 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-dm-sans);
   --font-mono: var(--font-jetbrains-mono);
-  --font-heading: var(--font-dm-sans);
+  --font-heading: var(--font-jakarta);
+  --color-success: var(--success);
+  --color-success-strong: var(--success-strong);
+  --color-success-soft: var(--success-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-navy-deep: var(--primary-strong);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,26 +55,36 @@
 }
 
 
+/* Identidad del logo: marino #0C427C y verde #109850. El verde de marca sirve para rellenos y
+   marcas grandes; para texto o botones con texto blanco se usa --success-strong (contraste AA). */
 :root {
-  --background: #F5F4EF;
-  --foreground: #15181F;
-  --card: #FFFEFB;
-  --card-foreground: #15181F;
-  --popover: #FFFEFB;
-  --popover-foreground: #15181F;
-  --primary: #2A5FC7;
+  --background: #F7F8FA;
+  --foreground: #0F1B2D;
+  --card: #FFFFFF;
+  --card-foreground: #0F1B2D;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F1B2D;
+  --primary: #0C427C;
+  --primary-strong: #082E57;
   --primary-foreground: #FFFFFF;
-  --secondary: #E9EEF8;
-  --secondary-foreground: #234FA6;
-  --muted: #ECEBE5;
-  --muted-foreground: #555C67;
-  --accent: #E9EEF8;
-  --accent-foreground: #234FA6;
-  --destructive: #804710;
-  --border: #DADBD5;
-  --input: #8B9199;
-  --ring: #2A5FC7;
+  --secondary: #E8EFF7;
+  --secondary-foreground: #0C427C;
+  --muted: #EEF1F5;
+  --muted-foreground: #4A5568;
+  --accent: #E8EFF7;
+  --accent-foreground: #0C427C;
+  --destructive: #B42318;
+  --border: #DDE3EA;
+  --input: #8A94A3;
+  --ring: #0C427C;
   --radius: 0.75rem;
+  --success: #109850;
+  --success-strong: #0B7A40;
+  --success-deep: #096635;
+  --success-soft: #E7F5EC;
+  --danger: #B42318;
+  --danger-soft: #FDECEA;
+  --hero-accent: #5BD68A;
   --alert: #E8963A;
   --alert-background: #FFF1DF;
   --alert-foreground: #75420F;
@@ -86,22 +102,26 @@
   * { @apply border-border outline-ring/50; }
   html { @apply font-sans; color-scheme: light; }
   body { @apply bg-background text-foreground; font-size: 17px; line-height: 1.6; }
-  h1, h2, h3 { text-wrap: balance; }
+  h1, h2, h3 { text-wrap: balance; font-family: var(--font-heading); }
   button, input, textarea, select { font: inherit; }
   button, a, summary { -webkit-tap-highlight-color: transparent; }
   a, button, summary, input, textarea { scroll-margin-block: 2rem; }
   summary { cursor: pointer; }
   summary:focus-visible, a:focus-visible { outline: 2px solid var(--ring); outline-offset: 5px; border-radius: 3px; }
-  ::selection { background: #D8E4FC; color: #15181F; }
+  ::selection { background: #CFE0F3; color: #0F1B2D; }
 }
 
 @layer components {
   .eyebrow { font-size: .8125rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); }
   .page-heading { display: grid; gap: .6rem; padding-bottom: .5rem; }
-  .page-heading h1 { font-size: clamp(1.875rem, 4vw, 2.5rem); line-height: 1.15; font-weight: 600; letter-spacing: -.045em; }
+  .page-heading h1 { font-size: clamp(1.875rem, 4vw, 2.5rem); line-height: 1.15; font-weight: 800; letter-spacing: -.03em; color: var(--primary); }
+  .brand-heading { font-family: var(--font-heading); font-weight: 800; letter-spacing: -.03em; }
+  .surface { border: 1px solid var(--border); border-radius: 1.25rem; background: var(--card); }
   .page-heading p { max-width: 52rem; font-size: 1rem; line-height: 1.65; }
   .alert-panel { border: 1px solid var(--alert); border-left-width: 4px; border-radius: .75rem; background: var(--alert-background); color: var(--alert-foreground); padding: 1rem 1.25rem; }
-  .money-prominent > span > span:first-child { font-size: clamp(1.625rem, 3vw, 2rem); line-height: 1.25; letter-spacing: -.04em; font-weight: 600; }
+  .money-prominent > span > span:first-child { font-family: var(--font-heading); font-size: clamp(1.625rem, 3vw, 2rem); line-height: 1.25; letter-spacing: -.03em; font-weight: 800; color: var(--primary); }
+  .money-hero > span > span:first-child { font-family: var(--font-heading); font-size: clamp(2.25rem, 4.5vw, 3.25rem); line-height: 1.05; letter-spacing: -.03em; font-weight: 800; color: var(--primary); }
+  .money-hero > span { gap: .4rem; }
   .money-prominent > span { gap: .3rem; }
   .money-prominent > span > span:last-child { font-size: .875rem; }
   .analysis-disclosure { border: 1px solid var(--border); border-radius: .875rem; background: var(--card); overflow: hidden; }
