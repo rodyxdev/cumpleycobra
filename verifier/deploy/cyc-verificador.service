@@ -1,0 +1,18 @@
+[Unit]
+Description=Trabajador del verificador de Cumple&Cobra (fase 3)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+EnvironmentFile=/etc/cyc-verificador.env
+WorkingDirectory=/opt/cyc
+ExecStart=/opt/cyc/.venv/bin/python -m verifier.worker
+Restart=always
+RestartSec=5
+# Root solo para hablar con Docker; el código ajeno nunca corre aquí, sino en contenedores runsc.
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
