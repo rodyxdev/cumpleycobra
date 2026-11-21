@@ -165,10 +165,7 @@ def test_retos_sep10_compartidos_y_de_un_solo_uso(make_store, monkeypatch):
 
 
 def test_importar_y_exportar_state_json_ida_y_vuelta(make_store, tmp_path):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("estado_postgres", "scripts/estado_postgres.py")
-    script = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(script)
+    from backend.storage import transfer as script
     original = {"version": 1,
                 "tasks": {"t2": {"spec": {"criteria": ["b", "a"]}, "codes": {"h2": {}, "h1": {"approved": True}}},
                           "t1": {"amount": 10_000_000, "nota": "ñ ✓ \u0000 fin"}},

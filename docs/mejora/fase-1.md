@@ -11,7 +11,7 @@ Fecha: 21 de noviembre de 2026. Rama `mejora/fase-1`. **No se desplegó:** la cu
 | Retos SEP-10 en una tabla | `identidad.PgChallenges` (y `Challenges` separado en métodos de almacenamiento) |
 | Sesión de documentos por petición | `StoreSessionMiddleware` en `backend/main.py` |
 | `APP_MODE` (`local`, `demo`, `live`) | `backend/config.py` |
-| Importar y exportar `state.json` ↔ Postgres | `scripts/estado_postgres.py` |
+| Importar y exportar `state.json` ↔ Postgres | `backend/storage/transfer.py` (`python -m backend.storage.transfer`) |
 | Hashes iguales a v2 | `backend/hashing.py`, `backend/tests/test_hashing_v2.py` |
 | Un solo comando | `compose.yaml` (Postgres + API + frontend), `Makefile` |
 | Tests contra Postgres real | `backend/tests/test_storage_postgres.py`, `backend/tests/conftest.py` (`CYC_TEST_DATABASE_URL`) |

@@ -34,7 +34,7 @@ cumpleycobra/
   backend/                  # FastAPI (Python)
   frontend/                 # Next.js
   backend/storage/          # PostgresStore y migraciones SQL (solo suman)
-  scripts/                  # preparación de cuentas, demo reproducible, estado_postgres.py
+  scripts/                  # preparación de cuentas y demo reproducible
   docs/fases/               # bitácora del hackathon (fases 0 a 5)
   docs/mejora/              # plan de mejora y un reporte por fase (mejora-N)
   compose.yaml, Makefile    # Postgres + API + frontend con un solo comando
@@ -149,7 +149,7 @@ Guarda: tareas (versión final, monto, plazo, cliente, `rules_hash`), tokens, pr
   - `lock(clave)` = `asyncio.Lock` local + `pg_advisory_lock` en una conexión propia. Al entrar, los documentos ya leídos se recargan **en su lugar** (mismo dict), así que lo que se lea antes del candado queda fresco dentro de él.
   - El release del árbitro (`stellar_client.RELEASE_LOCK`) usa el candado `cyc:release-arbitro`, y los retos SEP-10 viven en `sep10_challenges` (`identidad.PgChallenges`). Con eso, la API puede correr con varias instancias.
   - Migraciones en `backend/storage/migrations/NNN_*.sql`: se aplican solas al arrancar, en orden y bajo candado. **Solo suman** (tablas o columnas nuevas); nunca rompen la versión anterior.
-- `scripts/estado_postgres.py importar|exportar` pasa el estado entre los dos formatos (exportar es el camino de regreso a JSON).
+- `python -m backend.storage.transfer importar|exportar|contar` pasa el estado entre los dos formatos (exportar es el camino de regreso a JSON).
 - Sigue en memoria por instancia (aceptable, documentado): el límite de peticiones por IP y las cuotas diarias, y la caché de lecturas del contrato.
 - `state.json` y cualquier exportación van en `.gitignore`: tienen tokens.
 

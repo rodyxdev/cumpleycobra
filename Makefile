@@ -1,7 +1,7 @@
 # Atajos para Linux, macOS y la nube. En Windows, los mismos comandos están en
 # docs/mejora/fase-1.md (sección «Comandos») para PowerShell.
 PY ?= backend/.venv/bin/python
-PG_TEST_URL ?= postgresql://cyc:cyc_local@localhost:55433/cyc
+PG_TEST_URL ?= postgresql://cyc:cyc_local@127.0.0.1:55433/cyc
 
 .PHONY: up down logs test test-pg contract-test importar exportar
 
@@ -24,7 +24,7 @@ contract-test:
 	cargo test -p cumpleycobra
 
 importar:      ## make importar ARCHIVO=backend/state.json
-	DATABASE_URL=$(PG_TEST_URL) $(PY) scripts/estado_postgres.py importar $(ARCHIVO)
+	DATABASE_URL=$(PG_TEST_URL) $(PY) -m backend.storage.transfer importar $(ARCHIVO)
 
 exportar:      ## make exportar ARCHIVO=respaldo.json
-	DATABASE_URL=$(PG_TEST_URL) $(PY) scripts/estado_postgres.py exportar $(ARCHIVO)
+	DATABASE_URL=$(PG_TEST_URL) $(PY) -m backend.storage.transfer exportar $(ARCHIVO)

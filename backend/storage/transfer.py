@@ -1,8 +1,9 @@
 """Pasa el estado entre state.json y Postgres, en los dos sentidos.
 
-Uso (desde la raíz, con DATABASE_URL definida):
-  backend/.venv/Scripts/python scripts/estado_postgres.py importar backend/state.json
-  backend/.venv/Scripts/python scripts/estado_postgres.py exportar respaldo-state.json
+Uso (desde la raíz, con DATABASE_URL definida; también dentro de la imagen de la API):
+  python -m backend.storage.transfer importar backend/state.json
+  python -m backend.storage.transfer exportar respaldo-state.json
+  python -m backend.storage.transfer contar
 
 `importar` se niega si la base ya tiene datos (usa --forzar para sobrescribir documentos con el
 mismo id). `exportar` escribe el mismo formato que StateStore: es el camino de regreso a JSON.
@@ -13,13 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from backend.storage.postgres import TABLES, PostgresStore  # noqa: E402
+from backend.storage.postgres import TABLES, PostgresStore
 
 
 def counts(store: PostgresStore) -> dict[str, int]:
@@ -64,6 +61,7 @@ def main(argv: list[str] | None = None) -> None:
     imp.add_argument("--forzar", action="store_true")
     exp = sub.add_parser("exportar")
     exp.add_argument("archivo", type=Path)
+    sub.add_parser("contar")
     args = parser.parse_args(argv)
 
     url = os.environ.get("DATABASE_URL", "").strip()
@@ -71,8 +69,12 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("Falta DATABASE_URL")
     store = PostgresStore(url, max_size=2)
     try:
-        result = (importar(store, args.archivo, args.forzar) if args.accion == "importar"
-                  else exportar(store, args.archivo))
+        if args.accion == "importar":
+            result = importar(store, args.archivo, args.forzar)
+        elif args.accion == "exportar":
+            result = exportar(store, args.archivo)
+        else:
+            result = counts(store)
     finally:
         store.close()
     print(", ".join(f"{t}: {n}" for t, n in result.items()))
