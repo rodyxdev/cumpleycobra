@@ -41,7 +41,7 @@ Con 3 días no da para meter el motor de ejecución de v2 en v1 sin arriesgar la
 - **IP del cliente:** `limites.py` lee `X-Real-IP`, que Cloud Run no envía. Sin cambios, todos los visitantes compartirían un solo límite por minuto.
   - Se hace configurable (`CLIENT_IP_HEADER` y número de proxies de confianza en `X-Forwarded-For`).
   - Después del despliegue se comprueba con una petición que trae un `X-Forwarded-For` falso.
-- **URL:** la de `run.app` por ahora. `api.rodyxdev.com` con Cloudflare va en la fase 1.
+- **URL:** la de `run.app`. El dominio propio de la API espera al dominio del producto (ver «Decisiones de hosting»).
 - **Frontend y Pollar:** cambiar `NEXT_PUBLIC_API_URL` en Vercel y volver a desplegar; `FRONTEND_ORIGIN` y los dominios SEP-10 quedan apuntando al dominio nuevo.
 
 | Día | Trabajo | Listo cuando |
@@ -95,7 +95,7 @@ Sale del logo y reemplaza la paleta de septiembre (azul `#2A5FC7`), que no es la
 ## Arquitectura objetivo
 
 ```
-Vercel (Next.js, v1)  ──HTTPS──>  Cloudflare (api.rodyxdev.com, WAF, límites)
+Vercel (Next.js, v1)  ──HTTPS──>  Cloudflare (dominio del producto, WAF, límites; mientras tanto, run.app directo)
                                         │
                                   Cloud Run: API FastAPI (v1)
                                   · árbitro: firma release (llave en Secret Manager)
@@ -181,7 +181,7 @@ Si se acaban los créditos, lo primero que se cambia es la base de datos: Neon g
 
 | Fase | Qué incluye |
 | --- | --- |
-| 1. Base de producción | Reescribir CLAUDE.md; `APP_MODE` (`local`, `demo`, `live`) y flags; `PostgresStore` con la misma interfaz, migraciones y script de importación desde `state.json`; candados y retos en Postgres (se quita el volumen de Cloud Storage y `max-instances=1`); `docker compose` y `Makefile`; Cloud SQL, alertas de presupuesto y una restauración de respaldo probada; `api.rodyxdev.com`; test cruzado de hashes; modo demo para celular y estados vacíos |
+| 1. Base de producción | Reescribir CLAUDE.md; `APP_MODE` (`local`, `demo`, `live`) y flags; `PostgresStore` con la misma interfaz, migraciones y script de importación desde `state.json`; candados y retos en Postgres (se quita el volumen de Cloud Storage y `max-instances=1`); `docker compose` y `Makefile`; Cloud SQL, alertas de presupuesto y una restauración de respaldo probada; test cruzado de hashes; modo demo para celular y estados vacíos |
 | 3. Verificador | `verifier/` con `sandbox/`, `blackbox/`, `verification/`, `web/` e `ingest/` de v2 (sin video de Playwright ni GitHub App); cola en Postgres; juez en la API; adaptador de modelo; VM sin credenciales con gVisor y proxy; capturas en Cloud Storage; corpus de 60 casos; elección del modelo; prueba de escape; progreso en vivo en la UI. Detrás de `VERIFIER_ENABLED` |
 | 2. Cuentas reales | Cookies `HttpOnly`; roles y vistas por rol de v2 (`views.py`, por lista blanca) sobre las sesiones SEP-10 de v1; una tarea real de punta a punta |
 | 4. Piloto | 3 tareas (2 de personas externas) y el informe público |
@@ -194,3 +194,5 @@ Si se acaban los créditos, lo primero que se cambia es la base de datos: Neon g
 ## Decisiones de hosting
 
 - **Frontend en Vercel Hobby por ahora** (decisión del 21 de noviembre). El plan Hobby es para uso no comercial: antes de cobrar la primera comisión real se decide entre Vercel Pro y Cloud Run (fase 4).
+- **API en la URL de `run.app` por ahora** (decisión del 21 de noviembre). `api.rodyxdev.com` no se usa: es de un proyecto personal de Rodrigo. El dominio propio llega con un dominio del producto (p. ej. `app.` y `api.` bajo el mismo dominio), para que se vaya con el proyecto si cambia de dueño y para mover API, frontend, CORS y SEP-10 una sola vez. Entonces se pone Cloudflare delante (WAF y límites globales).
+  - Si hiciera falta Cloudflare antes, un subdominio de un solo nivel de `rodyxdev.com` (p. ej. `cyc-api.rodyxdev.com`): el certificado gratis de Cloudflare cubre `*.rodyxdev.com`, no `*.cumpleycobra.rodyxdev.com`.
