@@ -101,7 +101,7 @@ Nota: staging y producción firman con la misma llave de árbitro (el contrato t
 
 ## Parte C: modo demo del frontend (21 de noviembre de 2026)
 
-Sin desplegar: queda en la rama hasta tu visto bueno, y nunca durante la cumbre.
+Desplegado en Vercel el 21 de noviembre de 2026, con el visto bueno de Rodrigo: copia limpia de `56ee430` (`git archive HEAD frontend`, sin `.env` ni estado), `vercel deploy --prod` → `https://cumpleycobra-3i59nyco7-rodyx-dev.vercel.app`, alias `cumpleycobra.vercel.app`. El primer intento respondió `Not authorized` y el reintento pasó sin cambiar nada. Revisado en producción: aviso de testnet con enlace al faucet de Circle, 404 propio, tarea inexistente con «Esta tarea no existe» (respuesta real del backend en Cloud Run), lista de programadores cargada y portada sin desbordar a 375 px. Para volver atrás: `vercel promote https://cumpleycobra-l5qvy4vlg-rodyx-dev.vercel.app` (el despliegue anterior).
 
 | Pieza | Archivos |
 | --- | --- |
