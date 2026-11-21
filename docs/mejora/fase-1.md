@@ -94,8 +94,8 @@ Nota: staging y producción firman con la misma llave de árbitro (el contrato t
    - quitar el volumen de Cloud Storage y `--max-instances=1`;
    - `--min-instances` de vuelta a 0.
    - Antes del corte: volver a correr el job `cyc-estado` con `--forzar`, para traer el estado más reciente.
-2. `api.rodyxdev.com`: necesita tu acceso a Cloudflare.
-3. Alertas de presupuesto en Google Cloud: son de la cuenta de facturación y necesitan tu permiso.
+2. `api.rodyxdev.com`: la zona `rodyxdev.com` está activa en Cloudflare (plan gratis). La sesión de `wrangler` solo trae `zone:read` y no puede leer ni crear registros DNS (`Authentication error`), así que hace falta un token con «Zone → DNS → Edit» solo para `rodyxdev.com`, o crear el registro desde el panel.
+3. Alertas de presupuesto en Google Cloud: son de la cuenta de facturación. En el proyecto no están activas las APIs `cloudbilling.googleapis.com` ni `billingbudgets.googleapis.com`; hay que activarlas (gratis) con tu permiso y crear el presupuesto.
 4. ~~Modo `demo` en el frontend~~: hecho el 21 de noviembre (ver «Parte C»).
 5. ~~Borrar los recursos temporales del ensayo~~: la instancia `cyc-pg-restauracion`, el secreto `cyc-database-url-restauracion` y el job `cyc-verificar-restauracion` se borraron el 21 de noviembre.
 

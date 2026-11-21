@@ -10,6 +10,13 @@ Fecha: 20 de noviembre de 2026. Sustituye al documento «plan de mejora por fase
 - **Fuera:** los videos de v2 (grabación de Playwright). El perfil web solo toma capturas.
 - **Se queda:** el enlace de Drive al video demo del programador. Es una prueba de confianza del freelancer hacia el cliente.
 - Sin presupuesto de horas: se avanza todo lo que se pueda, en el orden de las fases.
+- **La cumbre ya no marca el ritmo** (decisión del 21 de noviembre). Se avanza fase tras fase, sin fecha límite; la demo en línea solo debe seguir funcionando.
+- **Punto de control entre fases.** Ninguna fase empieza sin que la anterior esté cerrada, y cada cierre deja un punto al que se puede volver:
+  1. Cada fase vive en su rama `mejora/fase-N`, que sale de `main` en el tag de la fase anterior.
+  2. Para cerrar: tests del backend (con `state.json` y con Postgres), tests y build del frontend, y `cargo test` si se tocó el contrato, todo en verde; reporte `docs/mejora/fase-N.md`.
+  3. Fusión en `main` con `--no-ff` (un solo commit de fusión que se puede revertir) y tag anotado `mejora-N`, ambos subidos a GitHub.
+  4. El reporte anota cómo volver: la revisión de Cloud Run y el despliegue de Vercel anteriores, y el respaldo del estado si la fase lo migró.
+  5. Una fase a medias nunca llega a `main`: si se abandona, `main` sigue en el último tag y la rama queda como referencia.
 - Cada fase cierra con un tag (`mejora-0`, `mejora-1`…) y un reporte en `docs/mejora/`. Así no se mezcla con `docs/fases/`, que es la bitácora del hackathon.
 - El trabajo nuevo queda detrás de *feature flags* apagados por defecto, y las migraciones solo agregan.
 
@@ -170,7 +177,7 @@ Lo medido en ambos proyectos (tokens reales). Los precios vienen de agregadores,
 
 Si se acaban los créditos, lo primero que se cambia es la base de datos: Neon gratis en lugar de Cloud SQL. Son unos $12 menos y basta con cambiar la URL.
 
-## Fases después de la cumbre
+## Fases siguientes
 
 | Fase | Qué incluye |
 | --- | --- |
@@ -182,4 +189,8 @@ Si se acaban los créditos, lo primero que se cambia es la base de datos: Neon g
 ## Pendientes tuyos
 
 - Confirmar los precios en las consolas oficiales (Vertex AI y Meta) antes del informe público.
-- Revisar cuándo vencen los créditos de Google.
+- ~~Revisar cuándo vencen los créditos de Google~~: los vigentes vencen entre el 7 de agosto y el 7 de noviembre de 2027 (revisado el 21 de noviembre de 2026). Volver a revisar en julio de 2027.
+
+## Decisiones de hosting
+
+- **Frontend en Vercel Hobby por ahora** (decisión del 21 de noviembre). El plan Hobby es para uso no comercial: antes de cobrar la primera comisión real se decide entre Vercel Pro y Cloud Run (fase 4).
