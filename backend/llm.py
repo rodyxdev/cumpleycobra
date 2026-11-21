@@ -193,7 +193,8 @@ async def structured(role: Role, system: str, turns: list[dict], output: type[T]
             raise
         except Exception as exc:  # noqa: BLE001 - se clasifica abajo
             is_transient = _gemini_transient(exc) if provider == "gemini" else _muse_transient(exc)
-            log.warning("LLM %s/%s: intento %d falló (%s)", role, provider, attempt, type(exc).__name__)
+            log.warning("LLM %s/%s: intento %d falló (%s: %s)", role, provider, attempt, type(exc).__name__,
+                        str(exc)[:200])
             if is_transient and transient < len(BACKOFF_SECS):
                 await asyncio.sleep(BACKOFF_SECS[transient])
                 transient += 1
