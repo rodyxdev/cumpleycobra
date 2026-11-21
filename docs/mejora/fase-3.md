@@ -47,8 +47,8 @@ La VM solo tiene el token de la cola (`VERIFIER_QUEUE_TOKEN`). Con él puede ped
 | D | Juez y regla final en la API; veredicto v2 y `release` | Hecha |
 | E | Frontend: crear tarea con ejecución, entregar (pegar, ZIP, repo), progreso en vivo | Hecha (falta revisarla en el navegador con Pollar) |
 | F | Perfil web (Playwright, capturas en Cloud Storage) | |
-| G | VM Spot sin credenciales con gVisor y proxy (pide permiso antes de crearla) | Scripts listos y probados en Docker local; sin crear |
-| H | Corpus de 60 casos, elección del modelo, prueba de escape | Prueba de escape local hecha; faltan el corpus y el modelo |
+| G | VM Spot sin credenciales con gVisor y proxy | Hecha en staging (21 de noviembre de 2026) |
+| H | Corpus de 60 casos, elección del modelo, prueba de escape | Prueba de escape hecha con gVisor; faltan el corpus y el modelo |
 
 ## Parte A: núcleo del verificador
 
@@ -206,3 +206,96 @@ Costo: la VM Spot con 30 GB es de unos 6 a 10 USD al mes si se apaga sin trabajo
 - **La suite depende del modelo.** Sin la referencia hubo dos fallos en tres corridas; con la referencia, la tercera corrida aprobó y pagó. Hace falta el corpus para medirlo en serio.
 - **El juez corre dentro de la petición del trabajador.** Si el modelo tarda más que el plazo del trabajo (180 s), el trabajo vuelve a la cola, pero el veredicto ya quedó en la caché de la tarea, así que el reintento responde desde la caché.
 - **El paso de build sigue ejecutando código de dependencias permitidas** (sin red, en gVisor). Un paquete permitido comprometido es un riesgo de cadena de suministro que esto no cubre.
+
+## Parte G aplicada: staging con la VM (21 de noviembre de 2026)
+
+Con tu permiso para staging. Producción (`cumpleycobra-api`) no se tocó.
+
+| Recurso | Estado |
+| --- | --- |
+| Secreto `cyc-verifier-queue-token` | Valor aleatorio, nunca impreso; lo lee la cuenta `cyc-api` |
+| `cumpleycobra-api-staging` | Imagen `api:23ae909` (rama `mejora/fase-3`), revisión `00003-jlk`, `VERIFIER_ENABLED=true`, token desde Secret Manager. La migración `002_verificador` se aplicó sola en Cloud SQL (base `cyc`) |
+| Firewall | `cyc-verificador-iap-ssh` (22 solo desde IAP), `cyc-verificador-deny-ingress`, `cyc-verificador-allow-443`, `cyc-verificador-deny-egress` |
+| VM `cyc-verificador` | `us-central1-a`, e2-standard-2 Spot, Debian 12, **sin cuenta de servicio ni scopes**, Shielded VM, IP externa sin entrada abierta. El propio agente de Google lo confirma al arrancar: «metadata: … service-accounts/default/token … not defined» |
+
+### Lo que apareció al desplegar (y quedó corregido en el código)
+
+| Problema | Causa | Arreglo |
+| --- | --- | --- |
+| La API no alcanzaba al contenedor de la entrega | Bajo gVisor el DNS interno de Docker no resuelve alias (`sut`): el stack de red de runsc no usa las reglas iptables del contenedor. Confirmado con dos contenedores runsc: por alias, «name resolution»; por IP, OK | La caja negra pasa `CC_SUT_URL` con la IP del contenedor; el build obtiene la IP del proxy con `BUILD_PROXY_CONTAINER` |
+| El proxy respondía 500 a `CONNECT pypi.org` | En GCE el DNS es el servidor de metadatos, bloqueado para los contenedores | Excepción solo para la red del proxy (`172.30.250.0/24`) y solo al puerto 53 del servidor de metadatos. El HTTP de metadatos sigue bloqueado para todos |
+| No se construía la imagen del proxy | `apt` de Debian por HTTP (80), y el firewall solo deja salir al 443; además, el DNS de los contenedores | La imagen se construye con la red del host y `apt` usa HTTPS con los certificados de la VM |
+| `extractall(filter=…)` y `rmtree(onexc=…)` no existen | Debian 12 trae Python 3.11.2 | Extracción segura propia y `onerror` en 3.11 (con test) |
+| El build no leía `requirements.txt` | `mkdtemp` crea 0700 y el contenedor corre como `nobody` | El directorio pasa a 0755 |
+| Docker no veía los temporales del trabajador | `PrivateTmp=true` en systemd | `TMPDIR=/var/lib/cyc/tmp` |
+| Una falla de infraestructura dejaba la suite en `validando` para siempre | `/fail` no reintentaba | Una suite fallida se reencola (hasta 3 trabajos) y reanuda la validación sin pedirle tests otra vez al modelo (2 tests nuevos). La tarea `o7g2IZemWSoE132E` de staging quedó trabada de antes del arreglo |
+| `startup.sh` con CRLF | `core.autocrlf` en `git archive` | `.gitattributes` con `eol=lf` |
+| `gpg --dearmor` pedía confirmación en el segundo arranque | El archivo ya existía | `--batch --yes` |
+
+### Salida real en la VM, con gVisor (`CYC_TEST_RUNTIME=runsc`)
+
+```
+$ sudo env CYC_TEST_RUNTIME=runsc ... python -m pytest verifier/tests -q -m "not network"
+83 passed, 5 deselected in 57.30s
+```
+
+Prueba de escape bajo gVisor (el kernel que ve la entrega es el de gVisor, no el de la VM):
+
+```
+"metadatos_gce": "bloqueado (TimeoutError)",
+"internet_ip": "bloqueado (TimeoutError)",
+"dns_externo": "bloqueado (gaierror)",
+"api_host_docker": "bloqueado (gaierror)",
+"puerta_de_enlace": "bloqueado (TimeoutError)",
+"escribir_workspace": "bloqueado (PermissionError)",
+"escribir_raiz": "bloqueado (PermissionError)",
+"escribir_usr": "bloqueado (PermissionError)",
+"suite_oculta": "no existe",
+"canal_confiable": "no existe",
+"salida_junit": "no existe",
+"secretos_en_entorno": [],
+"usuario": 65534,
+"kernel_visto": "4.19.0-gvisor",
+"bomba_de_procesos": "bloqueado tras 109 (OSError)"
+```
+
+Desde la red del build (`cc-build`, runsc):
+
+```
+directo a pypi por IP: bloqueado
+pypi por el proxy: PERMITIDO
+github por el proxy: rechazado
+metadatos por el proxy: rechazado
+build exit 0 | Successfully installed six-1.17.0
+squid: CONNECT pypi.org:443 y files.pythonhosted.org:443, nada más
+```
+
+### Recorrido real: staging + VM + testnet
+
+`CYC_API_URL=<staging> python scripts/verificador_testnet.py --casos b_calidad.py a_feliz.py`
+
+```
+tarea xBj3Nccly4GvACgP · rules_hash 10ec6d0885a7e6c049e4301effcb5843d927bb384aa0520af40e268af79860c7
+suite lista en 54.0 s · suite_hash 81eb336da557f7c7ee70d081ce6bcdf1d4ad5dad7ee96825632c453309a98128
+depósito 32006c96643b6f29eedafd1e617975478b52d9ed6edbd6bc8bd8d47bd4413e6d
+b_calidad.py: done en 90.1 s (ingesta → higiene → tests → juez)   approved=False stage=tests
+a_feliz.py: done en 19.3 s (ingesta → higiene → tests → juez)     approved=True stage=final
+  tx 02f1764813e942785ef1017243c8b033e7e8ca4a31dff3440c10380e4430c22f
+on-chain: Released · programador GDOEMEMACZEM77IREHP6UTOMOJ5MZAKGA4KVPG2CPIKMGT5R5WDPHPNK
+```
+
+### Cómo volver atrás
+
+- **API de staging:**
+  ```powershell
+  gcloud run services update-traffic cumpleycobra-api-staging --region us-central1 --to-revisions cumpleycobra-api-staging-00001-fnl=100
+  ```
+  También basta `VERIFIER_ENABLED=false`, que apaga todas las rutas nuevas.
+- **VM:** `gcloud compute instances stop cyc-verificador --zone us-central1-a` (detenerla no cuesta CPU) o `delete`.
+- **Firewall:** borrar las 4 reglas `cyc-verificador-*`.
+- **Secreto:** `gcloud secrets delete cyc-verifier-queue-token`.
+- **Migración `002`:** solo agrega tablas; la versión anterior las ignora.
+
+### Pendiente de esta parte
+
+- **Apagar la VM sola tras 15 minutos sin trabajos, y encenderla desde la API al encolar** (plan). Hoy queda prendida: ≈0.03 USD por hora.
