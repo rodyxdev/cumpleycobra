@@ -47,8 +47,8 @@ La VM solo tiene el token de la cola (`VERIFIER_QUEUE_TOKEN`). Con él puede ped
 | D | Juez y regla final en la API; veredicto v2 y `release` | Hecha |
 | E | Frontend: crear tarea con ejecución, entregar (pegar, ZIP, repo), progreso en vivo | Hecha (falta revisarla en el navegador con Pollar) |
 | F | Perfil web (Playwright, capturas en Cloud Storage) | |
-| G | VM Spot sin credenciales con gVisor y proxy (pide permiso antes de crearla) | |
-| H | Corpus de 60 casos, elección del modelo, prueba de escape | |
+| G | VM Spot sin credenciales con gVisor y proxy (pide permiso antes de crearla) | Scripts listos y probados en Docker local; sin crear |
+| H | Corpus de 60 casos, elección del modelo, prueba de escape | Prueba de escape local hecha; faltan el corpus y el modelo |
 
 ## Parte A: núcleo del verificador
 
@@ -139,3 +139,70 @@ pass 26, fail 0
 Uso del modelo en la tarea pagada: la suite fueron 8 llamadas (≈13.3k tokens de entrada y 4.6k de salida, ≈$0.06); el juez, 1 llamada de 4 s (≈6.5k y 0.8k, ≈$0.02). Los tests ocultos tardaron 7.6 s.
 
 Antes, con el modelo falso: C (inyección) pasa todos los tests y aun así no se aprueba (señal determinista más el juez); D se rechaza en `static`.
+
+## Parte H (avance): prueba de escape
+
+`verifier/tests/test_escape.py`. Una entrega maliciosa lo intenta todo desde el contenedor de la entrega. Con Docker local (runc):
+
+```
+"metadatos_gce": "bloqueado (OSError)",
+"internet_ip": "bloqueado (OSError)",
+"dns_externo": "bloqueado (gaierror)",
+"api_host_docker": "bloqueado (gaierror)",
+"puerta_de_enlace": "bloqueado (OSError)",
+"escribir_workspace": "bloqueado (OSError)",
+"escribir_raiz": "bloqueado (OSError)",
+"escribir_usr": "bloqueado (OSError)",
+"suite_oculta": "no existe",
+"canal_confiable": "no existe",
+"salida_junit": "no existe",
+"secretos_en_entorno": [],
+"usuario": 65534,
+"bomba_de_procesos": "bloqueado tras 253 (BlockingIOError)"
+```
+
+La bomba de memoria termina como fallo de la entrega (`SubmissionCrashed`), no como un test que pasa. En la VM se repite con gVisor (`SANDBOX_RUNTIME=runsc`).
+
+## Parte G (preparada, sin aplicar): VM del verificador
+
+`verifier/deploy/`:
+
+- **`startup.sh`** (arranque de la VM, idempotente):
+  - instala Docker y gVisor (`runsc install`);
+  - agrega las reglas `DOCKER-USER` (ningún contenedor llega a `169.254.169.254`) e `INPUT` (ningún contenedor llega al host);
+  - crea la red interna `cc-build` y el proxy squid;
+  - construye la imagen de los tests con la red del host;
+  - instala el trabajador como servicio de systemd.
+- **`proxy/`**: squid con lista blanca. Solo deja pasar `pypi.org`, `files.pythonhosted.org` y `registry.npmjs.org`, y solo por CONNECT al 443.
+- **`deploy.ps1`**: sin `-Aplicar` solo imprime los comandos. Con `-Aplicar` hace esto:
+  1. Crea las reglas de firewall: SSH solo desde IAP, ninguna otra entrada, salida solo al 443.
+  2. Crea la VM Spot `e2-standard-2` sin cuenta de servicio ni scopes, con Shielded VM y el token de la cola como metadato (leído de Secret Manager desde tu gcloud, nunca impreso).
+  3. Copia el código por IAP. No clona el repositorio: la VM no tiene credenciales de GitHub.
+- `verifier/tests/test_proxy.py` levanta la misma topología en Docker local:
+  - pip instala `six` por el proxy;
+  - sin proxy, el contenedor no sale a internet;
+  - el proxy rechaza github.com y los metadatos.
+- `.gitattributes` fija LF para `verifier/` y `*.sh`: con `core.autocrlf` de Windows, `git archive` sacaba `startup.sh` con CRLF, y bash en la VM habría fallado.
+
+Antes de aplicarlo (pide tu permiso; regla 14):
+
+1. Crear el secreto `cyc-verifier-queue-token` en Secret Manager.
+2. Habilitar el verificador en **staging** (`cumpleycobra-api-staging`): `VERIFIER_ENABLED=true` y `VERIFIER_QUEUE_TOKEN` desde ese secreto.
+3. Correr `deploy.ps1 -ApiUrl <URL de staging> -Aplicar`.
+4. Repetir en la VM la prueba de escape con gVisor y el recorrido de `scripts/verificador_testnet.py`.
+
+Costo: la VM Spot con 30 GB es de unos 6 a 10 USD al mes si se apaga sin trabajos, o de unos 24 USD si queda prendida; la cubren los créditos.
+
+## Pendientes
+
+1. **Aplicar la parte G en staging** (permiso arriba) y repetir la prueba de escape bajo gVisor. Falta comprobar que Playwright corre bajo gVisor (parte F).
+2. **Parte H**: corpus de 60 casos ejecutables y elección del modelo por rol, con 3 corridas y 0 falsas aprobaciones. Para comparar con Muse Spark hace falta `MODEL_API_KEY` en `backend/.env`; hoy solo está en el `.env` de v2.
+3. **Parte F**: perfil web de v2 (Playwright, capturas en Cloud Storage con URL firmada de 15 minutos, juez visual).
+4. **Revisar en el navegador las pantallas nuevas**: necesitan iniciar sesión con Pollar.
+5. Encender y apagar la VM según la cola (plan: apagar tras 15 minutos sin trabajos).
+
+## Riesgos
+
+- **La suite depende del modelo.** Sin la referencia hubo dos fallos en tres corridas; con la referencia, la tercera corrida aprobó y pagó. Hace falta el corpus para medirlo en serio.
+- **El juez corre dentro de la petición del trabajador.** Si el modelo tarda más que el plazo del trabajo (180 s), el trabajo vuelve a la cola, pero el veredicto ya quedó en la caché de la tarea, así que el reintento responde desde la caché.
+- **El paso de build sigue ejecutando código de dependencias permitidas** (sin red, en gVisor). Un paquete permitido comprometido es un riesgo de cadena de suministro que esto no cubre.
