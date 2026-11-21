@@ -1,0 +1,68 @@
+# Todo el camino principal con un solo comando: `docker compose up --build`.
+#   db        Postgres 17 (datos en el volumen `pgdata`)
+#   api       el mismo contenedor que corre en Cloud Run, con STATE_BACKEND=postgres
+#   frontend  Next.js en modo desarrollo
+#
+# Requisitos: backend/.env (las mismas variables de siempre) y, para Gemini por Vertex, tus
+# credenciales de `gcloud auth application-default login`. En Windows, antes de `up`:
+#   $env:GCLOUD_ADC = "$env:APPDATA\gcloud\application_default_credentials.json"
+# Las variables de abajo reemplazan a las de backend/.env.
+name: cumpleycobra
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: cyc
+      POSTGRES_PASSWORD: cyc_local
+      POSTGRES_DB: cyc
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cyc -d cyc"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: backend/.env
+    environment:
+      STATE_BACKEND: postgres
+      DATABASE_URL: postgresql://cyc:cyc_local@db:5432/cyc
+      APP_MODE: local
+      FRONTEND_ORIGIN: http://localhost:3000
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/adc.json
+    volumes:
+      - ${GCLOUD_ADC:-~/.config/gcloud/application_default_credentials.json}:/secrets/adc.json:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    image: node:24-alpine
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev -- --hostname 0.0.0.0 --port 3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+    env_file:
+      - path: frontend/.env.local
+        required: false
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  frontend_node_modules:

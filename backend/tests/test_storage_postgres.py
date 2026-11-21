@@ -162,3 +162,24 @@ def test_retos_sep10_compartidos_y_de_un_solo_uso(make_store, monkeypatch):
     with pytest.raises(identidad.AuthError) as expired:
         cb.take("x3", "pp", now=now)
     assert expired.value.code == "CHALLENGE_EXPIRED"
+
+
+def test_importar_y_exportar_state_json_ida_y_vuelta(make_store, tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("estado_postgres", "scripts/estado_postgres.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    original = {"version": 1,
+                "tasks": {"t2": {"spec": {"criteria": ["b", "a"]}, "codes": {"h2": {}, "h1": {"approved": True}}},
+                          "t1": {"amount": 10_000_000, "nota": "ñ ✓ \u0000 fin"}},
+                "profiles": {"GAAA": {"nombre": "Ana"}},
+                "proposals": {"p1": {"task_id": "t1", "programador": "GAAA", "estado": "pendiente"}}}
+    source = tmp_path / "state.json"
+    source.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+    store = make_store()
+    assert script.importar(store, source, forzar=False) == {"tasks": 2, "profiles": 1, "proposals": 1}
+    with pytest.raises(SystemExit):
+        script.importar(store, source, forzar=False)  # no pisa una base con datos
+    back = tmp_path / "vuelta.json"
+    script.exportar(store, back)
+    assert json.dumps(json.loads(back.read_text(encoding="utf-8"))) == json.dumps(original)
