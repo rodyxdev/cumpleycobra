@@ -101,6 +101,23 @@ def test_ip_usa_real_ip_del_proxy_e_ignora_forwarded():
     assert client_ip(req({}, host=None)) == "desconocida"
 
 
+def test_ip_desde_la_derecha_de_forwarded_en_cloud_run(monkeypatch):
+    def req(headers, host="192.0.2.10"):
+        return Request({"type": "http", "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+                        "client": (host, 1000) if host else None})
+    monkeypatch.setenv("CLIENT_IP_HEADER", "x-forwarded-for")
+    # El cliente puede escribir lo que quiera a la izquierda; el proxy agrega su IP real al final.
+    for i in range(5):
+        assert client_ip(req({"x-forwarded-for": f"192.0.2.{i}, 10.0.0.{i}, 198.51.100.20",
+                              "x-real-ip": f"203.0.113.{i}"})) == "198.51.100.20"
+    assert client_ip(req({"x-forwarded-for": " 198.51.100.21 "})) == "198.51.100.21"
+    assert client_ip(req({})) == "192.0.2.10"
+    assert client_ip(req({"x-forwarded-for": " , "})) == "192.0.2.10"
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
+    assert client_ip(req({"x-forwarded-for": "192.0.2.1, 198.51.100.22, 35.191.0.1"})) == "198.51.100.22"
+    assert client_ip(req({"x-forwarded-for": "198.51.100.23"})) == "192.0.2.10"
+
+
 @pytest.mark.parametrize("path", ["/tasks/draft", "/tasks/draft/review", "/evaluate"])
 def test_429_por_ip_con_cors_y_sin_cuota(monkeypatch, path):
     monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "2")

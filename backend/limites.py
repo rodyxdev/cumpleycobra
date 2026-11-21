@@ -40,11 +40,24 @@ def _limit(name: str, default: int = 0) -> int:
 
 
 def client_ip(request) -> str:
-    # Railway sobrescribe X-Real-IP en su entrada pública. No exponer el contenedor directamente.
-    # X-Forwarded-For también contiene saltos del proxy que pueden variar entre conexiones.
-    real_ip = request.headers.get("x-real-ip", "").strip()
-    if real_ip:
-        return real_ip
+    """IP del visitante según el proxy de entrada (CLIENT_IP_HEADER).
+
+    - `x-real-ip` (por defecto): el proxy sobrescribe X-Real-IP con la IP del cliente.
+    - `x-forwarded-for`: el proxy AGREGA la IP del cliente al final de X-Forwarded-For (Cloud Run).
+      Lo de la izquierda lo escribe el cliente y se puede falsificar, así que se cuenta desde la
+      derecha: TRUSTED_PROXY_HOPS es cuántos proxies propios agregan su salto después del cliente.
+    Sin el encabezado esperado se usa la conexión directa. No exponer el contenedor directamente.
+    """
+    if os.environ.get("CLIENT_IP_HEADER", "x-real-ip").strip().lower() == "x-forwarded-for":
+        hops = _limit("TRUSTED_PROXY_HOPS")
+        entries = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",")]
+        entries = [p for p in entries if p]
+        if len(entries) > hops:
+            return entries[-1 - hops]
+    else:
+        real_ip = request.headers.get("x-real-ip", "").strip()
+        if real_ip:
+            return real_ip
     return request.client.host if request.client else "desconocida"
 
 
