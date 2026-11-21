@@ -39,9 +39,15 @@ for ifc in docker0 br+; do
 done
 # Red interna sin ruta a internet para el paso BUILD; su única salida es el proxy con lista blanca.
 docker network inspect cc-build >/dev/null 2>&1 || docker network create --internal cc-build
-# Red de salida del proxy. Definida por el usuario (no docker0) para usar el DNS interno de Docker:
-# los contenedores de docker0 heredarían el DNS de la VM, que es el servidor de metadatos (bloqueado).
-docker network inspect cc-salida >/dev/null 2>&1 || docker network create cc-salida
+# Red de salida del proxy, con subred fija. El proxy necesita DNS, y en GCE el DNS es el servidor de
+# metadatos: solo esta red puede hablarle, y solo al puerto 53. El HTTP de metadatos (tokens y el
+# token de la cola) sigue bloqueado para todos los contenedores.
+SALIDA=172.30.250.0/24
+docker network inspect cc-salida >/dev/null 2>&1 || docker network create --subnet "$SALIDA" cc-salida
+for proto in udp tcp; do
+  iptables -C DOCKER-USER -s "$SALIDA" -d 169.254.169.254 -p "$proto" --dport 53 -j ACCEPT 2>/dev/null \
+    || iptables -I DOCKER-USER -s "$SALIDA" -d 169.254.169.254 -p "$proto" --dport 53 -j ACCEPT
+done
 
 # --- 3. Código, imágenes y proxy ---------------------------------------------------------------
 until [ -f /opt/cyc/verifier/worker.py ]; do
