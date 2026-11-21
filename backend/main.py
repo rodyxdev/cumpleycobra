@@ -33,6 +33,7 @@ from .config import (
     RELEASE_BUDGET_SECS,
     load_settings,
     api_docs_options,
+    apply_mode_defaults,
 )
 from .deterministic import analyze
 from .hashing import code_hash, rules_hash, verdict_hash
@@ -40,7 +41,9 @@ from .fx import FxReference
 from .limites import RateLimited, RateLimitMiddleware, limited_response, rate_limiter
 from .video import normalize_video
 from .plantilla import DEMO_RAW_REQUEST, DEMO_SPEC
+from . import stellar_client
 from .state import StateStore
+from .storage import backend_name as storage_backend, make_store
 from .stellar_client import (
     ERR_DEADLINE_PASSED,
     ERR_NOT_FUNDED,
@@ -102,12 +105,22 @@ class EvaluateIn(Strict):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = load_settings()
+    mode = apply_mode_defaults()
     app.state.settings = settings
-    app.state.store = StateStore(settings.state_file)
+    app.state.store = make_store(settings.state_file)
+    if storage_backend() == "postgres":
+        # Retos SEP-10 y secuencia del árbitro compartidos entre instancias.
+        app.state.challenges = identidad.PgChallenges(app.state.store.pool)
+        stellar_client.RELEASE_LOCK = app.state.store.sync_lock("cyc:release-arbitro")
     app.state.chain = StellarClient(settings)
     app.state.gemini = gemini.make_client(settings)
-    log.info("Backend listo: %r", settings)
-    yield
+    log.info("Backend listo (modo %s, estado en %s): %r", mode, storage_backend(), settings)
+    try:
+        yield
+    finally:
+        close = getattr(app.state.store, "close", None)
+        if close:
+            close()
 
 
 def frontend_origins(value: str) -> list[str]:
@@ -115,8 +128,28 @@ def frontend_origins(value: str) -> list[str]:
     return [o.strip().rstrip("/") for o in value.split(",") if o.strip()]
 
 
+class StoreSessionMiddleware:
+    """Con Postgres, cada petición abre su propia sesión de documentos (mapa de identidad)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        begin = getattr(getattr(scope.get("app"), "state", None), "store", None)
+        begin = getattr(begin, "begin", None) if scope["type"] == "http" else None
+        if begin is None:
+            await self.app(scope, receive, send)
+            return
+        token = begin()
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            scope["app"].state.store.end(token)
+
+
 settings_for_cors = load_settings()
 app = FastAPI(title="Cumple&Cobra", lifespan=lifespan, **api_docs_options())
+app.add_middleware(StoreSessionMiddleware)
 fx_reference = FxReference()
 # Ventanas por IP; las cuotas diarias se consumen únicamente al llamar a Gemini.
 # Se registra ANTES de CORS para que CORS lo envuelva y el navegador pueda leer el 429.
@@ -160,7 +193,7 @@ async def _validation_error(_: Request, exc: RequestValidationError):
     })
 
 
-def store() -> StateStore:
+def store() -> "StateStore":
     return app.state.store
 
 

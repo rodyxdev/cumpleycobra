@@ -47,6 +47,7 @@ def test_consentimiento_tokens_persistencia_y_entrega_futura(api):
     evaluate("import socket\nsocket.socket()\n")
     # La autorización anterior solo revela la entrega anterior, nunca el código nuevo.
     assert client.get(endpoint + "/delivery", headers=ch).json()["code_hash"] == r["code_hash"]
+    task = main.store().tasks[task_id]  # releer: con Postgres cada petición trae su propia copia
     assert task["latest_code_hash"] != task["consented_code_hash"]
 
 
