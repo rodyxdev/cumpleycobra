@@ -347,6 +347,16 @@ def start_service(
     return Service(name, image)
 
 
+def container_ip(name: str, network: str) -> str:
+    """IP de un contenedor en una red. Bajo gVisor el DNS interno de Docker (alias de red) no
+    funciona: el stack de red de runsc no usa las reglas iptables del contenedor. Por IP sí conecta."""
+    fmt = '{{(index .NetworkSettings.Networks "%s").IPAddress}}' % network
+    ip = _docker(["inspect", "--format", fmt, name]).stdout.strip()
+    if not ip or ip == "<no value>":
+        raise SandboxUnavailable(f"el contenedor {name} no tiene IP en la red {network}")
+    return ip
+
+
 class InternalNetwork:
     """Red Docker `--internal`: los contenedores se ven entre sí pero no salen a internet."""
 

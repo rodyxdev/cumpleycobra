@@ -55,7 +55,7 @@ def test_timeout_kills_container(workspace, tmp_path):
     assert result.timed_out is True
     assert result.exit_code is None
     assert "start" in result.stdout and "never" not in result.stdout
-    assert elapsed < LIMITS.timeout_s + 15  # se mató, no esperó los 60 s
+    assert elapsed < LIMITS.timeout_s + 30  # se mató, no esperó los 60 s (gVisor tarda más en matarlo)
     assert 4.5 <= result.duration_s < LIMITS.timeout_s + 15
 
 
@@ -109,7 +109,7 @@ def test_output_is_truncated(workspace, tmp_path):
 def test_oom_is_reported(workspace, tmp_path):
     result = run_in_sandbox(workspace, "python -c 'b = bytearray(1024**3)'", tmp_path / "out", limits=LIMITS)
     assert result.oom_killed is True
-    assert result.exit_code == 137
+    assert result.exit_code != 0  # 137 con runc; gVisor lo reporta distinto
 
 
 @requires_docker

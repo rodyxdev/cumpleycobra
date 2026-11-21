@@ -17,7 +17,7 @@ from pathlib import Path
 from verifier.config import get_settings
 from verifier.contract import ExecutionSpec
 from verifier.sandbox import Mount, SandboxLimits, SandboxResult, SandboxUnavailable, ensure_runner_image, run_in_sandbox
-from verifier.sandbox.runner import InternalNetwork, _docker, start_service
+from verifier.sandbox.runner import InternalNetwork, _docker, container_ip, start_service
 from verifier.verification.junit import TestOutcome, parse_junit
 
 RUNTIME = Path(__file__).parent / "runtime"
@@ -95,7 +95,9 @@ def run_blackbox(workspace: Path, suite_dir: Path, spec: ExecutionSpec, *, deps_
                 None, pytest_command(s.hidden_test_timeout_s), out,
                 image=runner, limits=trusted_limits, network=network.name,
                 mounts=(Mount(str(suite_dir), HIDDEN_MOUNT), Mount(str(trusted_rt), "/cc")),
-                env={"CC_SUT_URL": "http://sut:8000", "CC_CALL_TIMEOUT": str(s.call_timeout_s)},
+                # Por IP y no por el alias `sut`: bajo gVisor el DNS interno de Docker no resuelve.
+                env={"CC_SUT_URL": f"http://{container_ip(sut.name, network.name)}:8000",
+                     "CC_CALL_TIMEOUT": str(s.call_timeout_s)},
             )
             report = out / "junit.xml"
             outcomes = parse_junit(report.read_bytes()) if report.exists() else []

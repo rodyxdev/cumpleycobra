@@ -49,6 +49,9 @@ class Settings:
     # de Docker cuya única salida es el proxy con lista blanca (`build_proxy`).
     build_network: str
     build_proxy: str | None
+    # Contenedor del proxy: si está, su IP en `build_network` se resuelve en cada build (bajo gVisor
+    # el alias de red no resuelve) y reemplaza al host de `build_proxy`.
+    build_proxy_container: str | None
     runner_image: str | None
     # Verificación
     hidden_test_timeout_s: int
@@ -77,6 +80,7 @@ def get_settings() -> Settings:
         build_memory=os.getenv("BUILD_MEMORY", "1g"),
         build_network=os.getenv("BUILD_NETWORK") or "bridge",
         build_proxy=os.getenv("BUILD_PROXY") or None,
+        build_proxy_container=os.getenv("BUILD_PROXY_CONTAINER") or None,
         runner_image=os.getenv("RUNNER_IMAGE") or None,
         hidden_test_timeout_s=_int("HIDDEN_TEST_TIMEOUT_S", 30),
         call_timeout_s=_float("CALL_TIMEOUT_S", 5.0),

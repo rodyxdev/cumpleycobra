@@ -16,6 +16,7 @@ from verifier.sandbox import DepsVolume, build_dependencies, run_in_sandbox, San
 from .helpers import requires_docker
 
 DEPLOY = Path(__file__).resolve().parents[1] / "deploy"
+PROXY_NAME: list[str] = []
 
 
 def docker(*args, check=True, timeout=600):
@@ -34,8 +35,9 @@ def build_network(monkeypatch):
         docker("run", "-d", "--name", proxy, "--read-only", "--tmpfs", "/var/spool/squid", "--tmpfs", "/var/log/squid",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--network", egress, "cyc-proxy:test")
         docker("network", "connect", "--alias", "proxy", internal, proxy)
+        PROXY_NAME[:] = [proxy]
         monkeypatch.setenv("BUILD_NETWORK", internal)
-        monkeypatch.setenv("BUILD_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("BUILD_PROXY_CONTAINER", proxy)  # por IP, como en la VM con gVisor
         yield internal
     finally:
         docker("rm", "-f", proxy, check=False)
@@ -57,6 +59,9 @@ def test_pip_instala_por_el_proxy_y_nada_mas_sale(build_network, tmp_path):
 
     ws = tmp_path / "ws"
     ws.mkdir()
+    from verifier.sandbox.runner import container_ip
+
+    proxy_url = f"http://{container_ip(PROXY_NAME[0], build_network)}:3128"
     probe = (
         "python - <<'EOF'\n"
         "import socket, urllib.request, os\n"
@@ -65,7 +70,7 @@ def test_pip_instala_por_el_proxy_y_nada_mas_sale(build_network, tmp_path):
         "        socket.create_connection(('1.1.1.1', 443), timeout=3); return 'CONECTÓ'\n"
         "    except OSError: return 'bloqueado'\n"
         "def por_proxy(url):\n"
-        "    h = urllib.request.ProxyHandler({'https': 'http://proxy:3128'})\n"
+        f"    h = urllib.request.ProxyHandler({{'https': '{proxy_url}', 'http': '{proxy_url}'}})\n"
         "    try:\n"
         "        urllib.request.build_opener(h).open(url, timeout=10); return 'PERMITIDO'\n"
         "    except Exception as exc: return 'rechazado'\n"

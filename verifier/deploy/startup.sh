@@ -76,7 +76,7 @@ VERIFIER_WORK_DIR=/var/lib/cyc/verifier
 SANDBOX_RUNTIME=runsc
 RUNNER_IMAGE=cumpleycobra-runner:vm
 BUILD_NETWORK=cc-build
-BUILD_PROXY=http://proxy:3128
+BUILD_PROXY_CONTAINER=cyc-proxy
 PYTHONIOENCODING=utf-8
 ENV
 install -m 0644 verifier/deploy/cyc-verificador.service /etc/systemd/system/cyc-verificador.service

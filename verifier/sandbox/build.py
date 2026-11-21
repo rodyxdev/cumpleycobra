@@ -30,6 +30,7 @@ from verifier.sandbox.runner import (
     SandboxResult,
     SandboxUnavailable,
     _docker,
+    container_ip,
     ensure_image,
     run_in_sandbox,
 )
@@ -93,8 +94,11 @@ def build_dependencies(requirements: list[str], volume: DepsVolume, image: str) 
         req_dir = Path(tmp)
         (req_dir / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
         env = {}
-        if s.build_proxy:
-            env = {"HTTPS_PROXY": s.build_proxy, "HTTP_PROXY": s.build_proxy, "PIP_PROXY": s.build_proxy}
+        proxy = s.build_proxy
+        if s.build_proxy_container:
+            proxy = f"http://{container_ip(s.build_proxy_container, s.build_network)}:3128"
+        if proxy:
+            env = {"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "PIP_PROXY": proxy}
         command = (
             "pip install --no-input --disable-pip-version-check --no-cache-dir --progress-bar off "
             f"--only-binary=:all: --target {DEPS_MOUNT} -r /workspace/requirements.txt"
