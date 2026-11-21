@@ -97,7 +97,7 @@ Nota: staging y producción firman con la misma llave de árbitro (el contrato t
 2. `api.rodyxdev.com`: necesita tu acceso a Cloudflare.
 3. Alertas de presupuesto en Google Cloud: son de la cuenta de facturación y necesitan tu permiso.
 4. Modo `demo` en el frontend: estados vacíos y sin páginas sin salida, revisado en celular.
-5. Borrar los recursos temporales del ensayo: la instancia `cyc-pg-restauracion`, el secreto `cyc-database-url-restauracion` y el job `cyc-verificar-restauracion`.
+5. ~~Borrar los recursos temporales del ensayo~~: la instancia `cyc-pg-restauracion`, el secreto `cyc-database-url-restauracion` y el job `cyc-verificar-restauracion` se borraron el 21 de noviembre.
 
 ## Riesgos
 
