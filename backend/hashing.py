@@ -5,16 +5,42 @@ import json
 import unicodedata
 
 
+MAX_SAFE_INT = 2**53 - 1  # mismo rango que JSON en cualquier lenguaje (y que canonical.py de v2)
+
+
 def _normalize(obj):
+    """NFC en textos y validación. Con datos válidos, los bytes son los mismos que en canonical.py de v2.
+
+    Rechazos (los mismos de v2): float, enteros fuera de ±(2^53 − 1), surrogates sueltos, claves
+    que no son texto y claves que coinciden tras NFC. Ninguno cambia el hash de datos que antes
+    eran válidos: solo convierten en error lo que antes se hasheaba de forma ambigua.
+    """
+    if isinstance(obj, bool) or obj is None:
+        return obj
     if isinstance(obj, float):
         raise TypeError("No se permiten float en datos que se hashean")
+    if isinstance(obj, int):
+        if not -MAX_SAFE_INT <= obj <= MAX_SAFE_INT:
+            raise ValueError("Entero fuera del rango seguro de JSON (±(2^53 − 1))")
+        return obj
     if isinstance(obj, str):
-        return unicodedata.normalize("NFC", obj)
-    if isinstance(obj, list):
+        text = unicodedata.normalize("NFC", obj)
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in text):
+            raise ValueError("Surrogate suelto: no es UTF-8 válido")
+        return text
+    if isinstance(obj, (list, tuple)):
         return [_normalize(x) for x in obj]
     if isinstance(obj, dict):
-        return {_normalize(k): _normalize(v) for k, v in obj.items()}
-    return obj  # int, bool, None
+        out = {}
+        for key, value in obj.items():
+            if not isinstance(key, str):
+                raise TypeError("Las claves de los objetos que se hashean deben ser texto")
+            nkey = _normalize(key)
+            if nkey in out:
+                raise ValueError(f"Claves duplicadas tras NFC: {key!r}")
+            out[nkey] = _normalize(value)
+        return out
+    raise TypeError(f"Tipo no soportado en datos que se hashean: {type(obj).__name__}")
 
 
 def canonical_bytes(obj) -> bytes:

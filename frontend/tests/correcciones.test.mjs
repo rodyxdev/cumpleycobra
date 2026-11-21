@@ -75,3 +75,24 @@ test("tipo de cambio de respaldo: reintento a los 60 s", () => {
   assert.equal(shouldRefetch({ fallback: false }, t0, t0 + 3_600_000), false);
   assert.equal(shouldRefetch(undefined, t0, t0 + 60_000), false); // la primera consulta sigue en vuelo
 });
+
+// Modo demo: estados de carga con salida y modo de la app.
+import { resolveAppMode } from "../src/lib/app-mode.ts";
+import { loadProblem } from "../src/lib/load-problem.ts";
+
+test("modo de la app: explícito, o demo en producción y local en desarrollo", () => {
+  assert.equal(resolveAppMode("live", "development"), "live");
+  assert.equal(resolveAppMode(" DEMO ", "development"), "demo");
+  assert.equal(resolveAppMode(undefined, "production"), "demo");
+  assert.equal(resolveAppMode("", "development"), "local");
+  assert.equal(resolveAppMode("otro", "production"), "demo");
+});
+
+test("problema de carga: no encontrado es definitivo; red y RPC se reintentan", () => {
+  assert.equal(loadProblem("TASK_NOT_FOUND", 404).transient, false);
+  assert.equal(loadProblem(null, 404, "", "perfil").title, "Este perfil no existe");
+  assert.equal(loadProblem("CHAIN_UNAVAILABLE", 502).transient, true);
+  assert.equal(loadProblem("ERROR", 0, "Failed to fetch").transient, true);
+  assert.equal(loadProblem("INVALID_REQUEST", 400, "Identificador inválido").text, "Identificador inválido");
+  assert.match(loadProblem("INVALID_REQUEST", 400, "x", "perfil").text, /cuenta de Stellar/);
+});

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { DM_Sans, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 
+import { DemoBanner } from "@/components/demo-banner";
 import { Providers } from "@/components/providers";
 import { SiteHeader } from "@/components/site-header";
 
@@ -35,6 +36,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="es" className={`${dmSans.variable} ${jetbrainsMono.variable} ${jakarta.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
         <Providers>
+          <DemoBanner />
           <SiteHeader />
           <main className="mx-auto w-full max-w-[1248px] flex-1 px-5 py-10 sm:px-8 lg:py-14">{children}</main>
           <footer className="border-t bg-card">

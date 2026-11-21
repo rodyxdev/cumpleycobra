@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
-import { ArrowUpRight, ShieldCheck } from "lucide-react";
+import { ArrowUpRight, SearchX, ShieldCheck } from "lucide-react";
+
+import { EmptyState } from "@/components/empty-state";
 
 import { Money } from "@/components/money";
 import { IdentityBadge } from "@/components/identity";
@@ -15,17 +17,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { api, ApiError, type ProgrammerProfile } from "@/lib/api";
 import { explorerTx, shortHash } from "@/lib/format";
 import { HONEST_NOTE, paidByLabel, paidDate } from "@/lib/reputation";
+import { loadProblem } from "@/lib/load-problem";
 
 export default function ProgramadorPage({ params }: { params: Promise<{ address: string }> }) {
   const { address } = use(params);
   const [profile, setProfile] = useState<ProgrammerProfile | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
 
   useEffect(() => {
     let alive = true;
     api.programmer(address).then(
       (p) => { if (alive) setProfile(p); },
-      (e) => { if (alive) setError(e instanceof ApiError ? e.message : String(e)); },
+      (e) => { if (alive) setError(e instanceof ApiError ? e : new ApiError(0, "ERROR", String(e))); },
     );
     return () => { alive = false; };
   }, [address]);
@@ -45,7 +48,16 @@ export default function ProgramadorPage({ params }: { params: Promise<{ address:
         {profile?.bio && <p className="text-base" data-testid="perfil-bio">{profile.bio}</p>}
       </div>
 
-      {error && <p role="alert" className="text-base text-[var(--alert-foreground)]">{error}</p>}
+      {error && (() => {
+        const problem = loadProblem(error.code, error.status, error.message, "perfil");
+        return (
+          <EmptyState icon={SearchX} tone={problem.transient ? "neutral" : "alert"} testId="perfil-error"
+            title={problem.title}
+            actions={[{ label: "Ver todos los programadores", href: "/programadores", primary: true }, { label: "Ir al inicio", href: "/" }]}>
+            {problem.text}
+          </EmptyState>
+        );
+      })()}
       {!error && !profile && <p className="text-base text-muted-foreground">Cargando el perfil desde el contrato…</p>}
 
       {profile && (
@@ -68,7 +80,7 @@ export default function ProgramadorPage({ params }: { params: Promise<{ address:
             <h2 className="eyebrow">Historial</h2>
             {profile.history.length === 0 ? (
               <Card><CardContent className="text-base text-muted-foreground" data-testid="sin-tareas">
-                Todavía no hay tareas verificadas.
+                Todavía no hay tareas pagadas a esta dirección. El historial se llena solo cuando el contrato registra un pago.
               </CardContent></Card>
             ) : (
               <ol className="space-y-4" data-testid="historial">

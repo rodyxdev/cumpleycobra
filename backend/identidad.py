@@ -103,15 +103,9 @@ class Challenges:
         now = time.time() if now is None else now
         xdr = build_challenge_transaction(keys.signing.secret, address, home_domain(), web_auth_domain(),
                                           passphrase, timeout=CHALLENGE_TTL)
-        with self.lock:
-            self._purge(now)
-            self.pending[_nonce(xdr, passphrase)] = (address, now + CHALLENGE_TTL)
+        self._add(_nonce(xdr, passphrase), address, now + CHALLENGE_TTL, now)
         return {"transaction": xdr, "network_passphrase": passphrase, "home_domain": home_domain(),
                 "web_auth_domain": web_auth_domain(), "expires_in": CHALLENGE_TTL}
-
-    def _purge(self, now: float) -> None:
-        for nonce in [n for n, (_, exp) in self.pending.items() if exp <= now - CHALLENGE_TTL]:
-            del self.pending[nonce]
 
     def take(self, signed_xdr: str, passphrase: str, now: float | None = None) -> tuple[str, float]:
         """Devuelve (dirección, expira) del reto y lo consume. Errores 401 con código propio."""
@@ -120,6 +114,23 @@ class Challenges:
             nonce = _nonce(signed_xdr, passphrase)
         except Exception as exc:  # noqa: BLE001 - XDR que ni siquiera es una transacción
             raise AuthError(401, "CHALLENGE_INVALID", "El reto firmado no es una transacción válida") from exc
+        address, expires = self._consume(nonce)
+        if now > expires:
+            raise AuthError(401, "CHALLENGE_EXPIRED", "El reto caducó (5 minutos); pide uno nuevo")
+        return address, expires
+
+    def restore(self, signed_xdr: str, passphrase: str, address: str, expires: float) -> None:
+        """Si Horizon no respondió, el reto vuelve a quedar pendiente (no fue culpa del usuario)."""
+        self._put_back(_nonce(signed_xdr, passphrase), address, expires)
+
+    # --- Almacenamiento (en memoria; PgChallenges lo guarda en Postgres) ------------------
+    def _add(self, nonce: str, address: str, expires: float, now: float) -> None:
+        with self.lock:
+            for old in [n for n, (_, exp) in self.pending.items() if exp <= now - CHALLENGE_TTL]:
+                del self.pending[old]
+            self.pending[nonce] = (address, expires)
+
+    def _consume(self, nonce: str) -> tuple[str, float]:
         with self.lock:
             if nonce in self.used:
                 raise AuthError(401, "CHALLENGE_USED", "Ese reto ya se usó; pide uno nuevo")
@@ -127,17 +138,47 @@ class Challenges:
             if entry is None:
                 raise AuthError(401, "CHALLENGE_INVALID", "Ese reto no lo emitió este servidor")
             self.used.add(nonce)
-        address, expires = entry
-        if now > expires:
-            raise AuthError(401, "CHALLENGE_EXPIRED", "El reto caducó (5 minutos); pide uno nuevo")
-        return address, expires
+        return entry
 
-    def restore(self, signed_xdr: str, passphrase: str, address: str, expires: float) -> None:
-        """Si Horizon no respondió, el reto vuelve a quedar pendiente (no fue culpa del usuario)."""
-        nonce = _nonce(signed_xdr, passphrase)
+    def _put_back(self, nonce: str, address: str, expires: float) -> None:
         with self.lock:
             self.used.discard(nonce)
             self.pending[nonce] = (address, expires)
+
+
+class PgChallenges(Challenges):
+    """Los mismos retos, compartidos entre instancias y sobrevivientes a un reinicio."""
+
+    USED_RETENTION = 24 * 3600  # los usados se recuerdan un día para responder CHALLENGE_USED
+
+    def __init__(self, pool):
+        super().__init__()
+        self.pool = pool
+
+    def _add(self, nonce: str, address: str, expires: float, now: float) -> None:
+        with self.pool.connection() as conn:
+            conn.execute("DELETE FROM sep10_challenges WHERE (NOT used AND expires_at <= %s) "
+                         "OR (used AND expires_at <= %s)", (now - CHALLENGE_TTL, now - self.USED_RETENTION))
+            conn.execute("INSERT INTO sep10_challenges (nonce, address, expires_at) VALUES (%s, %s, %s) "
+                         "ON CONFLICT (nonce) DO NOTHING", (nonce, address, expires))
+
+    def _consume(self, nonce: str) -> tuple[str, float]:
+        with self.pool.connection() as conn, conn.transaction():
+            row = conn.execute("SELECT address, expires_at, used FROM sep10_challenges WHERE nonce = %s FOR UPDATE",
+                               (nonce,)).fetchone()
+            if row is None:
+                raise AuthError(401, "CHALLENGE_INVALID", "Ese reto no lo emitió este servidor")
+            address, expires, used = row
+            if used:
+                raise AuthError(401, "CHALLENGE_USED", "Ese reto ya se usó; pide uno nuevo")
+            conn.execute("UPDATE sep10_challenges SET used = true WHERE nonce = %s", (nonce,))
+        return address, float(expires)
+
+    def _put_back(self, nonce: str, address: str, expires: float) -> None:
+        with self.pool.connection() as conn:
+            conn.execute("INSERT INTO sep10_challenges (nonce, address, expires_at) VALUES (%s, %s, %s) "
+                         "ON CONFLICT (nonce) DO UPDATE SET used = false, address = EXCLUDED.address, "
+                         "expires_at = EXCLUDED.expires_at", (nonce, address, expires))
 
 
 def account_signers(address: str) -> tuple[list[Ed25519PublicKeySigner], int] | None:

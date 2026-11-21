@@ -87,6 +87,33 @@ def load_settings() -> Settings:
     )
 
 
+APP_MODES = ("local", "demo", "live")
+# Valores por defecto de los límites cuando el modo es público y la variable no está definida.
+PUBLIC_LIMIT_DEFAULTS = {"RATE_LIMIT_PER_MINUTE": "10", "RATE_LIMIT_DAILY": "500"}
+
+
+def app_mode() -> str:
+    """APP_MODE: `local` (laptop, por defecto), `demo` (enlace público) o `live` (usuarios reales)."""
+    mode = (os.environ.get("APP_MODE") or "local").strip().lower()
+    if mode not in APP_MODES:
+        raise ConfigError(f"APP_MODE debe ser uno de: {', '.join(APP_MODES)}")
+    return mode
+
+
+def apply_mode_defaults() -> str:
+    """En `demo` y `live` nunca se corre sin límites: se fijan valores si faltan las variables.
+
+    `live` exige además STATE_BACKEND=postgres (un archivo no aguanta varias instancias ni respaldos).
+    """
+    mode = app_mode()
+    if mode in ("demo", "live"):
+        for name, value in PUBLIC_LIMIT_DEFAULTS.items():
+            os.environ.setdefault(name, value)
+    if mode == "live" and (os.environ.get("STATE_BACKEND") or "json").strip().lower() != "postgres":
+        raise ConfigError("APP_MODE=live requiere STATE_BACKEND=postgres")
+    return mode
+
+
 def api_docs_options() -> dict:
     """Las rutas de documentación se publican solo por habilitación explícita."""
     enabled = os.environ.get("ENABLE_API_DOCS", "").strip().lower() == "true"

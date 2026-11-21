@@ -19,3 +19,5 @@ export const POLLAR_API_KEY = process.env.NEXT_PUBLIC_POLLAR_API_KEY ?? "";
 /** "pollar" (por defecto) o "freighter" (respaldo: firma con la extensión Freighter). */
 export const WALLET_MODE: "pollar" | "freighter" =
   process.env.NEXT_PUBLIC_WALLET === "freighter" ? "freighter" : "pollar";
+
+export { APP_MODE, SHOW_DEV_HINTS, USDC_FAUCET_URL } from "@/lib/app-mode";

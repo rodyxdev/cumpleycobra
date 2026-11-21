@@ -6,7 +6,7 @@ Contexto técnico para Claude Code. La versión completa (negocio, pitch, evalua
 
 Cumple&Cobra es el acuerdo verificable para trabajo de código. El cliente escribe su pedido y la IA lo convierte en criterios medibles que él edita. El cliente invita a su programador con un enlace; el programador acepta esos criterios antes de trabajar; el cliente deposita USDC en un contrato Soroban. El programador entrega un script Python y un video demo; el backend lo evalúa con una capa determinista y Gemini contra los criterios acordados; si cumple, el backend (árbitro) firma `release` y el programador cobra en segundos. El código no se entrega al cliente hasta que el programador cobra.
 
-MVP para GOYA HACK (reto Stellar BAF + pool de Pollar). Una sola persona construye. Entrega: viernes 25 de septiembre de 2026.
+Nació como MVP para GOYA HACK (septiembre de 2026). Desde noviembre de 2026 sigue el plan de mejora por fases de [`docs/mejora/plan.md`](docs/mejora/plan.md): esta versión (v1) es la base y de v2 (`cumpleycobra-v2`) solo se traen piezas. Lo que no cambia nunca: Stellar, el contrato Soroban desplegado y Pollar. Una sola persona construye.
 
 **Frase del producto:** "Si cumple lo acordado, cobras. Sin discusiones."
 
@@ -22,7 +22,8 @@ MVP para GOYA HACK (reto Stellar BAF + pool de Pollar). Una sola persona constru
   - Wallets custodiales de Pollar (`internal`, G…) con 0 XLM: reservas patrocinadas por Pollar. Las `smart` (C…) no sirven para este flujo.
 - USDC de testnet disponible en el faucet de Circle (confirmado).
 - Pollar es prioridad: el reto reparte un pool de 200 USD a quien lo integre. Nunca se recorta por completo.
-- Estado del backend persistido en `backend/state.json` (no es base de datos). El backend corre **local** en la demo.
+- Estado del backend: `backend/state.json` por defecto, o Postgres con `STATE_BACKEND=postgres` (ver "Estado del backend").
+- Producción: backend en Cloud Run (`cumpleycobra-api`, `us-central1`) con Postgres en Cloud SQL (`cyc-pg`, base `cyc_prod`; staging usa la base `cyc`) desde el 21 de noviembre de 2026, y frontend en Vercel (Hobby). La API se queda en su URL de `run.app`. Railway se dejó el 20 de noviembre de 2026 ([`docs/mejora/puente-cloud-run.md`](docs/mejora/puente-cloud-run.md)).
 - Cada tarea se amarra a un solo programador, invitado por el cliente (ver "Tokens").
 
 ## Estructura del repositorio
@@ -32,8 +33,11 @@ cumpleycobra/
   contracts/cumpleycobra/   # Soroban (Rust) + tests
   backend/                  # FastAPI (Python)
   frontend/                 # Next.js
+  backend/storage/          # PostgresStore y migraciones SQL (solo suman)
   scripts/                  # preparación de cuentas y demo reproducible
-  docs/fases/               # un reporte por fase
+  docs/fases/               # bitácora del hackathon (fases 0 a 5)
+  docs/mejora/              # plan de mejora y un reporte por fase (mejora-N)
+  compose.yaml, Makefile    # Postgres + API + frontend con un solo comando
   Cargo.toml                # workspace (copiado de la guía)
   CLAUDE.md
 ```
@@ -44,7 +48,8 @@ cumpleycobra/
 | --- | --- |
 | Contrato | Rust + `soroban-sdk` 25, Stellar CLI, testnet |
 | Token | SAC de USDC de testnet (7 decimales: 1 USDC = 10_000_000 unidades) |
-| Backend | Python + FastAPI, local en la demo (**no** serverless) |
+| Backend | Python + FastAPI; un contenedor (`backend/Dockerfile`) en Cloud Run y en `docker compose` |
+| Estado | `state.json` o Postgres 17 (psycopg 3 + pool); Cloud SQL en producción a partir de la fase 1 |
 | Motor IA | Gemini Flash vía Vertex AI, SDK `google-genai`; modelo en `GEMINI_MODEL` |
 | Capa determinista | `tokenize`, `ast`, `hashlib` (biblioteca estándar) |
 | Blockchain en backend | `stellar-sdk` de Python (firma `release` con la llave del árbitro) |
@@ -52,7 +57,7 @@ cumpleycobra/
 | Wallet | `@pollar/react` + `@pollar/core` (requiere HTTPS o `localhost`) |
 | Blockchain en frontend | `@stellar/stellar-sdk` (arma `deposit`, firma Pollar) |
 
-Fuera del MVP: bases de datos, Docker/sandbox, integración con GitHub, más lenguajes, ZKProof, prueba de propiedad de la wallet con firma de mensaje. Opcional el viernes: cotización MXN con el adaptador de Etherfuse de la guía (en una ruta API de Next.js).
+Todavía fuera: ejecutar el código entregado (llega en la fase 3, con el verificador aislado de v2), integración con GitHub, más lenguajes, ZKProof y prueba de propiedad de la wallet con firma de mensaje. Cotización MXN con Etherfuse, opcional.
 
 ## Arquitectura
 
@@ -117,6 +122,7 @@ def sha256_hex(data: bytes) -> str:
 - `verdict_hash` = SHA-256 de `canonical_bytes({"version": 1, "task_id", "code_hash", "approved", "reason", "stage", "comparison", "security_flags", "video_url"})`.
 - En la API los hashes van en hexadecimal; en el contrato, como `BytesN<32>` con los 32 bytes crudos.
 - Documentar esta definición en el README para que cualquiera pueda recalcular los hashes.
+- Decisión de la fusión con v2 (fase 1 del plan de mejora): se queda este helper. Rechaza lo mismo que `canonical.py` de v2: `float`, enteros fuera de ±(2^53 − 1), surrogates sueltos, claves que no son texto y claves que coinciden tras NFC. Con datos válidos produce los mismos bytes que v2 (`backend/tests/test_hashing_v2.py`), y ningún hash existente cambia. Los veredictos por ejecución (fase 3) usarán un esquema `version: 2`; los de `version: 1` siguen válidos.
 
 ## Tokens (autorización sin wallets)
 
@@ -132,12 +138,20 @@ Tres tokens aleatorios (`secrets.token_urlsafe(32)`), comparados con `hmac.compa
 - El `release` siempre paga a la dirección amarrada, nunca a una que llegue en el cuerpo de `/evaluate`.
 - Límite honesto: el token prueba que se tiene la invitación, no la propiedad de la wallet. La firma de mensaje con la wallet queda en el roadmap.
 
-## Estado del backend (`state.json`)
+## Estado del backend
 
-- Diccionario en memoria volcado a `backend/state.json` en cada escritura: escribir a un archivo temporal y luego `os.replace` (atómico). Se relee al arrancar.
-- Guarda: tareas (versión final, monto, plazo, cliente, `rules_hash`), tokens, programador amarrado, envíos, caché de veredictos, código entregado, consentimientos y el `transaction_hash` de cada `release`.
-- Un `asyncio.Lock` por `task_id` para contar envíos y escribir el estado sin carreras.
-- `state.json` va en `.gitignore`.
+Guarda: tareas (versión final, monto, plazo, cliente, `rules_hash`), tokens, programador amarrado, envíos, caché de veredictos, código entregado, consentimientos, el `transaction_hash` de cada `release`, perfiles y propuestas. Dos implementaciones con la misma interfaz (`tasks`, `profiles`, `proposals`, `lock(clave)`, `save()`), elegidas con `STATE_BACKEND`:
+
+- **`json` (por defecto):** `StateStore` (`backend/state.py`). Diccionario en memoria volcado a `STATE_FILE` en cada escritura (archivo temporal y `os.replace`). Un `asyncio.Lock` por clave. **Exige un solo proceso y una sola réplica.**
+- **`postgres`:** `PostgresStore` (`backend/storage/postgres.py`), con `DATABASE_URL`.
+  - Una fila por entidad con el mismo documento que `state.json`, en una columna `json` (no `jsonb`): conserva el orden de claves, del que depende el backend (p. ej. la última entrega aprobada en `task["codes"]`). `seq` conserva el orden de creación.
+  - Mapa de identidad por petición (`StoreSessionMiddleware`): `save()` escribe en una transacción solo los documentos que cambiaron.
+  - `lock(clave)` = `asyncio.Lock` local + `pg_advisory_lock` en una conexión propia. Al entrar, los documentos ya leídos se recargan **en su lugar** (mismo dict), así que lo que se lea antes del candado queda fresco dentro de él.
+  - El release del árbitro (`stellar_client.RELEASE_LOCK`) usa el candado `cyc:release-arbitro`, y los retos SEP-10 viven en `sep10_challenges` (`identidad.PgChallenges`). Con eso, la API puede correr con varias instancias.
+  - Migraciones en `backend/storage/migrations/NNN_*.sql`: se aplican solas al arrancar, en orden y bajo candado. **Solo suman** (tablas o columnas nuevas); nunca rompen la versión anterior.
+- `python -m backend.storage.transfer importar|exportar|contar` pasa el estado entre los dos formatos (exportar es el camino de regreso a JSON).
+- Sigue en memoria por instancia (aceptable, documentado): el límite de peticiones por IP y las cuotas diarias, y la caché de lecturas del contrato.
+- `state.json` y cualquier exportación van en `.gitignore`: tienen tokens.
 
 ## Contrato Soroban
 
@@ -188,7 +202,7 @@ Errores (número fijo, `Error(Contract, #N)`): 1 `NotInitialized`, 2 `AlreadyIni
 
 Regla del plazo: el árbitro solo puede hacer `release` antes del plazo. Tras el plazo, la única salida es `timeout_refund` (o `client_release` si el cliente decide pagar), así que no hay carrera entre un `release` tardío y el reembolso.
 
-Idempotencia: un segundo `release` falla con `NotFunded`; el backend lo trata como éxito si la tarea ya está `Released` para ese freelancer y devuelve el `transaction_hash` guardado en `state.json`.
+Idempotencia: un segundo `release` falla con `NotFunded`; el backend lo trata como éxito si la tarea ya está `Released` para ese freelancer y devuelve el `transaction_hash` guardado en el estado.
 
 ### Tests obligatorios antes de desplegar
 
@@ -348,7 +362,7 @@ Si falla: `stage = "deterministic"`, no se llama a Gemini. Argumento para la def
 - Márgenes de tiempo (plazo on-chain): 120 s para entrar a `/evaluate`; 50 s antes de cada reintento a Gemini (20 s del intento + 30 s del release); 30 s antes de firmar el release. Si no alcanza, se responde sin contar el envío.
 - `release` que devuelve #9 (`DeadlinePassed`): no se reintenta; `approved: true`, `transaction_hash: null`. #6 (`NotFunded`) con la tarea `Released` para ese programador: éxito con el hash guardado. Si falla por falta de trustline, no se marca como reintentable por red.
 
-**`release` desde el backend:** armar la invocación, `prepare_transaction` en el RPC, firmar con la llave del árbitro, enviar y consultar hasta `SUCCESS` o `FAILED`. Guardar el hash en `state.json`.
+**`release` desde el backend:** armar la invocación, `prepare_transaction` en el RPC, firmar con la llave del árbitro, enviar y consultar hasta `SUCCESS` o `FAILED`. Guardar el hash en el estado.
 
 Límite honesto: no se ejecuta código; se detectan patrones evidentes de bucles sin salida, no todos.
 
@@ -380,9 +394,14 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `ARBITER_SECRET_KEY` (nunca sale del backend) | backend |
 | `CONTRACT_ID`, `USDC_SAC_ID`, `STELLAR_RPC_URL`, `NETWORK_PASSPHRASE` | backend |
 | `FRONTEND_ORIGIN`, `STATE_FILE` (por defecto `backend/state.json`) | backend |
+| `STATE_BACKEND` (`json` por defecto, o `postgres`), `DATABASE_URL` (con `postgres`) | backend |
+| `APP_MODE`: `local` (por defecto), `demo` (enlace público) o `live` (usuarios reales; exige `STATE_BACKEND=postgres`). En `demo` y `live`, si faltan, `RATE_LIMIT_PER_MINUTE=10` y `RATE_LIMIT_DAILY=500` | backend |
+| `CLIENT_IP_HEADER` (`x-real-ip` por defecto; `x-forwarded-for` en Cloud Run) y `TRUSTED_PROXY_HOPS` (proxies propios después del cliente) | backend |
+| `CYC_TEST_DATABASE_URL`: si está, los tests del backend también corren contra Postgres | tests |
 | `SEP10_SIGNING_SECRET`, `SESSION_SECRET` (identidad; nunca salen del backend) y, opcionales, `SEP10_HOME_DOMAIN`, `SEP10_WEB_AUTH_DOMAIN`, `HORIZON_URL` | backend |
 | `NEXT_PUBLIC_POLLAR_API_KEY`, `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_API_URL` | frontend |
 | `NEXT_PUBLIC_WALLET` (`pollar` por defecto, `freighter` de respaldo), `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_USDC_ASSET` (`CÓDIGO:EMISOR`) | frontend |
+| `NEXT_PUBLIC_APP_MODE` (`local`, `demo` o `live`; sin valor, `demo` en build de producción y `local` con `next dev`). En `demo`: aviso de testnet en todas las páginas, faucet de Circle en lugar de comandos de terminal | frontend |
 
 `.env` y `state.json` nunca se suben al repositorio; mantener un `.env.example`.
 
@@ -395,6 +414,10 @@ Llaves de identidad:
 - Nunca se imprimen ni se suben al repositorio: van en `backend/.env`, y `.env.example` las tiene vacías.
 
 ## Plan y reglas de corte
+
+**Vigente:** [`docs/mejora/plan.md`](docs/mejora/plan.md) (fases 0 a 6 del plan de mejora). Cada fase cierra con un tag `mejora-N` y un reporte `docs/mejora/fase-N.md`. El trabajo nuevo va detrás de variables de entorno apagadas por defecto, y nada de la fase siguiente se mezcla en lo que está desplegado.
+
+Histórico (hackathon, septiembre de 2026):
 
 | Fase | Cuándo | Hito verificable |
 | --- | --- | --- |
@@ -413,7 +436,7 @@ Llaves de identidad:
 
 1. Una fase a la vez; al cumplir el hito, escribir el reporte y detenerse para revisión.
 2. Reintentos con backoff en llamadas externas (Gemini, RPC de Stellar), solo ante errores transitorios.
-3. Sin bases de datos: el contrato es la fuente de verdad del dinero; el resto vive en memoria y en `state.json`.
+3. El contrato es la fuente de verdad del dinero; el resto vive en `state.json` o en Postgres (ver "Estado del backend"). Ninguna regla de dinero depende de la base de datos.
 4. UI con Tailwind y shadcn/ui, minimalista.
 5. Nunca cambiar los nombres de campos de la API.
 6. Ninguna llave privada ni la API de Gemini en el frontend.
@@ -423,20 +446,21 @@ Llaves de identidad:
 10. Commits pequeños y frecuentes (al menos uno por hora de trabajo y uno por hito) con mensajes claros; el historial puede contar como evidencia de participación.
 11. Ante un bloqueo de más de 45 minutos, detenerse y reportar la causa y dos alternativas.
 12. No inventar APIs de librerías (Pollar, `stellar-sdk`, `google-genai`, soroban-sdk): leer la documentación o el código de la versión instalada; si algo no existe, detenerse y reportarlo.
-13. No leer archivos fuera del repositorio sin preguntarle a Rodrigo.
+13. No leer archivos fuera del repositorio sin preguntarle a Rodrigo (excepción ya autorizada: el repositorio de v2, `C:\Users\rodri\Desktop\Cumple&Cobra_V2`, como referencia para portar piezas).
+14. Antes de un cambio en producción (Cloud Run, Vercel, Cloud SQL), preguntarle a Rodrigo; nunca durante una demo.
 
 ### Reporte de fase
 
-Al cerrar cada fase, crear `docs/fases/fase-N.md` con:
+Al cerrar cada fase del plan de mejora, crear `docs/mejora/fase-N.md` con:
 
 1. Qué se hizo (archivos creados o modificados).
 2. Desviaciones de este CLAUDE.md y por qué.
 3. Comandos ejecutados con su salida real (tests, `curl`, hashes de transacciones).
 4. Pendientes y riesgos detectados.
 
-## Primer encargo (fase 0)
+## Primer encargo del hackathon (histórico, fase 0)
 
-Las funciones diferenciadoras NO se tocan hasta que el túnel y Pollar funcionen.
+Las funciones diferenciadoras NO se tocaban hasta que el túnel y Pollar funcionaran.
 
 1. Clonar la guía, instalar Rust + Stellar CLI 25 y correr `cargo test -p escrow`.
 2. Crear este repositorio con el workspace de la guía y copiar `contracts/escrow` a `contracts/cumpleycobra`.
