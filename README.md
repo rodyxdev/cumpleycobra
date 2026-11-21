@@ -2,7 +2,7 @@
 
 **Si cumple lo acordado, cobras. Sin discusiones.**
 
-**Demo en línea:** https://cumpleycobra.vercel.app (backend: https://cumpleycobra-production.up.railway.app)
+**Demo en línea:** https://cumpleycobra.vercel.app (backend: https://cumpleycobra-api-1017372721585.us-central1.run.app)
 
 **Jueces:** el recorrido de 5 minutos está en [`docs/probar-en-linea.ejemplo.md`](docs/probar-en-linea.ejemplo.md). Úsalo con la invitación privada que les comparte el equipo.
 
@@ -64,7 +64,7 @@ backend/.venv/Scripts/python scripts/verificar_pago.py TX_HASH --veredicto vered
   Una respuesta de caché (`stage: "cache"`) también sirve: un veredicto pagado siempre viene de Gemini, y el script usa `stage: "llm"`.
 - `entrega.py`: el código tal como se entregó (`GET /tasks/{id}/delivery`).
 
-Desde la vista del cliente, con su `client_token` (`API` es `https://cumpleycobra-production.up.railway.app` o `http://localhost:8000`):
+Desde la vista del cliente, con su `client_token` (`API` es `https://cumpleycobra-api-1017372721585.us-central1.run.app` o `http://localhost:8000`):
 
 ```bash
 curl -s -H "X-Client-Token: $CLIENT_TOKEN" $API/tasks/$TASK_ID/verdicts > veredicto.json
@@ -116,7 +116,7 @@ Tests actuales: **294** del backend (`pytest`), **19** del frontend (`npm test`)
 
 Guía completa, variables por servicio y verificación en [`docs/despliegue.md`](docs/despliegue.md).
 
-- **Backend en Railway:** imagen de [`backend/Dockerfile`](backend/Dockerfile) configurada en [`railway.json`](railway.json).
+- **Backend en Cloud Run:** imagen de [`backend/Dockerfile`](backend/Dockerfile), una sola instancia y `state.json` en un volumen de Cloud Storage. Pasos en [`docs/mejora/puente-cloud-run.md`](docs/mejora/puente-cloud-run.md). `railway.json` queda del despliegue anterior.
   - **Un solo proceso** (`uvicorn --workers 1`, una réplica, sin solapamiento entre despliegues), porque los candados por tarea, la secuencia del árbitro, los retos SEP-10 y los límites viven en memoria.
   - `state.json` vive en un **volumen persistente en `/data`**: el despliegue no arranca sin él.
   - Health check en `/health`.

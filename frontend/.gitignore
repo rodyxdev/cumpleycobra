@@ -43,3 +43,6 @@ next-env.d.ts
 
 # Perfiles de Chrome del script del hito (sesiones de Pollar)
 .perfiles/
+
+.vercel
+.env*
