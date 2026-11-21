@@ -22,7 +22,7 @@ if ! command -v docker >/dev/null; then
 fi
 if ! command -v runsc >/dev/null; then
   # Instalación documentada en gvisor.dev (repositorio apt firmado).
-  curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+  curl -fsSL https://gvisor.dev/archive.key | gpg --batch --yes --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
     > /etc/apt/sources.list.d/gvisor.list
   apt-get update
