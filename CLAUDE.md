@@ -401,6 +401,7 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `SEP10_SIGNING_SECRET`, `SESSION_SECRET` (identidad; nunca salen del backend) y, opcionales, `SEP10_HOME_DOMAIN`, `SEP10_WEB_AUTH_DOMAIN`, `HORIZON_URL` | backend |
 | `NEXT_PUBLIC_POLLAR_API_KEY`, `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_API_URL` | frontend |
 | `NEXT_PUBLIC_WALLET` (`pollar` por defecto, `freighter` de respaldo), `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_USDC_ASSET` (`CÓDIGO:EMISOR`) | frontend |
+| `NEXT_PUBLIC_APP_MODE` (`local`, `demo` o `live`; sin valor, `demo` en build de producción y `local` con `next dev`). En `demo`: aviso de testnet en todas las páginas, faucet de Circle en lugar de comandos de terminal | frontend |
 
 `.env` y `state.json` nunca se suben al repositorio; mantener un `.env.example`.
 

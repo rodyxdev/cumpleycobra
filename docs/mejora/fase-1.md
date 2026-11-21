@@ -96,8 +96,35 @@ Nota: staging y producción firman con la misma llave de árbitro (el contrato t
    - Antes del corte: volver a correr el job `cyc-estado` con `--forzar`, para traer el estado más reciente.
 2. `api.rodyxdev.com`: necesita tu acceso a Cloudflare.
 3. Alertas de presupuesto en Google Cloud: son de la cuenta de facturación y necesitan tu permiso.
-4. Modo `demo` en el frontend: estados vacíos y sin páginas sin salida, revisado en celular.
+4. ~~Modo `demo` en el frontend~~: hecho el 21 de noviembre (ver «Parte C»).
 5. ~~Borrar los recursos temporales del ensayo~~: la instancia `cyc-pg-restauracion`, el secreto `cyc-database-url-restauracion` y el job `cyc-verificar-restauracion` se borraron el 21 de noviembre.
+
+## Parte C: modo demo del frontend (21 de noviembre de 2026)
+
+Sin desplegar: queda en la rama hasta tu visto bueno, y nunca durante la cumbre.
+
+| Pieza | Archivos |
+| --- | --- |
+| `NEXT_PUBLIC_APP_MODE` (`local`, `demo`, `live`); sin valor, un build de producción es `demo`, así que Vercel no necesita variables nuevas | `frontend/src/lib/app-mode.ts` |
+| Aviso fijo «Demo en la testnet de Stellar» con enlace al faucet de USDC de Circle; también en celular, donde el chip «Testnet» del encabezado se oculta | `frontend/src/components/demo-banner.tsx`, `layout.tsx` |
+| Sin comandos de terminal fuera de `local`: saldo insuficiente → faucet de Circle y tu dirección para copiar; el respaldo con `tarea_respaldo.py` solo en `local` | `frontend/src/app/cliente/page.tsx` |
+| Estado vacío o de error con salida (`EmptyState`) y textos por tipo de falla (`loadProblem`: no existe, enlace inválido, red o RPC) | `frontend/src/components/empty-state.tsx`, `frontend/src/lib/load-problem.ts` |
+| Página 404 y límite de error con «Intentar de nuevo» | `frontend/src/app/not-found.tsx`, `frontend/src/app/error.tsx` |
+
+Páginas sin salida que se corrigieron:
+
+- **Tarea que no existe o backend caído** (`/tarea/{id}`): antes, una línea de texto; ahora explica y ofrece inicio, crear tarea o reintentar.
+- **Tarea creada en otro navegador** (`/cliente?tarea=…`): se avisa *antes* de pedir la wallet, con enlace a la vista pública.
+- **Tarea tomada por otra wallet** y **programador sin invitación**: explican qué hacer; si quien la abre es el cliente, enlace a su vista.
+- **Programadores**: error con reintento automático cada 5 s y botón; lista vacía con «Crear la primera tarea».
+- **Perfil con dirección inválida**: mensaje propio y enlaces a la lista y al inicio.
+- **Buzón**: botón para iniciar sesión, y con el buzón vacío, enlace al perfil público.
+
+Verificación (build de producción con `next start`, es decir, modo `demo`, contra el backend local):
+
+- Celular (375 × 812): 404, tarea inexistente, tarea de otro navegador, tarea propia, buzón, perfil inválido e inicio. Sin desplazamiento horizontal (`scrollWidth` 375).
+- Escritorio: programadores con el backend apagado («No se pudo conectar con el servidor») y recuperación sola al volver a encenderlo.
+- `npm test`: 21 de 21 (2 nuevos: modo de la app y textos de carga). `tsc`, `eslint` y `next build` sin errores.
 
 ## Riesgos
 

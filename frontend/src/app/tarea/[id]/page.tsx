@@ -1,11 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { use, useEffect, useState } from "react";
+import { CloudOff, SearchX, UserCheck } from "lucide-react";
 
 import { SubmissionResult } from "@/components/submission-result";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CriteriaCard } from "@/components/criteria-card";
+import { EmptyState } from "@/components/empty-state";
 import { StatusCard } from "@/components/status-card";
 import { useTerminal } from "@/components/terminal";
 import { Button } from "@/components/ui/button";
@@ -16,6 +19,7 @@ import { UsdcTrustlineNotice } from "@/components/usdc-trustline-notice";
 import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type Caso, type TaskView, type Verdict } from "@/lib/api";
+import { loadProblem } from "@/lib/load-problem";
 import { keys, store, useStored, type FreelancerTask } from "@/lib/store";
 
 const MIN_SECONDS = 120; // mismo margen que el backend (DEADLINE_TOO_CLOSE)
@@ -33,8 +37,22 @@ export default function TareaPage({
   const mine = useStored<FreelancerTask>(keys.freelancerTask(id));
   const wallet = useWallet();
 
+  const mineAsClient = useStored<unknown>(keys.clientTask(id));
+
   if (!task) {
-    return <p className="text-sm text-muted-foreground">{error ? error.message : "Cargando la tarea…"}</p>;
+    if (!error) return <p className="text-base text-muted-foreground" role="status">Cargando la tarea…</p>;
+    const problem = loadProblem(error.code, error.status, error.message);
+    return (
+      <EmptyState icon={problem.transient ? CloudOff : SearchX} tone={problem.transient ? "neutral" : "alert"}
+        title={problem.title} testId="tarea-no-disponible"
+        actions={[
+          ...(problem.transient ? [{ label: "Intentar ahora", onClick: refresh, primary: true }] : []),
+          { label: "Ir al inicio", href: "/", primary: !problem.transient },
+          { label: "Crear una tarea", href: "/cliente" },
+        ]}>
+        {problem.text}
+      </EmptyState>
+    );
   }
 
   // Aceptada por esta wallet: el token guardado es de la dirección amarrada y de la wallet conectada.
@@ -59,13 +77,14 @@ export default function TareaPage({
             {accepted ? (
               <SubmitPanel task={task} mine={mine} secondsLeft={secondsLeft} onDone={refresh} />
             ) : takenByOther ? (
-              <Card className="order-3">
-                <CardContent className="text-sm text-muted-foreground">
-                  Esta tarea ya la aceptó otra wallet. Solo esa wallet puede entregar y cobrar.
-                </CardContent>
-              </Card>
+              <div className="order-3">
+                <EmptyState icon={UserCheck} title="Otra wallet ya aceptó esta tarea" testId="tarea-tomada"
+                  actions={[{ label: "Ver programadores", href: "/programadores" }, { label: "Ir al inicio", href: "/" }]}>
+                  Solo esa wallet puede entregar y cobrar. Si tú la aceptaste, inicia sesión con la misma cuenta de Pollar.
+                </EmptyState>
+              </div>
             ) : (
-              <div className="order-3"><AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} /></div>
+              <div className="order-3"><AcceptPanel taskId={id} invite={invitacion ?? null} onAccepted={refresh} isClient={!!mineAsClient} /></div>
             )}
           </div>
         )}
@@ -77,7 +96,7 @@ export default function TareaPage({
 // ---------------------------------------------------------------------------
 // Aceptar criterios
 // ---------------------------------------------------------------------------
-function AcceptPanel({ taskId, invite, onAccepted }: { taskId: string; invite: string | null; onAccepted: () => void }) {
+function AcceptPanel({ taskId, invite, onAccepted, isClient }: { taskId: string; invite: string | null; onAccepted: () => void; isClient: boolean }) {
   const wallet = useWallet();
   const [error, setError] = useState<ApiError | null>(null);
   const [sending, setSending] = useState(false);
@@ -109,7 +128,19 @@ function AcceptPanel({ taskId, invite, onAccepted }: { taskId: string; invite: s
       </CardHeader>
       <CardContent className="space-y-4">
         {!invite && (
-          <p className="text-sm text-[var(--alert-foreground)]">Necesitas el enlace de invitación que te compartió el cliente.</p>
+          <div className="space-y-2 rounded-lg border border-dashed p-4 text-sm" data-testid="sin-invitacion">
+            <p className="font-medium">Para aceptar necesitas el enlace de invitación que te compartió el cliente.</p>
+            <p className="text-muted-foreground">
+              {isClient
+                ? "Creaste esta tarea en este navegador: compártele a tu programador el enlace de invitación desde tu vista de cliente."
+                : "Ábrelo tal como te llegó: incluye el parámetro ?invitacion=…"}
+            </p>
+            {isClient && (
+              <Link href={`/cliente?tarea=${encodeURIComponent(taskId)}`} className="inline-block font-medium text-primary underline-offset-4 hover:underline">
+                Ir a mi vista de cliente
+              </Link>
+            )}
+          </div>
         )}
         {error?.code === "NO_USDC_TRUSTLINE" ? (
           <UsdcTrustlineNotice />

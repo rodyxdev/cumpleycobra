@@ -24,7 +24,8 @@ export default function BuzonPage() {
     <div className="page-heading"><p className="eyebrow">Tus propuestas</p><h1>Buzón</h1>
       <p>Revisa el pedido y sus criterios antes de aceptar el trabajo.</p>
     </div>
-    {!wallet.address ? <Card><CardContent>Inicia sesión con tu wallet para ver tus propuestas.</CardContent></Card> : !session ? (
+    {!wallet.address ? <Card><CardContent className="space-y-4" data-testid="buzon-sin-wallet"><p>Inicia sesión con tu wallet para ver las propuestas dirigidas a ti.</p>
+      <Button onClick={wallet.connect}>{wallet.mode === "pollar" ? "Iniciar sesión con Pollar" : "Conectar Freighter"}</Button></CardContent></Card> : !session ? (
       <Card><CardContent className="space-y-4"><p>Verifica tu identidad para abrir las propuestas dirigidas a tu wallet.</p><VerifyIdentityButton address={wallet.address} /></CardContent></Card>
     ) : <InboxList key={session.token} session={session} />}
   </div>;
@@ -77,7 +78,8 @@ function InboxList({ session }: { session: Session }) {
     {proposals === null && !loadError && <p className="text-muted-foreground">Consultando tus propuestas…</p>}
     {proposals?.length === 0 && <Card><CardContent className="space-y-3 py-4" data-testid="buzon-vacio">
       <Inbox className="size-7 text-primary" aria-hidden="true" /><h2 className="text-xl font-semibold">Tu buzón está al día</h2>
-      <p className="text-muted-foreground">Aquí aparecerán las propuestas que los clientes envíen a tu dirección.</p>
+      <p className="text-muted-foreground">Aquí aparecerán las propuestas que los clientes envíen a tu dirección. Mientras, completa tu perfil público: es lo que ven antes de proponerte una tarea.</p>
+      <Link href={`/programador/${session.address}`} className="inline-block font-medium text-primary underline-offset-4 hover:underline">Ver mi perfil público</Link>
     </CardContent></Card>}
     {proposals?.map((p) => <Card key={p.id} data-proposal-id={p.id}>
       <CardContent className="space-y-6">

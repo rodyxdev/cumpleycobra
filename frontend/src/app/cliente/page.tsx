@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useState, useSyncExternalStore } from "react";
+import { KeyRound } from "lucide-react";
 
 import { Money } from "@/components/money";
 import { VideoDemo } from "@/components/video-demo";
@@ -10,6 +11,7 @@ import { VerdictCard } from "@/components/verdict-card";
 import { ClientProposals } from "@/components/client-proposals";
 import { RatingCard } from "@/components/rating-card";
 import { CopyField } from "@/components/copy-field";
+import { EmptyState } from "@/components/empty-state";
 import { AssistedTaskForm } from "@/components/assisted-task-form";
 import { StatusCard } from "@/components/status-card";
 import { TxResult, type TxState } from "@/components/tx-result";
@@ -20,6 +22,8 @@ import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type ClientVerdict } from "@/lib/api";
 import { manualApproval } from "@/lib/approval";
+import { SHOW_DEV_HINTS, USDC_FAUCET_URL } from "@/lib/app-mode";
+import { loadProblem } from "@/lib/load-problem";
 import { formatUsdc, shortHash } from "@/lib/format";
 import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
 import { keys, store, useStored, type ClientTask } from "@/lib/store";
@@ -28,6 +32,10 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
   const { tarea } = use(searchParams);
   const ids = useStored<string[]>(keys.clientTaskIds) ?? [];
   const router = useRouter();
+  // Antes de pedir la wallet: si la tarea no se creó aquí, conectar no serviría de nada.
+  const known = useStored<ClientTask>(tarea ? keys.clientTask(tarea) : null);
+  // En el servidor no hay localStorage: sin esto, una tarea propia mostraría un instante «no se creó aquí».
+  const hydrated = useSyncExternalStore(noopSubscribe, () => true, () => false);
 
   return (
     <div className="space-y-6">
@@ -38,7 +46,8 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
         </p>
       </div>
       {tarea ? (
-        <UsdcGate role="cliente">{(usdc) => <ClientTaskPanel taskId={tarea} usdc={usdc} />}</UsdcGate>
+        !hydrated ? null : known ? <UsdcGate role="cliente">{(usdc) => <ClientTaskPanel taskId={tarea} usdc={usdc} />}</UsdcGate>
+          : <ForeignTask taskId={tarea} />
       ) : <AssistedTaskForm />}
       {ids.length > 0 && (
         <div className="space-y-2">
@@ -77,6 +86,8 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
   );
 }
 
+const noopSubscribe = () => () => {};
+
 // ---------------------------------------------------------------------------
 // Panel de una tarea creada
 // ---------------------------------------------------------------------------
@@ -88,15 +99,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
   const [deposit, setDeposit] = useState<TxState>({ phase: "idle" });
   const [manual, setManual] = useState<TxState>({ phase: "idle" });
 
-  if (!ct) {
-    return (
-      <Card>
-        <CardContent className="text-sm text-muted-foreground">
-          La tarea {taskId} no se creó en este navegador: sus tokens no están aquí.
-        </CardContent>
-      </Card>
-    );
-  }
+  if (!ct) return <ForeignTask taskId={taskId} />;
 
   const sameWallet = wallet.address === ct.client_address;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -120,7 +123,9 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
   return (
     <div className="space-y-6">
       {task ? <StatusCard task={task} secondsLeft={secondsLeft} /> : error ? (
-        <p className="text-sm text-[var(--alert-foreground)]">{error.message}</p>
+        <p className="text-sm text-[var(--alert-foreground)]" role="alert">
+          {loadProblem(error.code, error.status, error.message).text}
+        </p>
       ) : null}
       {!sameWallet && (
         <p className="rounded-md border border-[var(--alert)] bg-[var(--alert-background)] p-3 text-sm text-[var(--alert-foreground)]">
@@ -134,7 +139,11 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           <p className="max-w-3xl text-base text-muted-foreground">Ves el resultado de cada criterio y el video demo. El código se comparte tras el pago o con autorización explícita del programador.</p>
         </div>
         <div className="flex flex-col-reverse gap-6" data-testid="veredictos">
-          {verdicts.length === 0 && <p className="rounded-xl border border-dashed p-6 text-base text-muted-foreground">Todavía no hay envíos.</p>}
+          {verdicts.length === 0 && (
+            <p className="rounded-xl border border-dashed p-6 text-base text-muted-foreground" data-testid="sin-envios">
+              Todavía no hay envíos. Cuando tu programador entregue, aquí verás el veredicto criterio por criterio.
+            </p>
+          )}
           {verdicts.map((v) => (
             <VerdictCard key={v.code_hash} approved={v.approved} reason={v.reason} comparison={v.comparison}
               securityFlags={v.security_flags ?? []} transactionHash={v.transaction_hash} amount={task?.onchain?.amount}
@@ -161,10 +170,22 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
             <div className="space-y-2">
               <div className="text-xs font-medium text-muted-foreground">Depósito</div>
               {usdc.units < ct.amount && (
-                <p className="text-sm text-[var(--alert-foreground)]">
-                  Tu saldo ({formatUsdc(usdc.units)}) no alcanza para el depósito. Para la demo:{" "}
-                  <code className="font-mono text-sm">bash scripts/fondear.sh {wallet.address} {formatUsdc(ct.amount - usdc.units).replace(" USDC", "")}</code>
-                </p>
+                <div className="space-y-2 text-sm text-[var(--alert-foreground)]" data-testid="saldo-insuficiente">
+                  <p>Tu saldo ({formatUsdc(usdc.units)}) no alcanza para el depósito de {formatUsdc(ct.amount)}.</p>
+                  {SHOW_DEV_HINTS ? (
+                    <p>
+                      Para la demo:{" "}
+                      <code className="break-all font-mono text-sm">bash scripts/fondear.sh {wallet.address} {formatUsdc(ct.amount - usdc.units).replace(" USDC", "")}</code>
+                    </p>
+                  ) : (
+                    <p>
+                      Pide USDC de prueba en el{" "}
+                      <a href={USDC_FAUCET_URL} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-4">faucet de Circle</a>{" "}
+                      (red Stellar) con tu dirección; el saldo se actualiza solo en unos segundos.
+                    </p>
+                  )}
+                  {!SHOW_DEV_HINTS && wallet.address && <CopyField label="Tu dirección" value={wallet.address} />}
+                </div>
               )}
               <Button
                 data-testid="depositar"
@@ -186,7 +207,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
             </div>
           )}
           <TxResult state={deposit} label="Depósito" />
-          <details className="text-xs text-muted-foreground">
+          {SHOW_DEV_HINTS && <details className="text-xs text-muted-foreground">
             <summary className="cursor-pointer">Respaldo si la wallet no firma el depósito</summary>
             <p className="mt-2">
               Un depósito desde la terminal lo firma otra cuenta, y el motor exige que el cliente en el contrato sea
@@ -194,7 +215,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
               <code className="font-mono">backend/.venv/Scripts/python scripts/tarea_respaldo.py</code> y comparte el
               enlace que imprime.
             </p>
-          </details>
+          </details>}
           <div className="text-xs text-muted-foreground">
             rules_hash <span className="break-all font-mono">{ct.rules_hash}</span>
           </div>
@@ -241,6 +262,20 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           freelancer={task?.onchain?.freelancer ?? task?.freelancer_address ?? null} />
       )}
     </div>
+  );
+}
+
+/** Tarea creada en otro navegador: sus tokens no están aquí, pero su estado público sí. */
+function ForeignTask({ taskId }: { taskId: string }) {
+  return (
+    <EmptyState icon={KeyRound} title="Esta tarea no se creó en este navegador" testId="tarea-ajena"
+      actions={[
+        { label: "Ver la tarea", href: `/tarea/${encodeURIComponent(taskId)}`, primary: true },
+        { label: "Crear una tarea nueva", href: "/cliente" },
+      ]}>
+      Los tokens del cliente de la tarea <span className="font-mono">{taskId}</span> se guardan solo en el navegador
+      donde se creó. Desde aquí puedes ver su estado público, pero no depositar, aprobar ni ver el código.
+    </EmptyState>
   );
 }
 

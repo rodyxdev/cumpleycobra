@@ -2,27 +2,39 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, CloudOff, Users } from "lucide-react";
+
+import { EmptyState } from "@/components/empty-state";
 
 import { IdentityBadge } from "@/components/identity";
 import { ProgrammerMetrics } from "@/components/programmer-metrics";
 import { SkillTags } from "@/components/skill-tags";
 import { Card, CardContent } from "@/components/ui/card";
 import { api, ApiError, type ProgrammerSummary } from "@/lib/api";
+import { loadProblem } from "@/lib/load-problem";
 import { shortHash } from "@/lib/format";
 
 export default function ProgramadoresPage() {
   const [list, setList] = useState<ProgrammerSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let alive = true;
     api.programmers().then(
-      (r) => { if (alive) setList(r.programmers); },
-      (e) => { if (alive) setError(e instanceof ApiError ? e.message : String(e)); },
+      (r) => { if (alive) { setList(r.programmers); setError(null); } },
+      (e) => { if (alive) setError(e instanceof ApiError ? e : new ApiError(0, "ERROR", String(e))); },
     );
     return () => { alive = false; };
-  }, []);
+  }, [attempt]);
+  const problem = error ? loadProblem(error.code, error.status, error.message) : null;
+  // Fallas pasajeras (red, RPC): se reintenta sola cada 5 s, como promete el mensaje.
+  const transient = !list && !!problem?.transient;
+  useEffect(() => {
+    if (!transient) return;
+    const id = setTimeout(() => setAttempt((n) => n + 1), 5000);
+    return () => clearTimeout(id);
+  }, [transient, attempt]);
 
   return (
     <div className="space-y-8">
@@ -34,12 +46,19 @@ export default function ProgramadoresPage() {
         </p>
       </div>
 
-      {error && <p role="alert" className="text-base text-[var(--alert-foreground)]">{error}</p>}
+      {problem && !list && (
+        <EmptyState icon={CloudOff} title={problem.title} testId="programadores-error"
+          actions={[{ label: "Intentar de nuevo", onClick: () => { setError(null); setAttempt((n) => n + 1); }, primary: true }, { label: "Ir al inicio", href: "/" }]}>
+          {problem.text}
+        </EmptyState>
+      )}
       {!error && !list && <p className="text-base text-muted-foreground">Leyendo las tareas pagadas en el contrato…</p>}
       {list && list.length === 0 && (
-        <Card><CardContent className="text-base text-muted-foreground" data-testid="sin-programadores">
-          Todavía no hay tareas verificadas.
-        </CardContent></Card>
+        <EmptyState icon={Users} title="Todavía no hay tareas verificadas" testId="sin-programadores"
+          actions={[{ label: "Crear la primera tarea", href: "/cliente", primary: true }]}>
+          Un programador aparece aquí cuando el contrato registra su primer pago. La reputación no se puede escribir a
+          mano: sale de los pagos en Stellar.
+        </EmptyState>
       )}
       {list && list.length > 0 && (
         <ol className="space-y-4" data-testid="lista-programadores">
