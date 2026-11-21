@@ -48,7 +48,9 @@ until [ -f /opt/cyc/verifier/worker.py ]; do
   echo "esperando el código del verificador en /opt/cyc (deploy.ps1)"; sleep 30
 done
 cd /opt/cyc
-docker build -q -t cyc-proxy verifier/deploy/proxy >/dev/null
+# Con la red del host (el DNS de los contenedores es el de metadatos, bloqueado) y apt por HTTPS.
+cp /etc/ssl/certs/ca-certificates.crt verifier/deploy/proxy/certs/ca-certificates.crt
+docker build -q --network host -t cyc-proxy verifier/deploy/proxy >/dev/null
 if ! docker ps --format '{{.Names}}' | grep -qx cyc-proxy; then
   docker rm -f cyc-proxy >/dev/null 2>&1 || true
   docker run -d --name cyc-proxy --restart unless-stopped --read-only --tmpfs /var/spool/squid --tmpfs /var/log/squid \

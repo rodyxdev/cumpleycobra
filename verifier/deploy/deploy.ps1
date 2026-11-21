@@ -82,14 +82,14 @@ if (-not $SoloCodigo) {
 $tar = Join-Path $env:TEMP "cyc-verifier.tar"
 Write-Host "`n# Código del verificador (git archive HEAD verifier/) por IAP a /opt/cyc"
 Write-Host "git archive --format=tar -o $tar HEAD verifier"
-Write-Host "gcloud compute scp $tar ${Vm}:/tmp/cyc-verifier.tar --zone=$Zona --tunnel-through-iap"
-Write-Host "gcloud compute ssh $Vm --zone=$Zona --tunnel-through-iap --command=`"sudo mkdir -p /opt/cyc && sudo tar -xf /tmp/cyc-verifier.tar -C /opt/cyc && sudo systemctl restart google-startup-scripts`""
+Write-Host "gcloud compute scp $tar ${Vm}:/tmp/cyc-verifier.tar --zone=$Zona --tunnel-through-iap --strict-host-key-checking=no"
+Write-Host "gcloud compute ssh $Vm --zone=$Zona --tunnel-through-iap --strict-host-key-checking=no --command=`"sudo mkdir -p /opt/cyc && sudo tar -xf /tmp/cyc-verifier.tar -C /opt/cyc && sudo systemctl restart google-startup-scripts`""
 if ($Aplicar) {
     git archive --format=tar -o $tar HEAD verifier
     if ($LASTEXITCODE -ne 0) { throw "falló git archive" }
-    & gcloud compute scp $tar "${Vm}:/tmp/cyc-verifier.tar" --zone=$Zona --tunnel-through-iap
+    & gcloud compute scp $tar "${Vm}:/tmp/cyc-verifier.tar" --zone=$Zona --tunnel-through-iap --strict-host-key-checking=no
     if ($LASTEXITCODE -ne 0) { throw "falló la copia por IAP" }
-    & gcloud compute ssh $Vm --zone=$Zona --tunnel-through-iap --command="sudo mkdir -p /opt/cyc && sudo tar -xf /tmp/cyc-verifier.tar -C /opt/cyc && sudo systemctl restart google-startup-scripts"
+    & gcloud compute ssh $Vm --zone=$Zona --tunnel-through-iap --strict-host-key-checking=no --command="sudo mkdir -p /opt/cyc && sudo tar -xf /tmp/cyc-verifier.tar -C /opt/cyc && sudo systemctl restart google-startup-scripts"
     if ($LASTEXITCODE -ne 0) { throw "falló la instalación del código" }
     Remove-Item $tar
 }
