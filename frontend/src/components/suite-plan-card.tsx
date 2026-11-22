@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SuitePlan } from "@/lib/api";
-import { SUITE_STATUS_LABEL, TIPO_LABEL } from "@/lib/verification";
+import { SUITE_STATUS_LABEL, TIPO_LABEL, WEB_SUITE_STATUS_LABEL } from "@/lib/verification";
 
 /** Plan de la suite oculta (fase 3): qué se comprueba ejecutando y qué leyendo. Nunca el código de los tests. */
 export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria: string[] }) {
@@ -17,8 +17,12 @@ export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria:
       </CardHeader>
       <CardContent className="space-y-4">
         <p role="status" className={`text-sm font-medium ${suite.status === "rechazada" ? "text-[var(--alert-foreground)]" : working ? "text-muted-foreground" : "text-primary"}`}>
-          {SUITE_STATUS_LABEL[suite.status]}{working ? "… (de 1 a 3 minutos si hay que encender el verificador)" : ""}
+          {(suite.profile === "web" ? WEB_SUITE_STATUS_LABEL : SUITE_STATUS_LABEL)[suite.status]}
+          {working ? "… (de 1 a 3 minutos si hay que encender el verificador)" : ""}
         </p>
+        {suite.status === "rechazada" && suite.error && (
+          <p className="text-sm text-[var(--alert-foreground)]">{suite.error}. Crea la tarea de nuevo para intentarlo otra vez.</p>
+        )}
         {suite.status !== "pendiente" && (
           <ol className="divide-y divide-border">
             {suite.criteria.map((c) => (

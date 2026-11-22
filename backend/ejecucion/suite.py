@@ -330,4 +330,7 @@ def public_plan(suite: dict | None) -> dict | None:
         "criteria": [{"index": c["index"], "tipo": c["tipo"], "plan": c["plan"],
                       "problems": c["problems"] if suite["status"] == "rechazada" else []}
                      for c in suite["criteria"]],
+        # Motivo legible (el detalle técnico queda solo en el estado interno).
+        "error": (suite.get("error_public") or ("No se pudo preparar: " + suite["error"][:120] if suite.get("error") else None))
+        if suite["status"] == "rechazada" else None,
     }

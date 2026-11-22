@@ -155,7 +155,9 @@ export function AssistedTaskForm() {
                 <Label htmlFor="descripcion">Versión mejorada · descripción</Label>
                 <Textarea id="descripcion" rows={5} value={spec.description} disabled={!!busy}
                   onChange={(e) => setSpec({ ...spec, description: e.target.value })} />
-                <p className="text-sm text-muted-foreground">Python · {spec.allowed_deps.length ? `Librerías permitidas: ${spec.allowed_deps.join(", ")}` : "Sin librerías permitidas"}</p>
+                <p className="text-sm text-muted-foreground">{execute && kind === "web"
+                  ? `Sitio web · ${spec.allowed_deps.length ? `Paquetes de npm permitidos: ${spec.allowed_deps.join(", ")}` : "Sin paquetes de npm"}`
+                  : `Python · ${spec.allowed_deps.length ? `Librerías permitidas: ${spec.allowed_deps.join(", ")}` : "Sin librerías permitidas"}`}</p>
               </div>
 
             <div className="space-y-4">

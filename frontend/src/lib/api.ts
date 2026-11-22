@@ -45,6 +45,8 @@ export type SuitePlan = {
   suite_hash: string | null;
   /** "web": los chequeos son públicos y corren en un navegador real. */
   profile?: "web";
+  /** Motivo, si la suite quedó rechazada (p. ej. el verificador no pudo ejecutar). */
+  error?: string | null;
   criteria: {
     index: number;
     tipo: "test" | "lectura" | "navegador" | "visual" | null;

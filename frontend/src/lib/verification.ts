@@ -34,6 +34,14 @@ export function parsePages(raw: string): string[] | string {
   return pages;
 }
 
+/** Para el perfil web: los chequeos son públicos, no una suite oculta. */
+export const WEB_SUITE_STATUS_LABEL: Record<SuitePlan["status"], string> = {
+  pendiente: "Preparando los chequeos del navegador",
+  validando: "Validando los chequeos en un navegador",
+  lista: "Chequeos listos",
+  rechazada: "No se pudieron preparar los chequeos",
+};
+
 export const SUITE_STATUS_LABEL: Record<SuitePlan["status"], string> = {
   pendiente: "Preparando la suite oculta",
   validando: "Validando la suite oculta",

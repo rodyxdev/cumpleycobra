@@ -189,6 +189,7 @@ async def _advance_suite(job_id: str, lease_id: str, task: dict) -> dict:
         except LLMError as exc:
             suite["status"] = "rechazada"
             suite["error"] = str(exc)[:300]
+            suite["error_public"] = "El modelo no respondió al preparar la verificación; no es un problema de tu acuerdo"
             m.store().save()
             queue().finish(job_id, lease_id, "failed", {"error": suite["error"]})
             return {"next": "done"}
@@ -273,6 +274,7 @@ async def fail(job_id: str, body: FailIn, authorization: str | None = Header(def
             else:
                 task["suite"]["status"] = "rechazada"
                 task["suite"]["error"] = f"el verificador no pudo ejecutar la suite: {body.message[:200]}"
+                task["suite"]["error_public"] = "El verificador no estuvo disponible; no es un problema de tu acuerdo"
             m.store().save()
     return {"ok": True}
 
