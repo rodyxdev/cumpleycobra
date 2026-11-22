@@ -12,6 +12,8 @@ import { useWallet } from "@/hooks/use-wallet";
 import { api, type CriterionReview, type Demo, type Spec } from "@/lib/api";
 import { Money, FxNotice, parsePesos, useFx } from "@/components/money";
 import { store } from "@/lib/store";
+import { VERIFIER_ENABLED } from "@/lib/app-mode";
+import { buildInterface, guessInterface, interfaceProblem, parsePages } from "@/lib/verification";
 
 export function AssistedTaskForm() {
   const router = useRouter();
@@ -25,6 +27,12 @@ export function AssistedTaskForm() {
   const [error, setError] = useState<string | null>(null);
   const [amount, setAmount] = useState("20");
   const [minutes, setMinutes] = useState("10");
+  // Fase 3: verificar ejecutando (solo si el backend lo tiene habilitado).
+  const [execute, setExecute] = useState(false);
+  const [iface, setIface] = useState({ module: "", name: "", signature: "" });
+  // Perfil web: un sitio (HTML/CSS/JS) que se revisa en un navegador; en lugar de interfaz, páginas.
+  const [kind, setKind] = useState<"script" | "web">("script");
+  const [pagesText, setPagesText] = useState("/");
 
   useEffect(() => {
     let alive = true;
@@ -41,7 +49,17 @@ export function AssistedTaskForm() {
   const mins = /^\d+$/.test(minutes) ? Number(minutes) : NaN;
   const validCriteria = !!spec && spec.criteria.length > 0 && spec.criteria.length <= 8 &&
     spec.criteria.every((c) => c.trim().length > 0 && c.length <= 300);
-  const valid = validCriteria && !!spec?.description.trim() && units !== null && mins > 0 && mins <= 10080;
+  const pages = parsePages(pagesText);
+  const ifaceProblem = !execute ? null
+    : kind === "web" ? (typeof pages === "string" ? pages : null)
+    : interfaceProblem(iface.module, iface.name, iface.signature);
+  const minMinutes = execute ? 15 : 1; // la verificación por ejecución necesita al menos 5 min de plazo al encolar
+  const valid = validCriteria && !!spec?.description.trim() && units !== null && mins >= minMinutes && mins <= 10080 && !ifaceProblem;
+
+  function toggleExecute(on: boolean) {
+    setExecute(on);
+    if (on && spec && !iface.name) setIface(guessInterface(spec));
+  }
 
   function editCriteria(criteria: string[]) {
     if (!spec) return;
@@ -79,6 +97,9 @@ export function AssistedTaskForm() {
       const created = await api.createTask({
         ...spec, raw_request: original, client_address: wallet.address,
         amount: units, deadline_minutes: mins,
+        ...(execute && kind === "web" && typeof pages !== "string"
+          ? { verification: "execution", language: "web", web: { pages } }
+          : execute ? { verification: "execution", interface: buildInterface(iface.module, iface.name, iface.signature) } : {}),
       });
       store.saveClientTask({ ...created, amount: units, deadline_minutes: mins, client_address: wallet.address });
       router.replace(`/cliente?tarea=${encodeURIComponent(created.task_id)}`);
@@ -134,7 +155,9 @@ export function AssistedTaskForm() {
                 <Label htmlFor="descripcion">Versión mejorada · descripción</Label>
                 <Textarea id="descripcion" rows={5} value={spec.description} disabled={!!busy}
                   onChange={(e) => setSpec({ ...spec, description: e.target.value })} />
-                <p className="text-sm text-muted-foreground">Python · {spec.allowed_deps.length ? `Librerías permitidas: ${spec.allowed_deps.join(", ")}` : "Sin librerías permitidas"}</p>
+                <p className="text-sm text-muted-foreground">{execute && kind === "web"
+                  ? `Sitio web · ${spec.allowed_deps.length ? `Paquetes de npm permitidos: ${spec.allowed_deps.join(", ")}` : "Sin paquetes de npm"}`
+                  : `Python · ${spec.allowed_deps.length ? `Librerías permitidas: ${spec.allowed_deps.join(", ")}` : "Sin librerías permitidas"}`}</p>
               </div>
 
             <div className="space-y-4">
@@ -204,9 +227,49 @@ export function AssistedTaskForm() {
               <div className="space-y-2"><Label htmlFor="plazo">Plazo (minutos)</Label>
                 <Input id="plazo" value={minutes} inputMode="numeric" disabled={!!busy} onChange={(e) => setMinutes(e.target.value)} /></div>
             </div>
+            {VERIFIER_ENABLED && (
+              <div className="space-y-3 rounded-lg border p-4" data-testid="verificar-ejecutando">
+                <label className="flex items-start gap-2 text-sm font-medium">
+                  <input type="checkbox" checked={execute} disabled={!!busy} onChange={(e) => toggleExecute(e.target.checked)} />
+                  Verificar ejecutando (beta): la entrega corre en un contenedor aislado, contra una suite de tests oculta o, si es un sitio web, en un navegador real.
+                </label>
+                {execute && (
+                  <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Qué se entrega">
+                    {([["script", "Código de Python"], ["web", "Sitio web"]] as const).map(([k, text]) => (
+                      <Button key={k} role="radio" aria-checked={kind === k} size="sm" variant={kind === k ? "default" : "outline"}
+                        disabled={!!busy} onClick={() => setKind(k)}>{text}</Button>
+                    ))}
+                  </div>
+                )}
+                {execute && kind === "web" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="paginas">Páginas a revisar</Label>
+                    <Input id="paginas" value={pagesText} disabled={!!busy} className="font-mono"
+                      onChange={(e) => setPagesText(e.target.value)} placeholder="/, /contacto" />
+                    {ifaceProblem && <p className="text-sm text-[var(--alert-foreground)]">{ifaceProblem}</p>}
+                    <p className="text-xs text-muted-foreground">Las páginas entran al acuerdo (rules_hash). Un navegador real revisa cada una a 1440 px y a 390 px, y toma capturas.</p>
+                  </div>
+                )}
+                {execute && kind === "script" && (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-2"><Label htmlFor="iface-modulo">Módulo</Label>
+                      <Input id="iface-modulo" value={iface.module} disabled={!!busy} className="font-mono"
+                        onChange={(e) => setIface({ ...iface, module: e.target.value })} /></div>
+                    <div className="space-y-2"><Label htmlFor="iface-funcion">Función</Label>
+                      <Input id="iface-funcion" value={iface.name} disabled={!!busy} className="font-mono"
+                        onChange={(e) => setIface({ ...iface, name: e.target.value })} /></div>
+                    <div className="space-y-2 sm:col-span-3"><Label htmlFor="iface-firma">Firma</Label>
+                      <Input id="iface-firma" value={iface.signature} disabled={!!busy} className="font-mono"
+                        onChange={(e) => setIface({ ...iface, signature: e.target.value })} /></div>
+                    {ifaceProblem && <p className="text-sm text-[var(--alert-foreground)] sm:col-span-3">{ifaceProblem}</p>}
+                    <p className="text-xs text-muted-foreground sm:col-span-3">La interfaz entra al acuerdo (rules_hash): tu programador entrega exactamente ese módulo y esa función.</p>
+                  </div>
+                )}
+              </div>
+            )}
             {units !== null && <Money units={units} />}
             <FxNotice />
-            {!valid && <p className="text-sm text-[var(--alert-foreground)]">Completa la descripción y los criterios, un monto válido y un plazo entre 1 y 10080 minutos (7 días).</p>}
+            {!valid && <p className="text-sm text-[var(--alert-foreground)]">Completa la descripción y los criterios, un monto válido y un plazo entre {minMinutes} y 10080 minutos (7 días){execute ? (kind === "web" ? ", y páginas válidas" : ", y una interfaz válida") : ""}.</p>}
             <Button disabled={!valid || !!busy} onClick={create}>{busy === "create" ? "Creando…" : "Crear tarea"}</Button>
           </CardContent>
         </Card>

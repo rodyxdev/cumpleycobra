@@ -15,7 +15,11 @@ export type Spec = {
   language: string;
   allowed_deps: string[];
   examples: Example[];
+  /** Perfil web (fase 3): páginas que se revisan en el navegador. */
+  web?: WebPages | null;
 };
+
+export type WebPages = { pages: string[] };
 
 export type Caso = { id: string; nombre: string; principal: boolean; codigo: string };
 
@@ -29,6 +33,50 @@ export type OnchainTask = {
   deadline: number;
   rules_hash: string;
   status: "Funded" | "Released" | "Refunded";
+};
+
+/** Fase 3: lo que la entrega debe exponer para verificarla ejecutando. */
+export type InterfaceSymbol = { module: string; name: string; kind: "function" | "class"; signature: string; description?: string };
+export type Interface = { language: "python"; symbols: InterfaceSymbol[] };
+
+/** Plan público de la suite oculta: nunca trae el código de los tests. */
+export type SuitePlan = {
+  status: "pendiente" | "validando" | "lista" | "rechazada";
+  suite_hash: string | null;
+  /** "web": los chequeos son públicos y corren en un navegador real. */
+  profile?: "web";
+  /** Motivo, si la suite quedó rechazada (p. ej. el verificador no pudo ejecutar). */
+  error?: string | null;
+  criteria: {
+    index: number;
+    tipo: "test" | "lectura" | "navegador" | "visual" | null;
+    plan: string[];
+    problems: string[];
+    checks?: WebCheck[];
+  }[];
+};
+
+export type WebCheck = { id: string; kind: string; page: string; args: string[] };
+
+/** Captura de una entrega web; `url` es relativa a la API y vence a los 15 minutos. */
+export type Screenshot = { id: string; page: string; viewport: "desktop" | "mobile" | string; label: string; sha256: string; url?: string | null };
+
+export type VerificationSource =
+  | { kind: "code"; code: string }
+  | { kind: "zip"; zip_b64: string }
+  | { kind: "github_public"; repo: string; sha: string };
+
+export type VerificationStatus = {
+  verification_id: string;
+  task_id: string;
+  status: "queued" | "running" | "done" | "failed";
+  created_at: number;
+  updated_at: number;
+  progress: { stage: string; label: string; detail: string; at: number }[];
+  submissions_used: number;
+  result?: Verdict & { verdict_version?: number; workspace_hash?: string; suite_hash?: string };
+  error?: string;
+  message?: string;
 };
 
 export type TaskView = Spec & {
@@ -49,6 +97,10 @@ export type TaskView = Spec & {
   latest_rejected?: boolean;
   /** Calificación del cliente, si ya calificó (pública: aparece en el perfil del programador). */
   rating?: Rating | null;
+  /** Fase 3: "execution" si la tarea se verifica ejecutando el código. */
+  verification?: "static" | "execution";
+  interface?: Interface;
+  suite?: SuitePlan | null;
 };
 
 export type Rating = { estrellas: number; comentario: string | null };
@@ -96,7 +148,8 @@ export type Verdict = {
   approved: boolean;
   reason: string;
   transaction_hash: string | null;
-  stage: "deterministic" | "llm" | "cache";
+  /** v1: deterministic | llm | cache. Por ejecución (fase 3): hygiene | build | static | tests | judge | final. */
+  stage: string;
   analysis: string[];
   comparison: string[];
   code_hash: string;
@@ -105,12 +158,14 @@ export type Verdict = {
   /** Enlace de Drive normalizado (…/preview) que entró al verdict_hash, o null. */
   video_url: string | null;
   submissions_used: number;
+  /** Fase 3: detalle de la verificación por ejecución (en el perfil web, las capturas). */
+  verification?: { profile?: string; screenshots?: Screenshot[] };
 };
 
 export type ClientVerdict = Pick<
   Verdict,
   "code_hash" | "approved" | "stage" | "reason" | "comparison" | "security_flags" | "transaction_hash"
-> & { video_url?: string | null; consented?: boolean };
+> & { video_url?: string | null; consented?: boolean; screenshots?: Screenshot[] };
 
 export class ApiError extends Error {
   constructor(
@@ -205,6 +260,18 @@ export const api = {
       method: "POST",
       headers: { "X-Freelancer-Token": token },
       body: JSON.stringify({ task_id, freelancer_address, code, video_url }),
+    }),
+  verify: (id: string, freelancer_address: string, source: VerificationSource, token: string, video_url: string | null = null) =>
+    request<{ verification_id: string; status: string; submissions_used: number }>(
+      `/tasks/${encodeURIComponent(id)}/verificaciones`,
+      { method: "POST", headers: { "X-Freelancer-Token": token }, body: JSON.stringify({ freelancer_address, source, video_url }) },
+    ),
+  verification: (verificationId: string, headers: { freelancer?: string; client?: string }) =>
+    request<VerificationStatus>(`/verificaciones/${encodeURIComponent(verificationId)}`, {
+      headers: {
+        ...(headers.freelancer ? { "X-Freelancer-Token": headers.freelancer } : {}),
+        ...(headers.client ? { "X-Client-Token": headers.client } : {}),
+      },
     }),
   delivery: (id: string, clientToken: string) =>
     request<{ code: string; video_url: string | null; code_hash: string }>(

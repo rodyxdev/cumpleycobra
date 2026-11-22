@@ -33,3 +33,7 @@ docs/probar-en-linea.md
 
 # Grafo de graphify (análisis local)
 graphify-out/
+
+# Estado local del verificador y su API de prueba (tiene tokens)
+.data/
+verifier/deploy/proxy/certs/*.crt

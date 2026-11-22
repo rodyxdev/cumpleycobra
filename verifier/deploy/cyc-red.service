@@ -1,0 +1,13 @@
+[Unit]
+Description=Reglas de red del verificador de Cumple&Cobra (antes de Docker)
+Before=docker.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/sbin/cyc-red.sh
+
+[Install]
+RequiredBy=docker.service
+WantedBy=multi-user.target

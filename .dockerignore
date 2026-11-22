@@ -1,6 +1,9 @@
 # Imagen del backend: solo backend/ (sin secretos, estado local ni entornos virtuales).
 *
 !backend/
+# La API importa el contrato y los archivos fijos de la suite del verificador (fase 3).
+!verifier/
+verifier/tests/
 backend/.env
 backend/.env.*
 backend/.venv/

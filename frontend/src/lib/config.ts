@@ -20,4 +20,4 @@ export const POLLAR_API_KEY = process.env.NEXT_PUBLIC_POLLAR_API_KEY ?? "";
 export const WALLET_MODE: "pollar" | "freighter" =
   process.env.NEXT_PUBLIC_WALLET === "freighter" ? "freighter" : "pollar";
 
-export { APP_MODE, SHOW_DEV_HINTS, USDC_FAUCET_URL } from "@/lib/app-mode";
+export { APP_MODE, SHOW_DEV_HINTS, USDC_FAUCET_URL, VERIFIER_ENABLED } from "@/lib/app-mode";

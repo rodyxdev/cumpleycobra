@@ -7,6 +7,7 @@ import { KeyRound } from "lucide-react";
 
 import { Money } from "@/components/money";
 import { VideoDemo } from "@/components/video-demo";
+import { ScreenshotGallery } from "@/components/screenshot-gallery";
 import { VerdictCard } from "@/components/verdict-card";
 import { ClientProposals } from "@/components/client-proposals";
 import { RatingCard } from "@/components/rating-card";
@@ -19,12 +20,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { UsdcGate } from "@/components/usdc-gate";
 import { useTask } from "@/hooks/use-task";
+import { SuitePlanCard } from "@/components/suite-plan-card";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type ClientVerdict } from "@/lib/api";
 import { manualApproval } from "@/lib/approval";
 import { SHOW_DEV_HINTS, USDC_FAUCET_URL } from "@/lib/app-mode";
 import { loadProblem } from "@/lib/load-problem";
 import { formatUsdc, shortHash } from "@/lib/format";
+import { STAGE_LABEL } from "@/lib/verification";
 import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
 import { keys, store, useStored, type ClientTask } from "@/lib/store";
 
@@ -122,6 +125,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
 
   return (
     <div className="space-y-6">
+      {task?.verification === "execution" && task.suite && <SuitePlanCard suite={task.suite} criteria={task.criteria} />}
       {task ? <StatusCard task={task} secondsLeft={secondsLeft} /> : error ? (
         <p className="text-sm text-[var(--alert-foreground)]" role="alert">
           {loadProblem(error.code, error.status, error.message).text}
@@ -147,8 +151,9 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           {verdicts.map((v) => (
             <VerdictCard key={v.code_hash} approved={v.approved} reason={v.reason} comparison={v.comparison}
               securityFlags={v.security_flags ?? []} transactionHash={v.transaction_hash} amount={task?.onchain?.amount}
-              meta={<>Capa {v.stage === "deterministic" ? "determinista" : v.stage === "cache" ? "caché" : "Gemini"} · código <span className="font-mono">{shortHash(v.code_hash)}</span></>}>
+              meta={<>Capa {STAGE_LABEL[v.stage] ?? v.stage} · código <span className="font-mono">{shortHash(v.code_hash)}</span></>}>
               <VideoDemo url={v.video_url} />
+              {v.screenshots?.length ? <ScreenshotGallery shots={v.screenshots} /> : null}
             </VerdictCard>
           ))}
         </div>

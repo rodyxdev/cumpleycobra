@@ -1,0 +1,22 @@
+[Unit]
+Description=Trabajador del verificador de Cumple&Cobra (fase 3)
+After=docker.service network-online.target cyc-red.service
+Requires=docker.service cyc-red.service
+
+[Service]
+EnvironmentFile=/etc/cyc-verificador.env
+WorkingDirectory=/opt/cyc
+# Última defensa: sin la regla que bloquea los metadatos a los contenedores, no arranca.
+ExecStartPre=/usr/sbin/iptables -C DOCKER-USER -d 169.254.169.254 -j DROP
+ExecStart=/opt/cyc/.venv/bin/python -m verifier.worker
+# on-failure: tras el apagado por inactividad el trabajador sale con 0 y no debe volver a pedir trabajo.
+Restart=on-failure
+RestartSec=5
+# Root solo para hablar con Docker; el código ajeno nunca corre aquí, sino en contenedores runsc.
+NoNewPrivileges=true
+ProtectHome=true
+# Sus temporales (montados en los contenedores) van en TMPDIR=/var/lib/cyc/tmp: Docker no ve un /tmp privado.
+PrivateTmp=true
+
+# Sin [Install]: no arranca solo al encender la VM; lo arranca startup.sh cuando la red y las
+# imágenes están listas.
