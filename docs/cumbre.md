@@ -18,7 +18,7 @@ La demo es la versión publicada: **https://cumpleycobra.vercel.app** (frontend 
 
 ## Antes de subir (el día 23)
 
-- [ ] **API caliente:** mínimo de instancias en 1 durante la cumbre (se devuelve a 0 al terminar). Comprobar `/health` en menos de 1 s.
+- [x] **API caliente:** mínimo de instancias en 1 desde el 22 de noviembre (revisión `cumpleycobra-api-00004-nhk`, la misma imagen `sha256:9386e40d…` que la `00003-cez`; `/health` en ≈0.15 s). El día 23, solo comprobar `/health` en menos de 1 s.
 - [ ] **Dos ventanas de Chrome con perfiles separados**, cliente a la izquierda y programador a la derecha, las dos en `https://cumpleycobra.vercel.app/cliente`.
 - [ ] **Iniciar sesión en Pollar en las dos**, justo antes de subir (las sesiones caducan). Ver la dirección en el botón de arriba a la derecha. Cerrar la ventanita de Pollar al terminar el login.
 - [ ] **Wi-Fi del evento:** si muchas personas usan la demo desde la misma red, comparten el límite de 10 peticiones por minuto (es por IP). La demo del escenario hace 4 llamadas a la IA; no pedir al público que la use al mismo tiempo.
@@ -73,6 +73,6 @@ Grabar las dos ventanas lado a lado, con el mismo recorrido de arriba, sin corte
 
 ## Después de la cumbre
 
-- [ ] Devolver el mínimo de instancias de la API a 0.
+- [ ] Devolver el mínimo de instancias de la API a 0: `gcloud run services update cumpleycobra-api --region=us-central1 --min-instances=0`.
 - [ ] Reembolsar con `timeout_refund` las tareas que hayan quedado depositadas (comando en `demo.md`).
 - [ ] Empezar la fase 2 del plan de mejora (cuentas reales).
