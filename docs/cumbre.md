@@ -22,7 +22,7 @@ La demo es la versión publicada: **https://cumpleycobra.vercel.app** (frontend 
 - [ ] **Dos ventanas de Chrome con perfiles separados**, cliente a la izquierda y programador a la derecha, las dos en `https://cumpleycobra.vercel.app/cliente`.
 - [ ] **Iniciar sesión en Pollar en las dos**, justo antes de subir (las sesiones caducan). Ver la dirección en el botón de arriba a la derecha. Cerrar la ventanita de Pollar al terminar el login.
 - [ ] **Wi-Fi del evento:** si muchas personas usan la demo desde la misma red, comparten el límite de 10 peticiones por minuto (es por IP). La demo del escenario hace 4 llamadas a la IA; no pedir al público que la use al mismo tiempo.
-- [ ] **Video de respaldo** en un archivo local (no depende de la red).
+- [ ] **Video de respaldo** en un archivo local (no depende de la red). Ya hay una guía pantalla por pantalla: [`cumbre/recorrido-demo.mp4`](cumbre/recorrido-demo.mp4) (2:04, 18 pantallas de un recorrido real en producción el 22 de noviembre, tarea `JgIReynD_NgX1DMR`, pago `0b27a204…`), armada con capturas y subtítulos. Sirve de respaldo si falla todo; uno grabado en vivo se ve más natural.
 - [x] **Láminas de «lo que sigue»:** capturas listas en `docs/cumbre/` (plan de chequeos, veredicto web pagado, galería y una captura original del verificador).
 
 ## Recorrido (unos 5 minutos)
