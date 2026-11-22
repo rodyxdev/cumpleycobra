@@ -29,7 +29,8 @@ def _is_own_test(rel: str) -> bool:
 
 def security_scan(files: dict[str, str], allowed_deps: list[str]) -> list[str]:
     """Problemas de seguridad de los `.py` de la entrega (vacío si no hay)."""
-    allowed = set(allowed_deps) | local_modules(files)
+    # `__future__` solo cambia cómo se compila el archivo (p. ej. `annotations`): no da acceso a nada.
+    allowed = set(allowed_deps) | local_modules(files) | {"__future__"}
     problems: list[str] = []
     for rel, text in sorted(files.items()):
         # Los tests propios del programador nunca se ejecutan (aquí ni en la suite); sí se
