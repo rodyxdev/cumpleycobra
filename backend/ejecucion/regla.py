@@ -12,6 +12,13 @@ Global: aprobado solo si todos los criterios pasan y no hay señales de inyecci�
 manipulación. Revisión manual = no se paga solo; el cliente decide con `client_release`.
 Antes de los criterios: higiene, build de dependencias y la capa de seguridad de v1 (que protege
 al cliente que va a correr el código) rechazan por sí solas.
+
+Perfil web (`decide_web`):
+- `navegador`: pasa si TODOS sus chequeos pasaron en el navegador; falla si alguno no. Sin el juez.
+- `visual`: juez = pass citando al menos una captura existente → pass; juez = fail citando una
+  captura → fail; sin cita de captura o sin veredicto → revisión manual.
+- `lectura`: como en el perfil script.
+- Texto (visible u oculto) dirigido al evaluador en la página o en el código: no se aprueba solo.
 """
 
 from __future__ import annotations
@@ -49,13 +56,19 @@ class Decision:
     flags: dict[str, bool]
     reasons: list[str]
     security_flags: list[str]
+    profile: str = "script"
 
     def comparison(self) -> list[str]:
         out = []
         for d in self.criteria:
             mark = "✓" if d.status == "pass" else "✗"
             if d.status == "pass":
-                detail = (f"{len(d.tests)} de {len(d.tests)} tests pasan" if d.tests else "cumple al leer el código")
+                if d.tipo == "navegador":
+                    detail = f"{len(d.tests)} de {len(d.tests)} chequeos en el navegador pasan"
+                elif d.tipo == "visual":
+                    detail = "cumple al ver las capturas"
+                else:
+                    detail = (f"{len(d.tests)} de {len(d.tests)} tests pasan" if d.tests else "cumple al leer el código")
                 if d.judge_reasoning:
                     detail += f". {d.judge_reasoning}"
             elif d.status == "manual_review":
@@ -71,6 +84,9 @@ class Decision:
 
     def reason(self) -> str:
         if self.approved:
+            if self.profile == "web":
+                return ("La entrega cumple todos los criterios acordados: los chequeos en el navegador pasan y el "
+                        "juez lo confirma con las capturas.")
             return "La entrega cumple todos los criterios acordados: los tests ocultos pasan y el juez lo confirma."
         prefix = "Requiere revisión manual: " if self.status == "manual_review" else "Rechazado: "
         return prefix + "; ".join(self.reasons)
@@ -216,3 +232,109 @@ def decide(*, suite: dict, hygiene: dict, build: dict | None, security_problems:
         reasons.append("se detectaron señales de " + ", ".join(FLAG_NAMES[k] for k, v in flags.items() if v)
                        + ": no se aprueba automáticamente")
     return Decision(status == "approved", status, stage, decisions, flags, reasons, security_flags)
+
+
+# --- perfil web -----------------------------------------------------------------------------
+
+def _decide_browser(crit: dict, checks: dict, run_error: str | None) -> CriterionDecision:
+    d = CriterionDecision(crit["index"], "navegador", "manual_review", "tests")
+    if run_error:
+        d.status = "fail" if run_error.startswith("el sitio") else "manual_review"
+        d.reasons.append(run_error)
+        return d
+    from .web import describe_check
+
+    missing = []
+    for ch in crit.get("checks", []):
+        r = checks.get(ch["id"])
+        if r is None:
+            missing.append(ch["id"])
+            continue
+        d.tests.append({"nodeid": ch["id"], "name": describe_check(ch), "outcome": "passed" if r.get("passed") else "failed",
+                        "summary": describe_check(ch), "message": str(r.get("detail", ""))[:600]})
+    failing = [t for t in d.tests if t["outcome"] != "passed"]
+    if failing:
+        d.status = "fail"
+        d.reasons.append(f"{len(failing)} de {len(d.tests)} chequeos no pasaron: "
+                         + "; ".join(f"{t['summary']} ({t['message'][:160]})" for t in failing[:3]))
+    elif missing or not d.tests:
+        d.reasons.append("faltan resultados del navegador para: " + ", ".join(missing or ["todos los chequeos"]))
+    else:
+        d.status = "pass"
+    return d
+
+
+def _decide_judged(crit: dict, judge, checker) -> CriterionDecision:
+    d = CriterionDecision(crit["index"], crit["tipo"], "manual_review", "judge")
+    jc = next((j for j in judge.criteria if j.numero == crit["index"]), None) if judge else None
+    if jc is None:
+        d.reasons.append("el juez no emitió veredicto para este criterio")
+        return d
+    valid = checker.valid(jc.evidence)
+    d.judge_verdict, d.judge_reasoning = jc.verdict, jc.reasoning
+    d.judge_evidence = [{**e.model_dump(), "verified": e in valid} for e in jc.evidence]
+    if crit["tipo"] == "visual" and not checker.cites_screenshot(jc.evidence):
+        d.reasons.append("el juez no citó ninguna captura existente")
+        return d
+    d.status = jc.verdict
+    return d
+
+
+def decide_web(*, suite: dict, hygiene: dict | None, site: dict | None, web: dict | None, signals: list[Signal],
+               judge, judge_error: str | None, checker) -> Decision:
+    flags = {"injection": False, "cheating": False, "tampering": False}
+    for s in signals:
+        flags[s.kind] = True
+    security_flags = [f"{FLAG_NAMES[s.kind]} en {s.ref}: {s.detail}" for s in signals]
+    if judge and checker and judge.injection_detected:
+        for e in checker.valid(judge.injection_evidence):
+            flags["injection"] = True
+            security_flags.append(f"inyección señalada por el juez en {e.ref}: {e.quote[:120]}")
+
+    def all_not_evaluated(stage: str, why: str) -> list[CriterionDecision]:
+        return [CriterionDecision(c["index"], c["tipo"], "not_evaluated", stage, reasons=[why]) for c in suite["criteria"]]
+
+    if not hygiene or hygiene.get("blockers"):
+        reasons = list((hygiene or {}).get("blockers") or ["la entrega no pasó la higiene"])
+        return Decision(False, "rejected", "hygiene", all_not_evaluated("hygiene", "la entrega no pasó la higiene"),
+                        flags, reasons, security_flags, "web")
+    if site is not None and site.get("error"):
+        return Decision(False, "rejected", "build", all_not_evaluated("build", site["error"]), flags,
+                        [site["error"]], security_flags, "web")
+
+    run_error = None
+    if web is None:
+        run_error = "el navegador no se ejecutó (falla del verificador)"
+    elif web.get("timed_out"):
+        run_error = "el sitio hizo que el navegador superara el tiempo máximo"
+    elif not web.get("report_found"):
+        run_error = "el navegador no produjo resultados (falla del verificador): " + str(web.get("stderr_tail", ""))[-200:]
+    checks = (web or {}).get("checks") or {}
+
+    decisions = []
+    for crit in suite["criteria"]:
+        if crit["tipo"] == "navegador":
+            decisions.append(_decide_browser(crit, checks, run_error))
+        else:
+            decisions.append(_decide_judged(crit, judge, checker))
+
+    reasons: list[str] = []
+    if judge_error:
+        reasons.append(f"el juez no respondió ({judge_error})")
+    failed = [d for d in decisions if d.status == "fail"]
+    manual = [d for d in decisions if d.status == "manual_review"]
+    if failed:
+        stage = min((d.stage for d in failed), key=STAGES.index)
+        reasons.append("criterios no cumplidos: " + ", ".join(str(d.index) for d in failed))
+        status = "rejected"
+    elif manual or any(flags.values()):
+        stage = "judge" if manual else "final"
+        if manual:
+            reasons.append("criterios en revisión manual: " + ", ".join(str(d.index) for d in manual))
+        status = "manual_review"
+    else:
+        stage, status = "final", "approved"
+    if any(flags.values()):
+        reasons.append("se detectaron señales de " + ", ".join(FLAG_NAMES[k] for k, v in flags.items() if v)
+                       + ": no se aprueba automáticamente")
+    return Decision(status == "approved", status, stage, decisions, flags, reasons, security_flags, "web")

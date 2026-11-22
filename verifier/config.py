@@ -53,6 +53,12 @@ class Settings:
     # el alias de red no resuelve) y reemplaza al host de `build_proxy`.
     build_proxy_container: str | None
     runner_image: str | None
+    # Perfil web: imagen de Playwright (en la VM, construida por startup.sh), imagen de Node para
+    # el build y tiempos máximos de `npm ci` (con red, por el proxy) y del navegador.
+    web_runner_image: str | None
+    node_image: str
+    npm_install_timeout_s: float
+    web_timeout_s: float
     # Verificación
     hidden_test_timeout_s: int
     call_timeout_s: float
@@ -82,6 +88,10 @@ def get_settings() -> Settings:
         build_proxy=os.getenv("BUILD_PROXY") or None,
         build_proxy_container=os.getenv("BUILD_PROXY_CONTAINER") or None,
         runner_image=os.getenv("RUNNER_IMAGE") or None,
+        web_runner_image=os.getenv("WEB_RUNNER_IMAGE") or None,
+        node_image=os.getenv("NODE_IMAGE", "node:22-slim"),
+        npm_install_timeout_s=_float("NPM_INSTALL_TIMEOUT_S", 420.0),
+        web_timeout_s=_float("WEB_TIMEOUT_S", 300.0),
         hidden_test_timeout_s=_int("HIDDEN_TEST_TIMEOUT_S", 30),
         call_timeout_s=_float("CALL_TIMEOUT_S", 5.0),
         blackbox_suite_timeout_s=_float("BLACKBOX_SUITE_TIMEOUT_S", 300.0),

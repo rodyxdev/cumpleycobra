@@ -27,8 +27,11 @@ from stellar_sdk import StrKey
 from . import drafting, ejecucion, gemini, identidad, reputacion
 from .ejecucion import suite as exec_suite
 from .ejecucion import arranque as exec_arranque
+from .ejecucion import web as exec_web
+from .ejecucion.perfil import execution_spec as exec_spec_for
+from .ejecucion.perfil import public_plan as exec_public_plan
 from .ejecucion.cola import make_queue
-from verifier.contract import Interface
+from verifier.contract import Interface, WebSpec
 from .config import (
     GEMINI_ATTEMPT_BUDGET_SECS,
     MAX_DEADLINE_MINUTES,
@@ -92,6 +95,8 @@ class CreateTaskIn(Strict):
     # Fase 3 (detrás de VERIFIER_ENABLED): verificar ejecutando el código contra una suite oculta.
     verification: Literal["static", "execution"] = "static"
     interface: Interface | None = None
+    # Perfil web (sitio HTML/CSS/JS): páginas a revisar en el navegador; va sin `interface`.
+    web: WebSpec | None = None
 
 
 class AcceptIn(Strict):
@@ -267,8 +272,11 @@ async def fx_usd_mxn():
 @app.post("/tasks")
 async def create_task(body: CreateTaskIn):
     check_address(body.client_address, "client_address")
-    if body.language != "python":
-        raise err(400, "INVALID_REQUEST", "Por ahora el único lenguaje soportado es 'python'")
+    web_task = body.web is not None
+    if web_task and body.language != "web":
+        raise err(400, "INVALID_REQUEST", "Una tarea web usa language: 'web'")
+    if not web_task and body.language != "python":
+        raise err(400, "INVALID_REQUEST", "Por ahora el único lenguaje soportado es 'python' (o 'web' con páginas)")
     criteria = [c.strip() for c in body.criteria if c.strip()]
     if not criteria:
         raise err(400, "INVALID_REQUEST", "Debe haber al menos un criterio")
@@ -284,14 +292,21 @@ async def create_task(body: CreateTaskIn):
     if execution:
         if not ejecucion.enabled():
             raise err(400, "INVALID_REQUEST", "La verificación por ejecución no está habilitada")
-        if body.interface is None:
-            raise err(400, "INVALID_REQUEST", "Una tarea con verificación por ejecución necesita 'interface'")
-        if any(sym.kind == "asgi_app" for sym in body.interface.symbols):
-            raise err(400, "INVALID_REQUEST", "Por ahora la verificación por ejecución solo acepta funciones y clases")
-        spec["verification"] = "execution"
-        spec["interface"] = body.interface.model_dump(mode="json")
-    elif body.interface is not None:
-        raise err(400, "INVALID_REQUEST", "'interface' solo aplica con verification: 'execution'")
+        if web_task:
+            if body.interface is not None:
+                raise err(400, "INVALID_REQUEST", "Una tarea web lleva 'web' (páginas) y no 'interface'")
+            spec["verification"] = "execution"
+            spec["interface"] = None
+            spec["web"] = body.web.model_dump(mode="json")
+        else:
+            if body.interface is None:
+                raise err(400, "INVALID_REQUEST", "Una tarea con verificación por ejecución necesita 'interface'")
+            if any(sym.kind == "asgi_app" for sym in body.interface.symbols):
+                raise err(400, "INVALID_REQUEST", "Por ahora la verificación por ejecución solo acepta funciones y clases")
+            spec["verification"] = "execution"
+            spec["interface"] = body.interface.model_dump(mode="json")
+    elif body.interface is not None or web_task:
+        raise err(400, "INVALID_REQUEST", "'interface' y 'web' solo aplican con verification: 'execution'")
     task_id = secrets.token_urlsafe(12)
     task = {
         "task_id": task_id,
@@ -314,12 +329,11 @@ async def create_task(body: CreateTaskIn):
     }
     if execution:
         task["verification"] = "execution"
-        task["suite"] = exec_suite.new_suite_state(spec)
+        task["suite"] = exec_web.new_suite_state(spec) if web_task else exec_suite.new_suite_state(spec)
     store().tasks[task_id] = task
     store().save()
     if execution:
-        job = app.state.queue.enqueue("suite", task_id, {"spec": {
-            "profile": "script", "interface": spec["interface"], "allowed_dependencies": spec["allowed_deps"]}})
+        job = app.state.queue.enqueue("suite", task_id, {"spec": exec_spec_for(spec)})
         task["suite_job"] = job["id"]
         store().save()
         exec_arranque.wake(app)
@@ -382,7 +396,7 @@ async def get_task(task_id: str):
         # Calificación pública del cliente (también aparece en el perfil del programador).
         "rating": task.get("rating"),
         "verification": task.get("verification", "static"),
-        "suite": exec_suite.public_plan(task.get("suite")),
+        "suite": exec_public_plan(task.get("suite")),
     }
 
 

@@ -57,6 +57,8 @@ def rules_hash(spec: dict) -> str:
 
     `version: 1` para las tareas de v1. Una tarea con verificación por ejecución (fase 3) usa
     `version: 2`: el mismo objeto más `verification` e `interface` (lo que la entrega debe exponer).
+    Una tarea web agrega `web` (las páginas acordadas) e `interface` va en null; la clave `web` solo
+    existe en las tareas web, así que ningún hash anterior cambia.
     """
     agreed = {
         "version": 1,
@@ -67,7 +69,9 @@ def rules_hash(spec: dict) -> str:
         "examples": spec["examples"],
     }
     if spec.get("verification") == "execution":
-        agreed.update(version=2, verification="execution", interface=spec["interface"])
+        agreed.update(version=2, verification="execution", interface=spec.get("interface"))
+        if spec.get("web") is not None:
+            agreed["web"] = spec["web"]
     return sha256_hex(canonical_bytes(agreed))
 
 
@@ -93,9 +97,13 @@ def verdict_hash(*, task_id: str, code_hash: str, approved: bool, reason: str,
 
 
 def verdict_hash_v2(*, task_id: str, rules_hash: str, suite_hash: str, workspace_hash: str,
-                    approved: bool, stage: str, criteria: list, video_url) -> str:
-    """Veredicto por ejecución (fase 3). `criteria` = [{"index", "status"}] en el orden acordado."""
-    return sha256_hex(canonical_bytes({
+                    approved: bool, stage: str, criteria: list, video_url, evidence: dict | None = None) -> str:
+    """Veredicto por ejecución (fase 3). `criteria` = [{"index", "status"}] en el orden acordado.
+
+    Perfil web: `evidence` = {"S1": "<sha256 de la captura>", ...}; la clave solo aparece en los
+    veredictos web, así que los del perfil script no cambian.
+    """
+    payload = {
         "version": 2,
         "task_id": task_id,
         "rules_hash": rules_hash,
@@ -105,7 +113,10 @@ def verdict_hash_v2(*, task_id: str, rules_hash: str, suite_hash: str, workspace
         "stage": stage,
         "criteria": criteria,
         "video_url": video_url,
-    }))
+    }
+    if evidence is not None:
+        payload["evidence"] = evidence
+    return sha256_hex(canonical_bytes(payload))
 
 
 def suite_hash(files: dict[str, str]) -> str:

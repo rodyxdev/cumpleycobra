@@ -10,6 +10,8 @@ Variables por rol: `LLM_SUITE_PROVIDER`, `LLM_JUEZ_PROVIDER` (`gemini` | `muse`)
 `LLM_SUITE_MODEL`, `LLM_JUEZ_MODEL`. Nunca se imprimen las credenciales.
 
 `structured()` devuelve una instancia validada del modelo Pydantic pedido, o lanza `LLMError`.
+El contenido de un turno es texto o una lista de partes: {"type": "text", "text": ...} o
+{"type": "image", "mime_type": "image/jpeg", "data": bytes} (juez visual del perfil web).
 Reintentos: hasta 4 ante cuota (429) con espera de 4 a 40 s, 2 ante otros errores transitorios
 (timeout, 5xx) con espera de 1 y 3 s, y 1 ante una respuesta fuera de esquema.
 """
@@ -17,6 +19,7 @@ Reintentos: hasta 4 ante cuota (429) con espera de 4 a 40 s, 2 ante otros errore
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import json
 import logging
@@ -107,8 +110,14 @@ async def _gemini_call(client, model: str, system: str, turns: list[dict], outpu
                        timeout: float) -> tuple[str | None, int, int]:
     from google.genai import types
 
-    contents = [types.Content(role="model" if t["role"] == "assistant" else "user",
-                              parts=[types.Part(text=t["content"])]) for t in turns]
+    def parts(content):
+        if isinstance(content, str):
+            return [types.Part(text=content)]
+        return [types.Part(text=c["text"]) if c["type"] == "text"
+                else types.Part.from_bytes(data=c["data"], mime_type=c["mime_type"]) for c in content]
+
+    contents = [types.Content(role="model" if t["role"] == "assistant" else "user", parts=parts(t["content"]))
+                for t in turns]
     config = types.GenerateContentConfig(
         system_instruction=system,
         temperature=0,
@@ -148,9 +157,18 @@ async def _muse_call(model: str, system: str, turns: list[dict], output: type[Ba
     if not key:
         raise LLMError("Falta MODEL_API_KEY para el proveedor muse")
     base = (os.environ.get("MODEL_BASE_URL") or "https://api.meta.ai/v1").rstrip("/")
+    def content(value):
+        if isinstance(value, str):
+            return value
+        return [{"type": "text", "text": c["text"]} if c["type"] == "text" else
+                {"type": "image_url", "image_url": {
+                    "url": f"data:{c['mime_type']};base64,{base64.b64encode(c['data']).decode('ascii')}"}}
+                for c in value]
+
     body = {
         "model": model,
-        "messages": [{"role": "system", "content": system}, *turns],
+        "messages": [{"role": "system", "content": system},
+                     *({"role": t["role"], "content": content(t["content"])} for t in turns)],
         "response_format": {"type": "json_schema", "json_schema": {
             "name": output.__name__, "schema": strict_json_schema(output), "strict": True}},
     }

@@ -24,7 +24,9 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import base64
 import logging
+import re
 import os
 import subprocess
 import sys
@@ -43,10 +45,18 @@ from verifier.sandbox import DepsVolume, SandboxUnavailable, build_dependencies,
 from verifier.verification.hygiene import check_hygiene
 from verifier.verification.stub import build_stub
 from verifier.verification.suite_files import write_suite_dir
+from verifier.web import prepare_site, run_web_checks, static_site
+from verifier.web.hygiene import check_web_hygiene
 
 log = logging.getLogger("cumpleycobra.verifier")
 
 TEXT_SUFFIXES = {".py", ".txt", ".md", ".toml", ".cfg", ".ini", ".json", ".yaml", ".yml"}
+WEB_TEXT_SUFFIXES = {".html", ".htm", ".css", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte",
+                     ".svg", ".json", ".md", ".txt"}
+SCREENSHOT_MAX_BYTES = 1_500_000      # por captura (JPEG)
+SCREENSHOTS_MAX_BYTES = 12_000_000    # todas juntas, en la evidencia que viaja a la API
+EMPTY_SITE = '<!doctype html><html><head><meta charset="utf-8"><title></title></head><body></body></html>\n'
+REFERENCE_FILE_RE = re.compile(r"^(?:[a-z0-9_-]+/)*[a-z0-9_-]+\.(?:html|css|js)$")
 FILES_CHAR_LIMIT = 200_000      # lo que viaja a la API para el juez y para la entrega al cliente
 LOGS_TAIL = 3_000
 IDLE_SLEEP_SECS = 3
@@ -113,11 +123,13 @@ def sandbox_summary(r) -> dict | None:
             "oom_killed": r.oom_killed, "stdout_tail": r.stdout[-1500:], "stderr_tail": r.stderr[-1500:]}
 
 
-def text_files(root: Path) -> tuple[dict[str, str], bool]:
+def text_files(root: Path, suffixes: set[str] = TEXT_SUFFIXES) -> tuple[dict[str, str], bool]:
     """Archivos de texto de la entrega (para el juez). Devuelve (archivos, truncado)."""
     files, used, truncated = {}, 0, False
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink() or path.suffix.lower() not in TEXT_SUFFIXES:
+        if not path.is_file() or path.is_symlink() or path.suffix.lower() not in suffixes:
+            continue
+        if "node_modules" in path.relative_to(root).parts or path.name == "package-lock.json":
             continue
         rel = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -141,9 +153,70 @@ def write_pasted(dest: Path, module: str, code: str) -> None:
 
 # --- trabajos -----------------------------------------------------------------------------
 
+def web_validation_summary(run) -> dict:
+    """Lo que necesita la API para validar los chequeos: resultados, sin capturas ni texto de páginas."""
+    full = run.summary()
+    return {k: full[k] for k in ("report_found", "exit_code", "timed_out", "duration_s", "stderr_tail", "checks", "errors")}
+
+
+def _open_dirs(root: Path) -> None:
+    # mkdtemp crea 0700 y los contenedores corren como nobody.
+    for d in [root, *[p for p in root.rglob("*") if p.is_dir()]]:
+        d.chmod(0o755)
+
+
+def write_reference_site(dest: Path, files: dict[str, str]) -> None:
+    """Sitio de referencia que escribió el modelo: solo .html/.css/.js con rutas simples."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for rel, text in files.items():
+        if not REFERENCE_FILE_RE.fullmatch(rel):
+            raise ValueError(f"ruta no permitida en el sitio de referencia: {rel!r}")
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    _open_dirs(dest)
+
+
+def empty_site(dest: Path, pages: list[str]) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "index.html").write_text(EMPTY_SITE, encoding="utf-8")
+    for page in pages:
+        if page.strip("/"):
+            page_dir = dest / page.strip("/")
+            page_dir.mkdir(parents=True, exist_ok=True)
+            (page_dir / "index.html").write_text(EMPTY_SITE, encoding="utf-8")
+    _open_dirs(dest)
+
+
+def run_web_suite_step(step: dict) -> dict:
+    """Valida una ronda de chequeos web contra un sitio vacío y contra el de referencia."""
+    with tempfile.TemporaryDirectory(prefix="cc-websuite-") as tmp:
+        tmp = Path(tmp)
+        tmp.chmod(0o755)
+        empty = tmp / "vacia"
+        empty_site(empty, step["pages"])
+        body = {"web_empty": web_validation_summary(
+            run_web_checks(static_site(empty), step["pages"], step["checks"], tmp / "out-vacia"))}
+        if step.get("reference_site"):
+            ref = tmp / "referencia"
+            try:
+                write_reference_site(ref, step["reference_site"])
+            except ValueError as exc:
+                log.warning("sitio de referencia descartado: %s", exc)
+                return body
+            body["web_reference"] = web_validation_summary(
+                run_web_checks(static_site(ref), step["pages"], step["checks"], tmp / "out-ref"))
+        return body
+
+
 def run_suite_job(job: Job) -> None:
     spec = ExecutionSpec.model_validate(job.payload["spec"])
     step = job.send("suite/generate", {})
+    if spec.profile == "web":
+        while step and step.get("next") == "validate":
+            job.progress("suite", f"validando la ronda {step.get('round')} en un navegador")
+            step = job.send("suite/validation", run_web_suite_step(step))
+        return
     while step and step.get("next") == "validate":
         job.progress("suite", f"validando la ronda {step.get('round')}")
         with tempfile.TemporaryDirectory(prefix="cc-suite-") as tmp:
@@ -185,6 +258,45 @@ def _ingest(job: Job, spec: ExecutionSpec, source: dict, work: Path):
     raise IngestError(f"fuente desconocida: {kind!r}")
 
 
+def screenshot_evidence(run, out: Path) -> tuple[list[dict], list[str]]:
+    """Capturas en base64 para la API (la VM no tiene credenciales: la API las guarda)."""
+    shots, skipped, used = [], [], 0
+    for shot in (run.results or {}).get("screenshots", []):
+        path = out / str(shot.get("file", ""))
+        if not re.fullmatch(r"S[0-9]{1,3}", str(shot.get("id", ""))) or path.name != f"{shot['id']}.jpg" or not path.is_file():
+            continue
+        data = path.read_bytes()
+        if len(data) > SCREENSHOT_MAX_BYTES or used + len(data) > SCREENSHOTS_MAX_BYTES:
+            skipped.append(shot["id"])
+            continue
+        used += len(data)
+        shots.append({**shot, "jpeg_b64": base64.b64encode(data).decode("ascii")})
+    return shots, skipped
+
+
+def run_web_verify(job: Job, spec: ExecutionSpec, ws, work: Path, evidence: dict, lap, t: float) -> None:
+    hygiene = check_web_hygiene(ws.path, spec.allowed_dependencies)
+    evidence["hygiene"] = asdict(hygiene)
+    t = lap("higiene", t)
+    if not hygiene.ok:
+        return
+    if (ws.path / "package.json").exists():
+        job.progress("dependencias", "npm ci y npm run build")
+    site = prepare_site(ws.path)
+    try:
+        evidence["site"] = site.summary()
+        t = lap("dependencias", t)
+        if site.ok:
+            job.progress("navegador", "revisando el sitio en un navegador a 1440 y 390 px")
+            out = work / "web-out"
+            run = run_web_checks(site, spec.web.pages, job.payload["checks"], out)
+            evidence["web"] = run.summary()
+            evidence["screenshots"], evidence["screenshots_skipped"] = screenshot_evidence(run, out)
+            lap("navegador", t)
+    finally:
+        site.remove()
+
+
 def run_verify_job(job: Job) -> None:
     spec = ExecutionSpec.model_validate(job.payload["spec"])
     timings: dict[str, float] = {}
@@ -206,6 +318,17 @@ def run_verify_job(job: Job) -> None:
         t = lap("ingesta", t0)
         try:
             job.progress("higiene", "revisando archivos y dependencias")
+            if spec.profile == "web":
+                files, truncated = text_files(ws.path, WEB_TEXT_SUFFIXES)
+                evidence = {"profile": "web", "workspace_hash": ws.content_hash, "source": ws.source,
+                            "size_bytes": ws.size_bytes, "files": files, "files_truncated": truncated,
+                            "hygiene": None, "site": None, "web": None, "screenshots": []}
+                run_web_verify(job, spec, ws, work, evidence, lap, t)
+                timings["total"] = round(time.monotonic() - t0, 3)
+                evidence["timings_s"] = timings
+                job.progress("juez", "evidencia enviada; el juez la revisa en la API")
+                job.send("result", {"evidence": evidence})
+                return
             hygiene = check_hygiene(ws.path, spec)
             files, truncated = text_files(ws.path)
             evidence = {"workspace_hash": ws.content_hash, "source": ws.source, "size_bytes": ws.size_bytes,

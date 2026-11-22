@@ -13,13 +13,16 @@ Públicas:
     GET  /tasks/{id}/suite                    → plan de la suite (sin código de los tests)
     POST /tasks/{id}/verificaciones           → encola una entrega (header X-Freelancer-Token)
     GET  /verificaciones/{id}                 → avance y veredicto (X-Freelancer-Token o X-Client-Token)
+    GET  /evidencia/{clave}?exp=&sig=          → una captura del perfil web (URL firmada de 15 min)
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import hmac
+import logging
 import re
 import time
 from typing import Annotated, Literal, Union
@@ -28,20 +31,21 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from verifier.contract import ExecutionSpec
-
 from . import MAX_PASTE_BYTES, MAX_ZIP_BYTES, VERIFY_MIN_SECONDS, enabled, queue_token
-from . import arranque
+from . import arranque, evidencia, perfil
 from . import suite as suite_mod
+from . import web as web_mod
 from .cola import LeaseError
 from .juez import EvidenceChecker, judge
-from .regla import decide
+from .juez_web import WebEvidenceChecker, judge_web
+from .regla import decide, decide_web
 from .seguridad import security_scan
 from .senales import collect_signals, load_sources, output_signals
 from ..hashing import verdict_hash_v2
 from ..llm import LLMError, Usage
 
 router = APIRouter()
+log = logging.getLogger("cumpleycobra.verificador")
 
 SUITE_JOB_ATTEMPTS = 3
 REPO_RE = r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"
@@ -92,10 +96,22 @@ class RunIn(BaseModel):
     timed_out: bool = False
 
 
+class WebRunIn(BaseModel):
+    report_found: bool
+    checks: dict = Field(default={})
+    stderr_tail: str = ""
+    timed_out: bool = False
+    errors: list = Field(default=[], max_length=50)
+
+
 class ValidationIn(LeaseIn):
-    empty: RunIn
-    stub: RunIn
+    # Perfil script: corridas contra la entrega vacía, el stub y la referencia.
+    empty: RunIn | None = None
+    stub: RunIn | None = None
     reference: RunIn | None = None
+    # Perfil web: el navegador contra un sitio vacío y contra el sitio de referencia.
+    web_empty: WebRunIn | None = None
+    web_reference: WebRunIn | None = None
 
 
 class ResultIn(LeaseIn):
@@ -114,8 +130,7 @@ def leased(job_id: str, lease_id: str) -> dict:
 
 
 def execution_spec(spec: dict) -> dict:
-    return ExecutionSpec(profile="script", interface=spec["interface"],
-                         allowed_dependencies=spec["allowed_deps"]).model_dump(mode="json")
+    return perfil.execution_spec(spec)
 
 
 # --- trabajador ------------------------------------------------------------------------
@@ -129,8 +144,10 @@ async def claim(authorization: str | None = Header(default=None)):
     payload = job["payload"]
     if job["kind"] == "verify":
         task = api().get_task_or_404(job["task_id"])
-        # Los tests se leen al reclamar: siempre la suite vigente de la tarea.
+        # Los tests (o los chequeos web) se leen al reclamar: siempre la suite vigente de la tarea.
         payload = {**payload, "tests": dict(task["suite"]["files"])}
+        if task["suite"].get("profile") == "web":
+            payload["checks"] = web_mod.accepted_checks(task["suite"])
     return {"id": job["id"], "kind": job["kind"], "lease_id": job["lease_id"], "payload": payload}
 
 
@@ -144,33 +161,48 @@ async def progress(job_id: str, body: ProgressIn, authorization: str | None = He
     return {"ok": True}
 
 
+def _validate_step(task: dict) -> dict | None:
+    """Lo que el verificador debe validar ahora (o None si no hay nada pendiente con archivos)."""
+    suite = task["suite"]
+    if suite.get("profile") == "web":
+        checks = web_mod.to_validate(suite)
+        if not checks:
+            return None
+        return {"next": "validate", "profile": "web", "round": suite["round"], "pages": task["spec"]["web"]["pages"],
+                "checks": checks, "reference_site": suite.get("reference_site")}
+    to_check = {c["index"] for c in suite_mod.pending(suite)} & {suite_mod.criterion_index(f) for f in suite["files"]}
+    if not to_check:
+        return None
+    return {"next": "validate", "round": suite["round"], "tests": dict(suite["files"]),
+            "reference": suite.get("reference")}
+
+
 async def _advance_suite(job_id: str, lease_id: str, task: dict) -> dict:
     """Genera rondas hasta tener algo que validar o terminar. Quien llama tiene el candado de la tarea."""
     m = api()
     suite = task["suite"]
+    mod = perfil.suite_module(suite)
     while True:
         queue().progress(job_id, lease_id, {"stage": "suite", "detail": f"generando la ronda {suite['round'] + 1}"})
         try:
-            await suite_mod.generate_round(task["spec"], suite, m.app.state.gemini)
+            await mod.generate_round(task["spec"], suite, m.app.state.gemini)
         except LLMError as exc:
             suite["status"] = "rechazada"
             suite["error"] = str(exc)[:300]
             m.store().save()
             queue().finish(job_id, lease_id, "failed", {"error": suite["error"]})
             return {"next": "done"}
-        to_check = {c["index"] for c in suite_mod.pending(suite)} & {
-            suite_mod.criterion_index(f) for f in suite["files"]}
-        if to_check:
+        step = _validate_step(task)
+        if step:
             m.store().save()
-            return {"next": "validate", "round": suite["round"], "tests": dict(suite["files"]),
-                    "reference": suite.get("reference")}
-        # Nada nuevo que validar: todo era lectura, o la ronda solo dejó problemas estáticos.
-        if suite_mod.pending(suite) and suite["round"] <= suite_mod.MAX_REGENERATIONS:
+            return step
+        # Nada nuevo que validar: todo era lectura (o visual), o la ronda solo dejó problemas estáticos.
+        if mod.pending(suite) and suite["round"] <= mod.MAX_REGENERATIONS:
             suite["status"] = "pendiente"
             continue
-        suite_mod.finalize(suite)
+        mod.finalize(suite)
         m.store().save()
-        queue().finish(job_id, lease_id, "done", suite_mod.public_plan(suite))
+        queue().finish(job_id, lease_id, "done", mod.public_plan(suite))
         return {"next": "done"}
 
 
@@ -181,14 +213,11 @@ async def suite_generate(job_id: str, body: LeaseIn, authorization: str | None =
     m = api()
     task = m.get_task_or_404(job["task_id"])
     async with m.store().lock(task["task_id"]):
-        suite = task["suite"]
-        pending_files = {c["index"] for c in suite_mod.pending(suite)} & {
-            suite_mod.criterion_index(f) for f in suite["files"]}
-        if suite["status"] == "validando" and pending_files:
+        step = _validate_step(task) if task["suite"]["status"] == "validando" else None
+        if step:
             # Un trabajo anterior generó esta ronda y el verificador falló al validarla: se reanuda
             # la validación sin volver a pedirle tests al modelo.
-            return {"next": "validate", "round": suite["round"], "tests": dict(suite["files"]),
-                    "reference": suite.get("reference")}
+            return step
         return await _advance_suite(job_id, body.lease_id, task)
 
 
@@ -199,12 +228,21 @@ async def suite_validation(job_id: str, body: ValidationIn, authorization: str |
     m = api()
     task = m.get_task_or_404(job["task_id"])
     async with m.store().lock(task["task_id"]):
-        again = suite_mod.apply_validation(task["suite"], body.empty.model_dump(), body.stub.model_dump(),
-                                           body.reference.model_dump() if body.reference else None)
+        suite = task["suite"]
+        if suite.get("profile") == "web":
+            if body.web_empty is None:
+                raise m.err(400, "INVALID_REQUEST", "Falta web_empty para validar la suite web")
+            again = web_mod.apply_validation(suite, body.web_empty.model_dump(),
+                                             body.web_reference.model_dump() if body.web_reference else None)
+        else:
+            if body.empty is None or body.stub is None:
+                raise m.err(400, "INVALID_REQUEST", "Faltan empty y stub para validar la suite")
+            again = suite_mod.apply_validation(suite, body.empty.model_dump(), body.stub.model_dump(),
+                                               body.reference.model_dump() if body.reference else None)
         m.store().save()
         if again:
             return await _advance_suite(job_id, body.lease_id, task)
-    queue().finish(job_id, body.lease_id, "done", suite_mod.public_plan(task["suite"]))
+    queue().finish(job_id, body.lease_id, "done", perfil.public_plan(task["suite"]))
     return {"next": "done"}
 
 
@@ -290,6 +328,8 @@ async def judge_and_pay(task: dict, job: dict, ev: dict) -> dict:
     cached = task["cache"].get(ch)
     if cached is not None:
         return {**cached, "stage": "cache"}
+    if suite.get("profile") == "web":
+        return await _judge_web_and_pay(task, job, ev, workspace_hash, ch, video_url)
 
     files: dict[str, str] = {str(k): str(v) for k, v in (ev.get("files") or {}).items()}
     tests = ev.get("tests") or {}
@@ -348,6 +388,13 @@ async def judge_and_pay(task: dict, job: dict, ev: dict) -> dict:
                          "sut_logs_tail": (tests.get("sut") or {}).get("logs_tail", "")[-2000:],
                          "hygiene_warnings": hygiene.get("warnings", [])},
     }
+    return await _record_and_pay(task, job, res, files, decision)
+
+
+async def _record_and_pay(task: dict, job: dict, res: dict, files: dict[str, str], decision) -> dict:
+    """Guarda la entrega (protegida hasta el pago), paga si se aprobó y cuenta el envío."""
+    m = api()
+    ch, video_url = res["code_hash"], res["video_url"]
     source = job["payload"]["source"]
     task["codes"][ch] = {"code": _as_code(files, source), "files": files, "source": {k: v for k, v in source.items()
                          if k != "code"}, "video_url": video_url, "code_hash": ch, "approved": decision.approved}
@@ -378,6 +425,93 @@ async def judge_and_pay(task: dict, job: dict, ev: dict) -> dict:
     return res
 
 
+MAX_JUDGE_IMAGES = 10
+MAX_SCREENSHOTS = 24
+
+
+async def _store_screenshots(task_id: str, job_id: str, raw: list) -> tuple[list[dict], list[dict]]:
+    """Decodifica y guarda las capturas. Devuelve (metadatos, imágenes para el juez)."""
+    store = evidencia.make_store()
+    metas, images = [], []
+    for shot in raw[:MAX_SCREENSHOTS]:
+        try:
+            sid = str(shot["id"])
+            data = base64.b64decode(str(shot["jpeg_b64"]), validate=True)
+            key = evidencia.screenshot_key(task_id, job_id, sid)
+        except (KeyError, binascii.Error, ValueError, evidencia.EvidenceError):
+            continue
+        if not data.startswith(b"\xff\xd8") or len(data) > 2_000_000:
+            continue  # no es un JPEG (lo produce el runner confiable; aquí solo se comprueba)
+        meta = {"id": sid, "page": str(shot.get("page", ""))[:100], "viewport": str(shot.get("viewport", ""))[:10],
+                "label": str(shot.get("label", ""))[:120], "sha256": hashlib.sha256(data).hexdigest(), "key": key,
+                "bytes": len(data)}
+        try:
+            await store.put(key, data)
+        except evidencia.EvidenceError as exc:
+            log.warning("no se pudo guardar la captura %s: %s", key, exc)
+            meta["key"] = None
+        metas.append(meta)
+        images.append({**meta, "data": data})
+    return metas, images
+
+
+async def _judge_web_and_pay(task: dict, job: dict, ev: dict, workspace_hash: str, ch: str, video_url) -> dict:
+    m = api()
+    spec, suite = task["spec"], task["suite"]
+    files: dict[str, str] = {str(k): str(v) for k, v in (ev.get("files") or {}).items()}
+    hygiene, site, web = ev.get("hygiene"), ev.get("site"), ev.get("web")
+    shots, images = await _store_screenshots(task["task_id"], job["id"], ev.get("screenshots") or [])
+    dom, hidden_all = web_mod.dom_signals(web or {})
+    signals = web_mod.source_signals(files) + dom
+
+    ran = bool(hygiene) and not hygiene.get("blockers") and not (site or {}).get("error") and bool((web or {}).get("report_found"))
+    verdict_judge = checker = judge_error = None
+    usage: list[Usage] = []
+    if ran:
+        # Al juez: primero las capturas de página completa y luego las de después de interactuar.
+        ordered = sorted(images, key=lambda im: (im["label"] != "página completa", int(im["id"][1:])))[:MAX_JUDGE_IMAGES]
+        checker = WebEvidenceChecker(spec, files, {im["id"] for im in ordered})
+        try:
+            verdict_judge = await judge_web(spec, suite, web, signals, hidden_all, files, ordered,
+                                            m.app.state.gemini, usage)
+        except LLMError as exc:
+            judge_error = str(exc)[:300]
+
+    decision = decide_web(suite=suite, hygiene=hygiene, site=site, web=web, signals=signals,
+                          judge=verdict_judge, judge_error=judge_error, checker=checker)
+    comparison = decision.comparison()
+    reason = decision.reason()
+    vh = verdict_hash_v2(task_id=task["task_id"], rules_hash=task["rules_hash"], suite_hash=suite["suite_hash"],
+                         workspace_hash=workspace_hash, approved=decision.approved, stage=decision.stage,
+                         criteria=decision.hash_criteria(), video_url=video_url,
+                         evidence={s["id"]: s["sha256"] for s in shots})
+    res = {
+        "task_id": task["task_id"],
+        "approved": decision.approved,
+        "reason": reason,
+        "transaction_hash": None,
+        "stage": decision.stage,
+        "analysis": comparison + decision.reasons,
+        "comparison": comparison,
+        "code_hash": ch,
+        "verdict_hash": vh,
+        "verdict_reason": reason,
+        "security_flags": decision.security_flags,
+        "video_url": video_url,
+        "payment_retryable": False,
+        "verdict_version": 2,
+        "workspace_hash": workspace_hash,
+        "suite_hash": suite["suite_hash"],
+        "verification": {**decision.as_dict(), "profile": "web", "timings_s": ev.get("timings_s"),
+                         "usage": [u.__dict__ for u in usage], "screenshots": shots,
+                         "hidden_text": hidden_all[:30], "site": site,
+                         "console_errors": (web or {}).get("console", [])[:20],
+                         "judge_summary": verdict_judge.summary if verdict_judge else None,
+                         "hygiene_warnings": (hygiene or {}).get("warnings", [])},
+    }
+    return await _record_and_pay(task, job, res, files, decision)
+
+
 # --- públicas ----------------------------------------------------------------------------
 
 @router.get("/tasks/{task_id}/suite")
@@ -388,7 +522,7 @@ async def task_suite(task_id: str):
         raise api().err(404, "NOT_FOUND", "Esta tarea no usa verificación por ejecución")
     if arranque.suite_waiting(task["suite"]):
         arranque.wake(api().app)
-    return {"task_id": task_id, **suite_mod.public_plan(task["suite"])}
+    return {"task_id": task_id, **perfil.public_plan(task["suite"])}
 
 
 class CodeSource(Strict):
@@ -454,6 +588,8 @@ async def enqueue_verification(task_id: str, body: VerifyIn, x_freelancer_token:
                         f"Quedan menos de {VERIFY_MIN_SECONDS} s de plazo; ya no se puede verificar por ejecución")
 
         src = body.source
+        if isinstance(src, CodeSource) and task["suite"].get("profile") == "web":
+            raise m.err(400, "INVALID_REQUEST", "Un sitio web se entrega como ZIP o como repositorio público")
         if isinstance(src, CodeSource):
             if len(src.code.encode("utf-8")) > MAX_PASTE_BYTES:
                 raise m.err(400, "INVALID_REQUEST", f"El código pegado supera {MAX_PASTE_BYTES} bytes; usa un ZIP o un repositorio")
@@ -517,8 +653,31 @@ async def verification_status(job_id: str, x_freelancer_token: str | None = Head
         if is_client and not is_freelancer:
             # El cliente ve lo mismo que en /verdicts: nunca el código ni los logs de la entrega.
             r.get("verification", {}).pop("sut_logs_tail", None)
+        ver = r.get("verification")
+        if isinstance(ver, dict) and ver.get("screenshots"):
+            # URL firmada nueva en cada consulta (15 minutos); la clave interna no sale.
+            r["verification"] = {**ver, "screenshots": evidencia.public_screenshots(ver["screenshots"])}
         out["result"] = r
     elif job["status"] == "failed":
         out["error"] = res.get("error", "VERIFIER_FAILED")
         out["message"] = res.get("message") or "El verificador no pudo terminar; el envío no se contó."
     return out
+
+
+@router.get("/evidencia/{key:path}")
+async def evidence_file(key: str, exp: int, sig: str):
+    guard_enabled()
+    try:
+        ok = evidencia.verify(key, exp, sig)
+    except evidencia.EvidenceError:
+        ok = False
+    if not ok:
+        raise api().err(403, "INVALID_TOKEN", "El enlace de la captura no es válido o ya venció")
+    try:
+        data = await evidencia.make_store().get(key)
+    except evidencia.EvidenceError:
+        raise api().err(502, "EVIDENCE_UNAVAILABLE", "No se pudo leer la captura") from None
+    if data is None:
+        raise api().err(404, "NOT_FOUND", "No existe esa captura")
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=600", "X-Content-Type-Options": "nosniff"})
