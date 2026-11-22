@@ -46,7 +46,7 @@ La VM solo tiene el token de la cola (`VERIFIER_QUEUE_TOKEN`). Con él puede ped
 | C | Cola en Postgres, rutas del trabajador y trabajador (`verifier/worker.py`) | Hecha |
 | D | Juez y regla final en la API; veredicto v2 y `release` | Hecha |
 | E | Frontend: crear tarea con ejecución, entregar (pegar, ZIP, repo), progreso en vivo | Hecha (falta revisarla en el navegador con Pollar) |
-| F | Perfil web (Playwright, capturas en Cloud Storage) | |
+| F | Perfil web (Playwright, capturas en Cloud Storage) | Hecha: en staging con pago en testnet (22 de noviembre de 2026) |
 | G | VM Spot sin credenciales con gVisor y proxy | Hecha en staging (21 de noviembre de 2026) |
 | H | Corpus de 60 casos, elección del modelo, prueba de escape | Hecha: 0 falsas aprobaciones en 3 corridas (Gemini; Muse sin medir) |
 
@@ -197,7 +197,7 @@ Costo: la VM Spot con 30 GB es de unos 6 a 10 USD al mes si se apaga sin trabajo
 
 1. **Aplicar la parte G en staging** (permiso arriba) y repetir la prueba de escape bajo gVisor. Falta comprobar que Playwright corre bajo gVisor (parte F).
 2. **Parte H**: corpus de 60 casos ejecutables y elección del modelo por rol, con 3 corridas y 0 falsas aprobaciones. Para comparar con Muse Spark hace falta `MODEL_API_KEY` en `backend/.env`; hoy solo está en el `.env` de v2.
-3. **Parte F**: perfil web de v2 (Playwright, capturas en Cloud Storage con URL firmada de 15 minutos, juez visual).
+3. ~~**Parte F**: perfil web~~: hecho (ver «Parte F: perfil web»).
 4. **Revisar en el navegador las pantallas nuevas**: necesitan iniciar sesión con Pollar.
 5. ~~Encender y apagar la VM según la cola~~: hecho (ver «Encendido y apagado automático de la VM»).
 
@@ -401,3 +401,128 @@ Después se quitó el metadato `verifier-idle-secs`, así que desde el siguiente
   gcloud iam roles delete cycVerificadorArranque --project <proyecto>
   ```
 - API de staging a la revisión anterior: `gcloud run services update-traffic cumpleycobra-api-staging --region us-central1 --to-revisions cumpleycobra-api-staging-00003-jlk=100`.
+
+## Parte F: perfil web (22 de noviembre de 2026)
+
+Una tarea puede acordar un **sitio web** (HTML, CSS y JS; estático o un proyecto npm con `build`) en lugar de funciones de Python. Se revisa en un navegador real, aislado y sin internet, a 1440 px y a 390 px. Portado de v2 (`backend/web/`) sin la grabación de video, como pide el plan.
+
+### Acuerdo
+
+- `POST /tasks` con `verification: "execution"`, `language: "web"` y `web: {"pages": ["/", "/contacto"]}` (1 a 5 rutas), sin `interface`.
+- `rules_hash` v2 agrega la clave `web` solo en estas tareas: ningún hash anterior cambia (`backend/hashing.py`).
+- `allowed_deps` son nombres de npm.
+
+### Suite: chequeos públicos del catálogo
+
+El modelo (rol `suite`) clasifica cada criterio:
+
+| Tipo | Cómo se decide |
+| --- | --- |
+| `navegador` | 1 a 4 chequeos del catálogo fijo de v2 (`verifier/contract.py: WebCheck`): `text_present`, `title_contains`, `element_visible`, `link_navigates`, `form_submits`, `no_horizontal_overflow`. Los corre Playwright del lado confiable: resultado determinista, sin modelo |
+| `visual` | Lo juzga el modelo con las capturas y debe citar al menos una captura que exista |
+| `lectura` | Lo juzga el modelo leyendo el código (como en el perfil script) |
+
+- A diferencia de los tests ocultos, **los chequeos son públicos**: repiten el criterio, y el programador acepta exactamente eso.
+- Se validan igual que la suite del perfil script:
+  - contra un sitio vacío ninguno puede pasar (salvo «sin desborde»);
+  - contra un sitio de referencia que escribe el modelo, todos deben pasar.
+- La «suite» que entra al `suite_hash` es el hash del runner (código nuestro), los chequeos, la clasificación y la referencia.
+
+### Ejecución en la VM
+
+| Paso | Qué hace |
+| --- | --- |
+| Higiene | Sitio estático con `index.html`, o `package.json` + `package-lock.json`. Dependencias solo de las permitidas, todas de `registry.npmjs.org` con `integrity`. Sin `.npmrc` ni `node_modules/` |
+| Build | `npm ci` en la red del build (salida solo por el proxy con lista blanca) y `npm run build` sin red, bajo gVisor como `nobody` |
+| Servido | `http.server` (código nuestro) en una red interna sin internet |
+| Navegador | Contenedor confiable con Playwright (`verifier/web/runtime/web_runner.py`). Corre los chequeos, toma capturas JPEG (máximo 3000 px de alto) y recoge texto visible, texto oculto y desborde. Solo deja pedir recursos a la entrega |
+
+Las capturas viajan a la API en la evidencia: la VM no tiene credenciales.
+
+### API: juez, regla y evidencia
+
+- **Juez web** (`backend/ejecucion/juez_web.py`): recibe las capturas como imágenes (el adaptador de modelos ahora acepta partes de imagen en Gemini y en Muse).
+  - El código y el texto de las páginas van en un bloque con nonce, como en el perfil script.
+  - Una cita de captura vale solo si esa captura existe; una cita de código, si aparece literalmente.
+- **Regla** (`regla.decide_web`):
+  - `navegador` pasa solo si todos sus chequeos pasan;
+  - `visual` pasa con veredicto pass que cite una captura; sin cita, va a revisión manual;
+  - texto (visible u oculto) dirigido al evaluador en la página o en el código impide aprobar.
+- **Evidencia** (`backend/ejecucion/evidencia.py`):
+  - las capturas van a Cloud Storage (`EVIDENCE_BUCKET`) o a una carpeta local;
+  - se ven con una URL firmada de 15 minutos, `GET /evidencia/{clave}?exp=&sig=`, un HMAC con una llave derivada de `VERIFIER_QUEUE_TOKEN`;
+  - el SHA-256 de cada captura entra al `verdict_hash` v2 (clave `evidence`, solo en veredictos web).
+- **Respuestas:**
+  - `GET /verificaciones/{id}` trae `verification.screenshots` con URL nueva en cada consulta;
+  - `GET /tasks/{id}/verdicts` agrega `screenshots` solo a los veredictos que tienen capturas (la respuesta de las tareas anteriores no cambia).
+- **Frontend:**
+  - «Código de Python» o «Sitio web» al crear la tarea, con las páginas a revisar;
+  - el plan muestra los chequeos;
+  - la entrega web solo acepta ZIP o repositorio;
+  - galería de capturas para el programador y en cada veredicto del cliente.
+
+### Corpus web y lo que corrigió
+
+`scripts/corpus_verificador/web_cafe.py` (8 entregas) y `web_portafolio.py` (5 entregas, dos páginas): 3 correctas y 10 que no deben aprobarse. Las que no deben aprobarse:
+- formulario por GET;
+- título equivocado;
+- franja que desborda a 390 px;
+- encabezado chico al final;
+- fuente de Google Fonts;
+- texto oculto dirigido al evaluador;
+- enlace roto;
+- correo equivocado;
+- dos proyectos en vez de tres;
+- nombre que falta en una página.
+
+Una de las correctas es un proyecto npm con `build`.
+
+Las primeras corridas no llegaron a verificar nada: la suite se rechazaba. Lo que salió y quedó corregido:
+
+| Corrida | Qué pasó | Arreglo |
+| --- | --- | --- |
+| 1 | El modelo puso `index.html` como página, en lugar de la ruta `/`, aun después de la retroalimentación | Se normaliza la ruta (`index.html` → `/`, `contacto/` → `/contacto`) y el prompt da las rutas válidas |
+| 2 | Para «todas las páginas» escribió `/*` | `*` se expande a un chequeo por página |
+| 3 | Escribió `...` como página. El sitio de referencia enlazaba a `contacto/index.html` y el chequeo esperaba `/contacto` | Con una sola página, cualquier página es esa. El runner trata `/x`, `/x/`, `/x.html` y `/x/index.html` como la misma página (solo con destinos relativos) |
+| 4 | 2 falsos rechazos: el juez aprobó citando la captura S1 con el texto «Café Luna» (9 caracteres) y exigíamos 10 | Mínimo de 3 caracteres, igual que las citas de código |
+
+**Resultado con los arreglos: 3 corridas seguidas (5, 6 y 7), 39 verificaciones, 0 falsas aprobaciones y 0 falsos rechazos.** Las suites quedaron listas en las 6 (mediana 25.6 s). En la corrida 6 hubo 429 de cuota, absorbidos por la espera del adaptador.
+
+| Métrica | Valor |
+| --- | --- |
+| Tiempo por entrega (con navegador y juez) | Mediana 14.2 s; máximo 141.5 s, con esperas por cuota |
+| Juez por entrega | ≈6.6k tokens de entrada (con 3 a 5 imágenes) y 0.4k de salida: ≈1.4 centavos de dólar |
+| Suite por acuerdo | ≈7.4k / 2.2k tokens: ≈3 centavos |
+
+### Comprobado en staging y en la VM
+
+- **Tests:**
+  - local: 467 del backend y del verificador (incluye `backend/tests/test_web.py`, `verifier/tests/test_web.py` y una corrida de punta a punta con Chromium real), 27 del frontend, lint y tipos;
+  - en la VM, bajo gVisor (`CYC_TEST_RUNTIME=runsc`): los 6 tests web y la prueba de escape pasan (7 en 69 s). **Chromium corre bajo gVisor**: era la duda abierta del plan.
+- **Escape desde el JavaScript del sitio:**
+  - un sitio intenta alcanzar el servidor de metadatos, internet y el host de Docker;
+  - los tres quedan `bloqueado` en la VM y en local.
+- **Infraestructura:**
+  - VM: imagen `cumpleycobra-web-runner:vm` (Playwright 1.64.1, 2.6 GB) y `node:22-slim`, que construye y descarga `startup.sh` con la red del host;
+  - API de staging: revisión `cumpleycobra-api-staging-00005-9wh`, imagen `api:5429fa0`, con `EVIDENCE_BUCKET`;
+  - bucket `cyc-evidencia-staging-1017372721585`: privado (acceso uniforme y prevención de acceso público), borra los objetos a los 90 días, y `cyc-api` solo tiene `objectCreator` y `objectViewer`.
+- **De punta a punta con testnet:** `scripts/verificador_testnet.py --web --casos formulario-get correcta` contra staging:
+  - tarea `ayQbmUldqXKfejlK`; suite lista en 37.5 s (4 navegador, 1 visual, 1 lectura); depósito `b1d046b7…`;
+  - `formulario-get`: rechazado solo en el criterio 3 (el formulario no hace POST);
+  - `correcta`: aprobado y pagado, release `698dada572c3b3cd2cd42802ac0ae07edfad0d118252c0133e99e9dc7796b0d8` (on-chain `Released`);
+  - las 6 capturas quedaron en el bucket y la URL firmada respondió `200 image/jpeg`.
+
+### Riesgos y límites
+
+- **El JavaScript de la entrega corre en el Chromium del contenedor confiable**, sin el sandbox propio de Chromium (Playwright lo desactiva en contenedores). Un exploit del navegador podría alterar el reporte de ese contenedor.
+  - Lo acota: gVisor, sin red fuera de la red interna, sin secretos ni credenciales, y el juez y la regla en la API.
+  - Pendiente: probar `chromium_sandbox=True` bajo gVisor.
+- **Lo visual depende del modelo.** Por eso un `visual` sin cita de captura va a revisión manual, nunca a aprobación.
+- **Sin mockups del cliente** (v2 los tenía): el juez compara contra el texto del criterio, no contra un boceto. Se puede agregar después.
+- **Las capturas muestran el diseño al cliente antes del pago** (no el código). Es la misma decisión de v2.
+
+### Cómo volver atrás
+
+- API de staging a la revisión anterior: `gcloud run services update-traffic cumpleycobra-api-staging --region us-central1 --to-revisions cumpleycobra-api-staging-00004-7tn=100`. Las tareas de script no cambian: el perfil web solo aparece con `web` en `POST /tasks`.
+- Bucket: `gcloud storage rm -r gs://cyc-evidencia-staging-1017372721585` (solo tiene capturas de testnet).
+

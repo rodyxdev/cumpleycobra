@@ -89,7 +89,7 @@ def main() -> int:
     plan = wait(suite_done, "suite oculta")
     print(f"suite {plan['status']} en {time.monotonic() - t0:.1f} s · suite_hash {plan['suite_hash']}")
     for c in plan["criteria"]:
-        print(f"  criterio {c['index']}: {c['tipo']} · {len(c['plan'])} tests")
+        print(f"  criterio {c['index']}: {c['tipo']} · {len(c.get('checks') or c['plan'])} {'chequeos' if c.get('checks') is not None else 'tests'}")
     if plan["status"] != "lista":
         return 1
 
