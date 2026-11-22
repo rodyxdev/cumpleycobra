@@ -465,18 +465,25 @@ async def verdicts(task_id: str, x_client_token: str | None = Header(default=Non
         "task_id": task_id,
         "submissions_used": len(task["submissions"]),
         "verdicts": [
-            {"code_hash": r["code_hash"], "approved": r["approved"], "stage": r["stage"],
-             "reason": r["reason"], "comparison": r["comparison"],
-             # El mismo aviso de seguridad que ve el programador (y el que entra al verdict_hash).
-             "security_flags": r.get("security_flags", []),
-             "transaction_hash": r["transaction_hash"],
-             "video_url": task["codes"].get(r["code_hash"], {}).get("video_url"),
-             "consented": task.get("consented_code_hash") == r["code_hash"],
-             # Perfil web: capturas de la entrega con URL firmada de 15 minutos (nunca el código).
-             "screenshots": exec_evidencia.public_screenshots((r.get("verification") or {}).get("screenshots") or [])}
-            for r in task["cache"].values()
+            {**_client_verdict(task, r), **_web_screenshots(r)} for r in task["cache"].values()
         ],
     }
+
+
+def _web_screenshots(r: dict) -> dict:
+    """Perfil web: capturas de la entrega con URL firmada de 15 minutos (nunca el código). Solo si hay."""
+    shots = (r.get("verification") or {}).get("screenshots") or []
+    return {"screenshots": exec_evidencia.public_screenshots(shots)} if shots else {}
+
+
+def _client_verdict(task: dict, r: dict) -> dict:
+    return {"code_hash": r["code_hash"], "approved": r["approved"], "stage": r["stage"],
+            "reason": r["reason"], "comparison": r["comparison"],
+            # El mismo aviso de seguridad que ve el programador (y el que entra al verdict_hash).
+            "security_flags": r.get("security_flags", []),
+            "transaction_hash": r["transaction_hash"],
+            "video_url": task["codes"].get(r["code_hash"], {}).get("video_url"),
+            "consented": task.get("consented_code_hash") == r["code_hash"]}
 
 
 @app.get("/tasks/{task_id}/delivery")

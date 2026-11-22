@@ -7,16 +7,23 @@ VERIFIER_ENABLED y un trabajador corriendo (`python -m verifier.worker`).
 
 Uso:
     backend/.venv/Scripts/python scripts/verificador_testnet.py --casos b_calidad.py a_feliz.py
+    backend/.venv/Scripts/python scripts/verificador_testnet.py --web --casos formulario-get correcta
+
+Con --web usa el acuerdo del Café Luna (scripts/corpus_verificador/web_cafe.py): los casos son ids
+de sus entregas, que se suben como ZIP, y el sitio se revisa en un navegador real.
 
 Los tokens se guardan en scripts/.logs/verificador-<task_id>.json (ignorado por git); nunca se imprimen.
 """
 import argparse
+import base64
+import io
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -26,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 API = os.environ.get("CYC_API_URL", "http://localhost:8000").rstrip("/")
 sys.path.insert(0, str(ROOT))
 from backend.plantilla import DEMO_RAW_REQUEST, DEMO_SPEC  # noqa: E402
+from scripts.corpus_verificador import web_cafe  # noqa: E402
 
 INTERFACE = {"language": "python", "symbols": [{
     "module": "descuentos", "name": "aplicar_descuento", "kind": "function",
@@ -54,6 +62,7 @@ def main() -> int:
     parser.add_argument("--cliente", default="cyc-client")
     parser.add_argument("--programador", default="cyc-freelancer")
     parser.add_argument("--tarea", help="retomar una tarea ya creada (lee sus tokens de scripts/.logs)")
+    parser.add_argument("--web", action="store_true", help="tarea de perfil web (Café Luna)")
     args = parser.parse_args()
     http = httpx.Client(base_url=API, timeout=60)
     client, freelancer = address(args.cliente), address(args.programador)
@@ -63,9 +72,11 @@ def main() -> int:
     if args.tarea:
         created = json.loads((logs / f"verificador-{args.tarea}.json").read_text(encoding="utf-8"))
     else:
-        created = http.post("/tasks", json={"client_address": client, "raw_request": DEMO_RAW_REQUEST, **DEMO_SPEC,
-                                        "amount": args.unidades, "deadline_minutes": args.minutos,
-                                        "verification": "execution", "interface": INTERFACE}).raise_for_status().json()
+        acuerdo = ({"raw_request": "", **web_cafe.ACUERDO} if args.web
+                   else {"raw_request": DEMO_RAW_REQUEST, **DEMO_SPEC, "interface": INTERFACE})
+        created = http.post("/tasks", json={"client_address": client, **acuerdo, "amount": args.unidades,
+                                            "deadline_minutes": args.minutos, "verification": "execution"}
+                            ).raise_for_status().json()
     tid = created["task_id"]
     logs.mkdir(exist_ok=True)
     (logs / f"verificador-{tid}.json").write_text(json.dumps(created, indent=1), encoding="utf-8")
@@ -104,11 +115,19 @@ def main() -> int:
     (logs / f"verificador-{tid}.json").write_text(json.dumps(created, indent=1), encoding="utf-8")
     headers = {"X-Freelancer-Token": accepted["freelancer_token"]}
 
+    entregas = {e["id"]: e for e in web_cafe.ENTREGAS}
     for caso in args.casos:
-        code = (ROOT / "backend" / "casos" / caso).read_text(encoding="utf-8")
+        if args.web:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as zf:
+                for name, text in entregas[caso]["files"].items():
+                    zf.writestr(name, text)
+            source = {"kind": "zip", "zip_b64": base64.b64encode(buf.getvalue()).decode()}
+        else:
+            source = {"kind": "code", "code": (ROOT / "backend" / "casos" / caso).read_text(encoding="utf-8")}
         t1 = time.monotonic()
         r = http.post(f"/tasks/{tid}/verificaciones", headers=headers,
-                      json={"freelancer_address": freelancer, "source": {"kind": "code", "code": code}})
+                      json={"freelancer_address": freelancer, "source": source})
         if r.status_code != 202:
             print(f"{caso}: {r.status_code} {r.text}")
             return 1
@@ -126,6 +145,12 @@ def main() -> int:
         print(f"  verdict_hash={res.get('verdict_hash')} code_hash={res.get('code_hash')}")
         for line in res.get("comparison", []):
             print("   ", line[:150])
+        shots = (res.get("verification") or {}).get("screenshots") or []
+        if shots:
+            first = http.get(shots[0]["url"]) if shots[0].get("url") else None
+            print(f"  capturas: {', '.join(s['id'] + '@' + s['viewport'] for s in shots)} · "
+                  f"{shots[0]['id']} por URL firmada: {first.status_code if first else 'sin URL'} "
+                  f"{first.headers.get('content-type') if first else ''}")
         if res.get("transaction_hash"):
             print(f"  https://stellar.expert/explorer/testnet/tx/{res['transaction_hash']}")
             break

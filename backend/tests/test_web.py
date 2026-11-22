@@ -205,7 +205,7 @@ def test_un_chequeo_que_pasa_en_vacio_o_falla_contra_la_referencia_se_regenera(w
 
 def test_un_chequeo_invalido_se_regenera_sin_ir_al_verificador(web_world, fake_web_llm):
     bad = web_mod.GeneratedWebCriterion(tipo="navegador", motivo="x", checks=[
-        web_mod.GeneratedCheck(kind="text_present", page="/otra", args=["Reserva tu mesa"])])
+        web_mod.GeneratedCheck(kind="element_visible", page="/", args=["boton", "Reservar"])])
     fake_web_llm["gen"][1] = [bad, GEN[1]]
     created = create_web_task(web_world).json()
     drive_web_suite(web_world)
