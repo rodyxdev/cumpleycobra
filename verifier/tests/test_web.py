@@ -123,3 +123,41 @@ def test_un_build_que_falla_no_llega_al_navegador():
             assert not site.ok and "build" in site.error
         finally:
             site.remove()
+
+
+ESCAPE = """<!doctype html><html><head><meta charset="utf-8"><title>escape</title></head><body><pre id="r">corriendo</pre>
+<script>
+const objetivos = {
+  metadatos: "http://169.254.169.254/computeMetadata/v1/instance/attributes/verifier-queue-token",
+  internet: "https://example.com/",
+  host_docker: "http://172.17.0.1:8000/health",
+};
+(async () => {
+  const out = [];
+  for (const [nombre, url] of Object.entries(objetivos)) {
+    try {
+      const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 3000);
+      const r = await fetch(url, {headers: {"Metadata-Flavor": "Google"}, signal: ctrl.signal, mode: "no-cors"});
+      out.push(nombre + "=ALCANZADO");
+    } catch (e) { out.push(nombre + "=bloqueado"); }
+  }
+  document.getElementById("r").textContent = out.join(" ");
+})();
+</script></body></html>
+"""
+
+
+@requires_docker
+def test_el_js_de_la_entrega_no_sale_de_la_red_interna():
+    """El JS del sitio corre en el Chromium del lado confiable: no alcanza metadatos, internet ni el host."""
+    with tempfile.TemporaryDirectory() as tmp:
+        site = write(Path(tmp) / "s", {"index.html": ESCAPE})
+        checks = [{"id": "c1-1", "kind": "text_present", "page": "/", "args": ["metadatos=bloqueado"]},
+                  {"id": "c1-2", "kind": "text_present", "page": "/", "args": ["internet=bloqueado"]},
+                  {"id": "c1-3", "kind": "text_present", "page": "/", "args": ["host_docker=bloqueado"]}]
+        run = run_web_checks(static_site(site), ["/"], checks, Path(tmp) / "out")
+        s = run.summary()
+        texto = s["pages"]["/"]["desktop"]["visible_text"]
+        print("reporte del JS:", texto)
+        assert "ALCANZADO" not in texto, texto
+        assert all(c["passed"] for c in s["checks"].values()), texto
