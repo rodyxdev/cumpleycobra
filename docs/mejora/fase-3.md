@@ -199,7 +199,7 @@ Costo: la VM Spot con 30 GB es de unos 6 a 10 USD al mes si se apaga sin trabajo
 2. **Parte H**: corpus de 60 casos ejecutables y elección del modelo por rol, con 3 corridas y 0 falsas aprobaciones. Para comparar con Muse Spark hace falta `MODEL_API_KEY` en `backend/.env`; hoy solo está en el `.env` de v2.
 3. **Parte F**: perfil web de v2 (Playwright, capturas en Cloud Storage con URL firmada de 15 minutos, juez visual).
 4. **Revisar en el navegador las pantallas nuevas**: necesitan iniciar sesión con Pollar.
-5. Encender y apagar la VM según la cola (plan: apagar tras 15 minutos sin trabajos).
+5. ~~Encender y apagar la VM según la cola~~: hecho (ver «Encendido y apagado automático de la VM»).
 
 ## Riesgos
 
@@ -298,7 +298,7 @@ on-chain: Released · programador GDOEMEMACZEM77IREHP6UTOMOJ5MZAKGA4KVPG2CPIKMGT
 
 ### Pendiente de esta parte
 
-- **Apagar la VM sola tras 15 minutos sin trabajos, y encenderla desde la API al encolar** (plan). Hoy queda prendida: ≈0.03 USD por hora.
+- ~~Apagar la VM sola tras 15 minutos sin trabajos, y encenderla desde la API al encolar~~: hecho el 22 de noviembre (sección siguiente al corpus).
 
 ## Parte H: corpus de 60 entregas (21 de noviembre de 2026)
 
@@ -350,3 +350,54 @@ Decisión por ahora: **Gemini en los dos roles**. Lo cubren los créditos de Goo
 
 - **La cuota de Vertex** limita el paralelismo. Una suite pide hasta 8 llamadas a la vez. Con varias tareas creándose juntas habrá esperas, nunca pagos indebidos. Si crece el volumen, conviene un semáforo global de llamadas o pedir más cuota.
 - **Los falsos rechazos los paga el programador** (no cobra sin la aprobación manual del cliente). Por eso se miden aparte, aunque la métrica que manda sea la de falsas aprobaciones.
+
+## Encendido y apagado automático de la VM (22 de noviembre de 2026)
+
+La VM ya no queda prendida: se apaga sola tras 15 minutos sin trabajos y la API la enciende cuando hay trabajo.
+
+### Cómo funciona
+
+- **Apagado (VM).** Con `VERIFIER_IDLE_SHUTDOWN_SECS` (900 por defecto en la VM; metadato opcional `verifier-idle-secs`, `0` lo desactiva), el trabajador cuenta el tiempo desde el último trabajo. Al cumplirse, **deja de pedir trabajo** y corre `systemctl poweroff`; en GCE la instancia queda detenida y no cobra CPU. Como deja de pedir antes de apagar, nunca corta un trabajo a medias. La unidad pasó a `Restart=on-failure` para que systemd no lo reviva mientras se apaga.
+- **Encendido (API).** `backend/ejecucion/arranque.py` lee el estado de la instancia en la API de Compute Engine y, si está `TERMINATED` o `STOPPED`, la enciende. Se dispara:
+  - al encolar un trabajo (`POST /tasks` con ejecución y `POST /tasks/{id}/verificaciones`);
+  - al consultar un trabajo que sigue en cola (`GET /tasks/{id}`, `GET /tasks/{id}/suite`, `GET /verificaciones/{id}`). Eso cubre la carrera de un trabajo encolado justo mientras la VM se apagaba, y las VMs Spot que Google detuvo.
+  - Como mucho una revisión cada 30 s (5 s si la VM estaba `STOPPING`), en segundo plano: nunca retrasa ni hace fallar la petición.
+- **Variables de la API:** `VERIFIER_VM_NAME`, `VERIFIER_VM_ZONE` y `VERIFIER_VM_PROJECT`. Sin `VERIFIER_VM_NAME` no hace nada (en local, el trabajador se corre a mano).
+- **Permiso mínimo.** El rol personalizado `cycVerificadorArranque` solo tiene `compute.instances.get` y `compute.instances.start`. Está otorgado a la cuenta `cyc-api` **solo sobre la instancia `cyc-verificador`** (`deploy.ps1 -Arranque`): no puede detenerla, borrarla, cambiarle metadatos ni tocar otra VM. Como la VM no tiene cuenta de servicio, encenderla no pide `iam.serviceAccounts.actAs`.
+- **Pantallas:** la línea de espera ahora dice que encender el verificador tarda 1 o 2 minutos si estaba apagado.
+
+### Arreglo de seguridad que salió de esto
+
+Las reglas de iptables (los contenedores no hablan con los metadatos ni con el host) no sobreviven a un reinicio. Antes solo las ponía `startup.sh`, y el trabajador estaba habilitado para arrancar al encender. Tras un reinicio, el trabajador podía empezar a ejecutar entregas **antes** de que existieran las reglas. Con encendidos frecuentes eso dejaba de ser teórico. Ahora:
+
+- `verifier/deploy/red.sh` + `cyc-red.service` aplican las reglas **antes de Docker** en cada arranque (`Before=docker.service`, `RequiredBy=docker.service`: si fallan, Docker no arranca).
+- El trabajador ya no arranca solo: lo arranca `startup.sh` cuando la red y las imágenes están listas, y su unidad exige `cyc-red.service` y comprueba la regla de los metadatos en `ExecStartPre`.
+
+### Comprobado en staging
+
+| Paso | Resultado |
+| --- | --- |
+| Tests | 445 del backend y del verificador (12 nuevos: `test_arranque.py`, `test_worker_idle.py`), 26 del frontend, lint y tipos |
+| Imagen y API | `api:1152108`, revisión `cumpleycobra-api-staging-00004-7tn` con las tres variables. Producción no se tocó |
+| Reinicio de la VM | `cyc-red` terminó a las 06:55:21, Docker arrancó a las 06:55:44 y el trabajador a las 06:55:45, con las reglas ya puestas |
+| Apagado | Con el límite bajado a 120 s para la prueba, la VM quedó `TERMINATED` a las 06:58:49 sin intervención |
+| Encendido desde la API | Con la VM apagada, `scripts/verificador_testnet.py --casos a_feliz.py` creó la tarea `h4gfUOOuYpErrb9u` a las 06:59:07. La VM pasó a `STAGING` a las 06:59:16 y a `RUNNING` a las 06:59:32 |
+| De punta a punta | Suite lista en 105.9 s contando el arranque. Caso A aprobado en 16.1 s y pagado: release `4b946bff34bb3e5a38e25646d36ec1eee9bee38cb8c26d0923f72f9d2d904c46` (on-chain `Released`) |
+
+Después se quitó el metadato `verifier-idle-secs`, así que desde el siguiente arranque vuelve a 15 minutos.
+
+### Costo y espera
+
+- Apagada, la VM solo cobra el disco de 30 GB (≈1.2 USD al mes). Prendida, ≈0.03 USD por hora.
+- El primer trabajo tras un apagado espera 1 o 2 minutos más (arranque de la VM y de `startup.sh`). El margen de 300 s de plazo on-chain para encolar (`VERIFY_MIN_SECONDS`) sigue alcanzando.
+
+### Cómo volver atrás
+
+- Quitar `VERIFIER_VM_NAME` en Cloud Run: la API deja de encender la VM.
+- Metadato `verifier-idle-secs=0` y reiniciar la VM: deja de apagarse sola.
+- Quitar el permiso:
+  ```powershell
+  gcloud compute instances remove-iam-policy-binding cyc-verificador --zone us-central1-a --member serviceAccount:cyc-api@<proyecto>.iam.gserviceaccount.com --role projects/<proyecto>/roles/cycVerificadorArranque
+  gcloud iam roles delete cycVerificadorArranque --project <proyecto>
+  ```
+- API de staging a la revisión anterior: `gcloud run services update-traffic cumpleycobra-api-staging --region us-central1 --to-revisions cumpleycobra-api-staging-00003-jlk=100`.
