@@ -526,3 +526,14 @@ Las primeras corridas no llegaron a verificar nada: la suite se rechazaba. Lo qu
 - API de staging a la revisión anterior: `gcloud run services update-traffic cumpleycobra-api-staging --region us-central1 --to-revisions cumpleycobra-api-staging-00004-7tn=100`. Las tareas de script no cambian: el perfil web solo aparece con `web` en `POST /tasks`.
 - Bucket: `gcloud storage rm -r gs://cyc-evidencia-staging-1017372721585` (solo tiene capturas de testnet).
 
+
+## Hotfix en producción: librería de Stellar (22 de noviembre de 2026)
+
+Al revisar las pantallas con una sesión real de Pollar apareció «No se pudo leer tu cuenta: LedgerHeader.scpValue.ext.v: unknown enum value 3».
+
+- **Causa:** testnet subió al protocolo 30 y `@stellar/stellar-sdk` 17.1.0 ya no lee el encabezado del ledger, así que `getAssetBalance` y `getLatestLedger` fallaban. Se reprodujo fuera del navegador; con la 17.4.0 se arregla.
+- **Arreglo:** rama `hotfix/stellar-sdk-17.4` desde `main`, que solo cambia `package.json` y `package-lock.json`. Pasan tipos, lint, tests y el build de producción.
+- **Despliegue:** con el permiso de Rodrigo se fusionó a `main` (`3ef4df3`), Vercel lo desplegó en producción y el JavaScript publicado trae la 17.4.0. La rama `mejora/fase-3` tiene la misma versión.
+- **Probado en local con Pollar:**
+  - **Tarea normal:** depósito `689b1064…`; el caso B rechazado; aprobación manual `259426ac…`.
+  - **Tarea web:** depósito; entrega por ZIP; pago `4503b6d9…`; galería de capturas en la vista del cliente.
