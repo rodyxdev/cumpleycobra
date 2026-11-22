@@ -115,7 +115,13 @@ Write-Host "gcloud compute ssh $Vm --zone=$Zona --tunnel-through-iap --strict-ho
 if ($Aplicar) {
     git archive --format=tar -o $tar HEAD verifier
     if ($LASTEXITCODE -ne 0) { throw "falló git archive" }
-    & gcloud compute scp $tar "${Vm}:/tmp/cyc-verifier.tar" --zone=$Zona --tunnel-through-iap --strict-host-key-checking=no
+    # Recién encendida, la VM tarda un poco en aceptar SSH: hasta 8 intentos, cada 15 s.
+    for ($i = 1; $i -le 8; $i++) {
+        & gcloud compute scp $tar "${Vm}:/tmp/cyc-verifier.tar" --zone=$Zona --tunnel-through-iap --strict-host-key-checking=no
+        if ($LASTEXITCODE -eq 0) { break }
+        Write-Host "SSH todavía no responde (intento $i de 8); reintento en 15 s"
+        Start-Sleep -Seconds 15
+    }
     if ($LASTEXITCODE -ne 0) { throw "falló la copia por IAP" }
     & gcloud compute ssh $Vm --zone=$Zona --tunnel-through-iap --strict-host-key-checking=no --command="sudo mkdir -p /opt/cyc && sudo tar -xf /tmp/cyc-verifier.tar -C /opt/cyc && sudo systemctl restart google-startup-scripts"
     if ($LASTEXITCODE -ne 0) { throw "falló la instalación del código" }
