@@ -23,7 +23,7 @@ La demo es la versión publicada: **https://cumpleycobra.vercel.app** (frontend 
 - [ ] **Iniciar sesión en Pollar en las dos**, justo antes de subir (las sesiones caducan). Ver la dirección en el botón de arriba a la derecha. Cerrar la ventanita de Pollar al terminar el login.
 - [ ] **Wi-Fi del evento:** si muchas personas usan la demo desde la misma red, comparten el límite de 10 peticiones por minuto (es por IP). La demo del escenario hace 4 llamadas a la IA; no pedir al público que la use al mismo tiempo.
 - [ ] **Video de respaldo** en un archivo local (no depende de la red).
-- [ ] **Láminas de «lo que sigue»** con las capturas de `docs/cumbre/`.
+- [x] **Láminas de «lo que sigue»:** capturas listas en `docs/cumbre/` (plan de chequeos, veredicto web pagado, galería y una captura original del verificador).
 
 ## Recorrido (unos 5 minutos)
 
@@ -39,6 +39,27 @@ Igual que los pasos 1 a 10 de [`demo.md`](demo.md), con la URL en línea:
 8. Cliente: «Pagada», veredictos de C y A, **«Ver código»**.
 
 Frase de cierre: «Si cumple lo acordado, cobras. Sin discusiones.»
+
+### Ensayos del 22 de noviembre en producción: 3 de 3 sin fallo
+
+El cliente corrió en la demo en línea con la sesión de Pollar de `GA7MXQ…BEVJ`. El programador corrió contra la API de producción con la wallet de prueba `cyc-freelancer` (aceptar y enviar por la API; en el escenario es la segunda ventana). En los tres, «Que sea rápido» salió marcado como vago, C se rechazó con aviso de seguridad y A se aprobó y se pagó. Tiempos en segundos, del clic al resultado:
+
+| Paso | 1 | 2 | 3 |
+| --- | --- | --- | --- |
+| Mejorar el pedido con IA | 3.0 | 4.0 | 2.4 |
+| Revisar criterios | 2.3 | 3.0 | 3.0 |
+| Crear la tarea | — | 1.0 | 1.0 |
+| Depositar con Pollar hasta «Depósito confirmado» | 5.5 | 4.0 | 5.0 |
+| Aceptar los criterios | 0.4 | 0.3 | 0.2 |
+| Caso C → rechazado | 3.1 | 2.7 | 2.5 |
+| Caso A → aprobado y pagado | 3.9 | 5.7 | 4.8 |
+
+Tareas y transacciones (testnet):
+1. `ynDU1GVhVC-ccFLk`: depósito `0636a8bd…`, pago `dacb9b05…`. En la vista del cliente: «Pagada», los dos veredictos, el video y «Ver código».
+2. `QMCboGNznp0n49_G`: depósito `95dfa8ba…`, pago `fe5908ce…`.
+3. `7IU46sQJ469img4l`: depósito `b6b0777b…`, pago `bbf8fa7a…`.
+
+El ensayo con las dos ventanas y dos sesiones de Pollar, como en el escenario, lo hace Rodrigo, y de ahí sale el video de respaldo.
 
 ## Lo que sigue (láminas, no en vivo)
 
