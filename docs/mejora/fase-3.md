@@ -48,7 +48,7 @@ La VM solo tiene el token de la cola (`VERIFIER_QUEUE_TOKEN`). Con él puede ped
 | E | Frontend: crear tarea con ejecución, entregar (pegar, ZIP, repo), progreso en vivo | Hecha (falta revisarla en el navegador con Pollar) |
 | F | Perfil web (Playwright, capturas en Cloud Storage) | |
 | G | VM Spot sin credenciales con gVisor y proxy | Hecha en staging (21 de noviembre de 2026) |
-| H | Corpus de 60 casos, elección del modelo, prueba de escape | Prueba de escape hecha con gVisor; faltan el corpus y el modelo |
+| H | Corpus de 60 casos, elección del modelo, prueba de escape | Hecha: 0 falsas aprobaciones en 3 corridas (Gemini; Muse sin medir) |
 
 ## Parte A: núcleo del verificador
 
@@ -299,3 +299,54 @@ on-chain: Released · programador GDOEMEMACZEM77IREHP6UTOMOJ5MZAKGA4KVPG2CPIKMGT
 ### Pendiente de esta parte
 
 - **Apagar la VM sola tras 15 minutos sin trabajos, y encenderla desde la API al encolar** (plan). Hoy queda prendida: ≈0.03 USD por hora.
+
+## Parte H: corpus de 60 entregas (21 de noviembre de 2026)
+
+`scripts/corpus_verificador/`: 5 acuerdos y 60 entregas, 18 correctas y 42 que no deben aprobarse.
+
+| Acuerdo | Entregas | Qué prueba |
+| --- | --- | --- |
+| descuentos (demo) | 20, las del corpus de v1 | Bucle sin fin, redondeo, orden, generador, `None`, `eval`, dunders, escritura, inyección, secretos |
+| ventas (v2) | 10 | Los 8 casos de v2 (incompleta, memoriza ejemplos, inyección, lee los tests, `os._exit`, `conftest` que fuerza el pase) y 2 nuevos |
+| fizzbuzz | 10 | Orden de condiciones, desde 0, error equivocado, enteros en vez de texto, memoriza el ejemplo, inyección |
+| contar_palabras | 10 | `split(" ")`, mayúsculas, signos, palabras vacías, `re` no permitido, secretos, memoriza ejemplos; `Counter` como dict |
+| mediana | 10 | Sin ordenar, par, `//`, **modifica la lista del cliente** (no se ve por el canal: lo detecta el juez leyendo), vacía con `None` o `IndexError`, memoriza ejemplos |
+
+`scripts/correr_corpus.py`: corre todo en un proceso, con la API, la cola en memoria, el trabajador real contra Docker local, Gemini real por Vertex y un contrato falso (no toca testnet). Cada entrega va como ZIP y se genera una suite nueva por acuerdo en cada corrida. Escribe `scripts/.logs/corpus-<n>.json`.
+
+### Resultado
+
+3 corridas completas con Gemini 3.5 Flash en los dos roles (suite y juez):
+
+| Corrida | Entregas | Falsas aprobaciones | Falsos rechazos |
+| --- | --- | --- | --- |
+| 1 | 60 | **0** | 1: `mediana/correcta-statistics` |
+| 2 | 60 | **0** | 2: `mediana/correcta-statistics` y `contar_palabras/correcta` (el juez no respondió: error 5xx de Gemini) |
+| 3 | 60 | **0** | 1: `mediana/correcta-statistics` |
+
+Causas y arreglos:
+
+1. **`statistics.median([])` lanza `StatisticsError`, que hereda de `ValueError`.** Al cruzar el canal, una excepción que no era builtin llegaba como un tipo nuevo sin esa herencia, y `pytest.raises(ValueError)` no la atrapaba. Ahora el adaptador manda la excepción builtin más cercana de la herencia y el canal la recrea como subclase (con test).
+2. **Cuota de Vertex.** Con 3 corridas en paralelo hubo muchos `429 RESOURCE_EXHAUSTED` y un 5xx. Primero el juez se quedaba sin respuesta: la regla deja eso en revisión manual, así que no paga, pero cuenta como falso rechazo. El adaptador ahora espera de 4 a 40 s con variación al azar ante 429 y 503, sin gastar los reintentos de errores pasajeros. Además, el cliente de v1 fijaba 20 s por petición y Vertex respondía `504 DEADLINE_EXCEEDED` al juez: cada rol usa ahora su propio tope (90 s).
+
+Repetición tras los arreglos: 3 corridas con suite nueva de mediana (6 entregas) y de contar_palabras (5) dieron **33 de 33 correctas**, incluidas `correcta-statistics` (aprobada) y `ordena-en-su-lugar` (rechazada por el juez).
+
+| | |
+| --- | --- |
+| Verificaciones | 213 (180 + 33) |
+| Falsas aprobaciones | **0** |
+| Falsos rechazos por el sistema, después de los arreglos | 0 |
+| Suites | 15 de 15 listas; 6 necesitaron 2 rondas (la referencia o la validación atraparon un test) |
+| Tiempo por entrega | Mediana de 19.5 s; hasta 4.7 min cuando hubo esperas por cuota o tests que vencen |
+| Costo por corrida de 60 entregas (Gemini 3.5 Flash, $1.50 / $9.00 por M) | Suites ≈64k / 17k tokens; juez ≈380k / 49k. Total ≈$1.30, unos 2 centavos por entrega |
+
+### Elección del modelo
+
+Con Gemini 3.5 Flash en los dos roles se cumple el criterio del plan: 0 falsas aprobaciones en 3 corridas. **Muse Spark no se midió**: su `MODEL_API_KEY` solo está en el `.env` de v2. El adaptador ya lo soporta (`LLM_SUITE_PROVIDER=muse`, `LLM_JUEZ_PROVIDER=muse`); para compararlo hay que poner la llave en `backend/.env` y correr `scripts/correr_corpus.py` con esas variables.
+
+Decisión por ahora: **Gemini en los dos roles**. Lo cubren los créditos de Google y no agrega otro proveedor ni otro secreto a la API.
+
+### Riesgos que deja el corpus
+
+- **La cuota de Vertex** limita el paralelismo. Una suite pide hasta 8 llamadas a la vez. Con varias tareas creándose juntas habrá esperas, nunca pagos indebidos. Si crece el volumen, conviene un semáforo global de llamadas o pedir más cuota.
+- **Los falsos rechazos los paga el programador** (no cobra sin la aprobación manual del cliente). Por eso se miden aparte, aunque la métrica que manda sea la de falsas aprobaciones.
