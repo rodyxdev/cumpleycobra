@@ -114,6 +114,9 @@ async def _gemini_call(client, model: str, system: str, turns: list[dict], outpu
         response_json_schema=strict_json_schema(output),
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+        # El cliente de v1 fija 20 s por petición (motor estático); la suite y el juez mandan prompts
+        # mucho más largos y Vertex respondía 504 DEADLINE_EXCEEDED. Aquí manda el tope del rol.
+        http_options=types.HttpOptions(timeout=int(timeout * 1000)),
     )
     resp = await asyncio.wait_for(
         client.aio.models.generate_content(model=model, contents=contents, config=config), timeout=timeout)
