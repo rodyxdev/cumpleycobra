@@ -37,7 +37,7 @@ export function useVerification() {
     const startedAt = Date.now();
     setNow(startedAt);
     const head: Line[] = [{ kind: "cmd", text: `$ POST /tasks/${taskId}/verificaciones · ${label}` }];
-    setLines([...head, { kind: "wait", startedAt, label: "En la cola del verificador…" }]);
+    setLines([...head, { kind: "wait", startedAt, label: "En la cola del verificador (si estaba apagado, encenderlo tarda 1 o 2 minutos)…" }]);
 
     const fail = (e: unknown) => {
       const err = e instanceof ApiError ? e : new ApiError(0, "ERROR", String(e));
@@ -68,7 +68,7 @@ export function useVerification() {
       const events: Line[] = progressLines(status).map((p) => ({ kind: "text", text: `[${p.seconds.toFixed(1)} s] ${p.text}` }));
       if (!isFinal(status)) {
         const last = status.progress[status.progress.length - 1];
-        setLines([...head, ...events, { kind: "wait", startedAt, label: last ? `${last.label}…` : "En la cola del verificador…" }]);
+        setLines([...head, ...events, { kind: "wait", startedAt, label: last ? `${last.label}…` : "En la cola del verificador (si estaba apagado, encenderlo tarda 1 o 2 minutos)…" }]);
         continue;
       }
       const secs = ((Date.now() - startedAt) / 1000).toFixed(1);

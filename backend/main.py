@@ -26,6 +26,7 @@ from stellar_sdk import StrKey
 
 from . import drafting, ejecucion, gemini, identidad, reputacion
 from .ejecucion import suite as exec_suite
+from .ejecucion import arranque as exec_arranque
 from .ejecucion.cola import make_queue
 from verifier.contract import Interface
 from .config import (
@@ -120,6 +121,7 @@ async def lifespan(app: FastAPI):
         stellar_client.RELEASE_LOCK = app.state.store.sync_lock("cyc:release-arbitro")
     app.state.chain = StellarClient(settings)
     app.state.queue = make_queue(app.state.store)
+    app.state.vm_starter = exec_arranque.make_starter()
     app.state.gemini = gemini.make_client(settings)
     log.info("Backend listo (modo %s, estado en %s): %r", mode, storage_backend(), settings)
     try:
@@ -320,6 +322,7 @@ async def create_task(body: CreateTaskIn):
             "profile": "script", "interface": spec["interface"], "allowed_dependencies": spec["allowed_deps"]}})
         task["suite_job"] = job["id"]
         store().save()
+        exec_arranque.wake(app)
     out = {
         "task_id": task_id,
         "rules_hash": task["rules_hash"],
@@ -357,6 +360,8 @@ async def get_task(task_id: str):
             left = onchain["deadline"] - now
     except ApiError as exc:
         chain_error = exc.message
+    if exec_arranque.suite_waiting(task.get("suite")):
+        exec_arranque.wake(app)  # la suite espera al verificador: que la VM esté encendida
     return {
         "task_id": task_id,
         "raw_request": task["raw_request"],

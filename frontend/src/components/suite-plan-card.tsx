@@ -16,7 +16,7 @@ export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria:
       </CardHeader>
       <CardContent className="space-y-4">
         <p role="status" className={`text-sm font-medium ${suite.status === "rechazada" ? "text-[var(--alert-foreground)]" : working ? "text-muted-foreground" : "text-primary"}`}>
-          {SUITE_STATUS_LABEL[suite.status]}{working ? "… (suele tardar menos de un minuto)" : ""}
+          {SUITE_STATUS_LABEL[suite.status]}{working ? "… (de 1 a 3 minutos si hay que encender el verificador)" : ""}
         </p>
         {suite.status !== "pendiente" && (
           <ol className="divide-y divide-border">

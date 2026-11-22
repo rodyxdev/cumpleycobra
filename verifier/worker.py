@@ -11,6 +11,11 @@ Trabajos:
   suite oculta en caja negra. Se devuelven los resultados de los tests, los logs de la entrega y
   los archivos de texto de la entrega (para el juez, que corre en la API).
 
+Apagado por inactividad: con `VERIFIER_IDLE_SHUTDOWN_SECS` (en la VM, 900), si pasa ese tiempo sin
+trabajos el trabajador deja de pedir trabajo y apaga la máquina (`systemctl poweroff`; en GCE la
+instancia queda detenida y deja de cobrar CPU). Como deja de pedir antes de apagar, nunca corta un
+trabajo a medias. La API la vuelve a encender cuando hay trabajo (`backend/ejecucion/arranque.py`).
+
 Uso:
     VERIFIER_API_URL=https://... VERIFIER_QUEUE_TOKEN=... python -m verifier.worker
     python -m verifier.worker --once     # un solo trabajo (pruebas)
@@ -21,6 +26,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -44,6 +50,7 @@ TEXT_SUFFIXES = {".py", ".txt", ".md", ".toml", ".cfg", ".ini", ".json", ".yaml"
 FILES_CHAR_LIMIT = 200_000      # lo que viaja a la API para el juez y para la entrega al cliente
 LOGS_TAIL = 3_000
 IDLE_SLEEP_SECS = 3
+POWER_OFF = ["systemctl", "poweroff"]
 
 
 class Api:
@@ -246,6 +253,25 @@ def handle(job: Job) -> None:
         job.send("fail", {"message": f"el verificador no pudo ejecutar la entrega: {str(exc)[:300]}"})
 
 
+def idle_shutdown_secs() -> float | None:
+    raw = (os.environ.get("VERIFIER_IDLE_SHUTDOWN_SECS") or "").strip()
+    if raw in ("", "0"):
+        return None
+    secs = float(raw)
+    if secs < 60:
+        raise ValueError("VERIFIER_IDLE_SHUTDOWN_SECS debe ser de al menos 60 s")
+    return secs
+
+
+def power_off() -> bool:
+    """Apaga la máquina. Devuelve False si no se pudo (el trabajador sigue atendiendo)."""
+    try:
+        return subprocess.run(POWER_OFF, check=False, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.error("no se pudo apagar la máquina (%s)", type(exc).__name__)
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Trabajador del verificador de Cumple&Cobra")
     parser.add_argument("--once", action="store_true", help="atiende un solo trabajo y sale")
@@ -257,7 +283,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     get_settings().work_dir.mkdir(parents=True, exist_ok=True)
     api = Api(base, token)
+    idle_limit = idle_shutdown_secs()
+    last_job = time.monotonic()   # el arranque cuenta como actividad
     while True:
+        if idle_limit is not None and not args.once and time.monotonic() - last_job >= idle_limit:
+            log.info("%d s sin trabajos: se apaga la máquina", int(idle_limit))
+            if power_off():
+                return 0
+            last_job = time.monotonic()  # no se pudo: sigue atendiendo y lo intenta más tarde
         try:
             raw = api.post("/verifier/claim", {})
         except httpx.HTTPError as exc:
@@ -267,10 +300,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         if raw:
             log.info("trabajo %s (%s)", raw["id"], raw["kind"])
+            last_job = time.monotonic()
             try:
                 handle(Job(api, raw))
             except httpx.HTTPError as exc:
                 log.error("la API rechazó el trabajo %s (%s)", raw["id"], exc)
+            last_job = time.monotonic()  # el plazo de inactividad cuenta desde que terminó
         if args.once:
             return 0
         if not raw:

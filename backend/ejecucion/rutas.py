@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from verifier.contract import ExecutionSpec
 
 from . import MAX_PASTE_BYTES, MAX_ZIP_BYTES, VERIFY_MIN_SECONDS, enabled, queue_token
+from . import arranque
 from . import suite as suite_mod
 from .cola import LeaseError
 from .juez import EvidenceChecker, judge
@@ -385,6 +386,8 @@ async def task_suite(task_id: str):
     task = api().get_task_or_404(task_id)
     if task.get("verification") != "execution":
         raise api().err(404, "NOT_FOUND", "Esta tarea no usa verificación por ejecución")
+    if arranque.suite_waiting(task["suite"]):
+        arranque.wake(api().app)
     return {"task_id": task_id, **suite_mod.public_plan(task["suite"])}
 
 
@@ -473,6 +476,7 @@ async def enqueue_verification(task_id: str, body: VerifyIn, x_freelancer_token:
                                                   "video_url": video_url})
         task.setdefault("verifications", []).append({"job_id": job["id"], "at": int(time.time())})
         m.store().save()
+        arranque.wake(m.app)
         return {"verification_id": job["id"], "status": job["status"], "submissions_used": len(task["submissions"])}
 
 
@@ -496,6 +500,8 @@ async def verification_status(job_id: str, x_freelancer_token: str | None = Head
     is_client = m.token_ok(task["client_token"], x_client_token)
     if not (is_freelancer or is_client):
         raise m.err(403, "INVALID_TOKEN", "Token inválido para esta verificación")
+    if job["status"] == "queued":
+        arranque.wake(m.app)  # sigue en cola: la VM pudo apagarse o Google la detuvo (Spot)
     out = {
         "verification_id": job_id,
         "task_id": job["task_id"],
