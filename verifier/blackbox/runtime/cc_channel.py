@@ -55,15 +55,21 @@ class RemoteException(Exception):
 _remote_types: dict = {}
 
 
-def _exception_type(name, module):
+def _exception_type(name, module, builtin_base="Exception"):
     candidate = getattr(builtins, name, None) if module == "builtins" else None
     if isinstance(candidate, type) and issubclass(candidate, Exception):
         return candidate
     if candidate is not None and issubclass(candidate, BaseException):
         return SubmissionCrashed  # SystemExit, KeyboardInterrupt...
-    if name not in _remote_types:
-        _remote_types[name] = type(name, (RemoteException,), {})
-    return _remote_types[name]
+    base = getattr(builtins, builtin_base, None)
+    if not (isinstance(base, type) and issubclass(base, Exception)) or base is Exception:
+        base = None
+    key = (name, base.__name__ if base else "")
+    if key not in _remote_types:
+        # Excepción propia de la entrega (o de una biblioteca): conserva el nombre y, si hereda de
+        # una builtin (StatisticsError hereda de ValueError), también esa herencia.
+        _remote_types[key] = type(name, (RemoteException, base) if base else (RemoteException,), {})
+    return _remote_types[key]
 
 
 def _post(path, payload):
@@ -85,7 +91,8 @@ def call(module, name, *args, **kwargs):
     if status == "ok":
         return cc_codec.decode(response["value"])
     if status == "raised":
-        exc_type = _exception_type(response["type"], response.get("module", ""))
+        exc_type = _exception_type(response["type"], response.get("module", ""),
+                                   response.get("builtin_base", "Exception"))
         raise exc_type(response.get("message", ""))
     message = response.get("message", "")
     if status == "timeout":

@@ -60,6 +60,8 @@ def test_channel_maps_exceptions(monkeypatch):
         {"status": "crashed", "message": "exit 0"},
         {"status": "import_error", "message": "boom"},
         {"status": "raised", "type": "SystemExit", "module": "builtins", "message": "0"},
+        {"status": "raised", "type": "StatisticsError", "module": "statistics", "message": "vacía",
+         "builtin_base": "ValueError"},
     ])
     monkeypatch.setattr(channel, "_post", lambda path, payload: next(responses))
     f = channel.remote("ventas", "f")
@@ -73,6 +75,10 @@ def test_channel_maps_exceptions(monkeypatch):
                      channel.SubmissionCrashed):
         with pytest.raises(expected):
             f()
+    # Una excepción de biblioteca conserva su herencia builtin (StatisticsError es un ValueError).
+    with pytest.raises(ValueError, match="vacía") as info:
+        f()
+    assert type(info.value).__name__ == "StatisticsError" and isinstance(info.value, channel.RemoteException)
     # Un fallo del canal no es una Exception: `pytest.raises(Exception)` no lo confunde con éxito.
     assert not issubclass(channel.ChannelError, Exception)
 

@@ -55,6 +55,10 @@ def main():
             "status": "raised",
             "type": type(exc).__name__,
             "module": type(exc).__module__,
+            # La excepción builtin más cercana en la herencia (p. ej. StatisticsError → ValueError):
+            # el lado confiable la recrea como subclase para que pytest.raises(ValueError) la atrape.
+            "builtin_base": next((c.__name__ for c in type(exc).__mro__[1:]
+                                  if c.__module__ == "builtins" and issubclass(c, Exception)), "Exception"),
             "message": str(exc)[:4000],
             "traceback": tail(traceback.format_exc()),
         })

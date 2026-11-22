@@ -173,10 +173,10 @@ def _muse_transient(exc: Exception) -> bool:
 
 
 def _is_quota(exc: Exception) -> bool:
-    """429: cuota o límite de peticiones del proveedor."""
+    """429 (cuota) o 503 (servicio saturado): conviene esperar más que ante un error pasajero."""
     if isinstance(exc, _HttpStatus):
-        return exc.status == 429
-    return getattr(exc, "code", None) == 429
+        return exc.status in (429, 503)
+    return getattr(exc, "code", None) in (429, 503)
 
 
 # --- Punto de entrada ----------------------------------------------------------------------
