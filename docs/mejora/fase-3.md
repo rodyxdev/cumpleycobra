@@ -1,6 +1,6 @@
 # Fase 3 del plan de mejora: verificador que ejecuta el código
 
-Rama `mejora/fase-3`, desde el tag `mejora-1`. En curso: este reporte se completa al cerrar la fase.
+Rama `mejora/fase-3`, desde el tag `mejora-1`. **Cerrada el 22 de noviembre de 2026**: merge `--no-ff` a `main` y tag `mejora-3` (ver «Cierre de la fase» al final).
 
 Todo lo nuevo va detrás de `VERIFIER_ENABLED` (apagado por defecto). Con la variable apagada, la API se comporta igual que en `mejora-1`: las tareas existentes y el motor de análisis estático no cambian.
 
@@ -195,10 +195,10 @@ Costo: la VM Spot con 30 GB es de unos 6 a 10 USD al mes si se apaga sin trabajo
 
 ## Pendientes
 
-1. **Aplicar la parte G en staging** (permiso arriba) y repetir la prueba de escape bajo gVisor. Falta comprobar que Playwright corre bajo gVisor (parte F).
-2. **Parte H**: corpus de 60 casos ejecutables y elección del modelo por rol, con 3 corridas y 0 falsas aprobaciones. Para comparar con Muse Spark hace falta `MODEL_API_KEY` en `backend/.env`; hoy solo está en el `.env` de v2.
-3. ~~**Parte F**: perfil web~~: hecho (ver «Parte F: perfil web»).
-4. **Revisar en el navegador las pantallas nuevas**: necesitan iniciar sesión con Pollar.
+1. ~~Aplicar la parte G en staging~~: hecho; Playwright corre bajo gVisor (parte F).
+2. ~~Parte H~~: hecho. Queda opcional comparar con Muse Spark (hace falta `MODEL_API_KEY` en `backend/.env`; hoy solo está en el `.env` de v2).
+3. ~~Parte F: perfil web~~: hecho (ver «Parte F: perfil web»).
+4. ~~Revisar en el navegador las pantallas nuevas~~: hecho con una sesión real de Pollar (ver «Hotfix en producción»).
 5. ~~Encender y apagar la VM según la cola~~: hecho (ver «Encendido y apagado automático de la VM»).
 
 ## Riesgos
@@ -537,3 +537,49 @@ Al revisar las pantallas con una sesión real de Pollar apareció «No se pudo l
 - **Probado en local con Pollar:**
   - **Tarea normal:** depósito `689b1064…`; el caso B rechazado; aprobación manual `259426ac…`.
   - **Tarea web:** depósito; entrega por ZIP; pago `4503b6d9…`; galería de capturas en la vista del cliente.
+
+## Cierre de la fase (22 de noviembre de 2026)
+
+### Qué quedó
+
+Todas las partes del plan (A a H):
+- **Núcleo:** verificador portado de v2 con gVisor y proxy; cola en Postgres; juez y regla en la API.
+- **Modelos:** adaptador (Gemini o Muse por rol).
+- **Infraestructura:** VM sin credenciales que se enciende y apaga sola; capturas en Cloud Storage con URL firmada.
+- **Medición:** corpus de 60 entregas del perfil script y 13 del web, con 0 falsas aprobaciones; prueba de escape (desde la entrega y desde el JavaScript de un sitio).
+- **Frontend:** progreso en vivo en la UI.
+
+Todo va detrás de `VERIFIER_ENABLED` / `NEXT_PUBLIC_VERIFIER_ENABLED`, apagados en producción: con el merge, producción se comporta igual que antes. CLAUDE.md quedó actualizado (rutas, hashes v2, variables y la sección «Verificador por ejecución»).
+
+### Desviaciones del plan y por qué
+
+| Desviación | Por qué |
+| --- | --- |
+| La URL firmada de las capturas es un HMAC propio (`/evidencia/...`), no una URL firmada de Cloud Storage | No exige darle a la API el permiso de firmar como su cuenta de servicio (`signBlob`), y funciona igual en local |
+| Los chequeos del perfil web son públicos, no ocultos | Repiten el criterio (texto, título, enlace, formulario); ocultarlos no protege nada y el programador acepta exactamente eso |
+| Sin mockups del cliente en el perfil web | v2 los tenía; se puede agregar después. El juez visual compara contra el texto del criterio |
+| La comparación con Muse Spark no se hizo | Gemini cumplió el criterio (0 falsas aprobaciones) y la llave de Muse solo está en v2 |
+| Se agregó una implementación (o sitio) de referencia para validar la suite | El corpus mostró tests con valores esperados mal calculados; la referencia los atrapa |
+
+### Pruebas al cerrar
+
+```
+backend/tests + verifier/tests: 463 passed, 10 skipped (Postgres sin CYC_TEST_DATABASE_URL) en 465 s
+frontend: tsc sin errores, lint sin errores, node --test 27 pass / 0 fail
+```
+
+### Pendiente para fases siguientes
+
+- **Encender el verificador en producción** (Cloud Run de producción, bucket de producción, `VERIFIER_VM_*`, `NEXT_PUBLIC_VERIFIER_ENABLED` en Vercel). Es un cambio de producción: se pide permiso antes.
+- Probar `chromium_sandbox=True` bajo gVisor.
+- Mockups del cliente en el perfil web.
+- Reintentar una suite rechazada sin crear otra tarea.
+- El pedido asistido todavía redacta criterios pensados para leer código («El HTML incluye…»); la suite web los traduce bien, pero conviene que el borrador sepa que es un sitio web.
+- La tarea `o7g2IZemWSoE132E` de staging quedó trabada desde antes del arreglo de reintentos (solo testnet).
+
+### Cómo volver atrás después del merge
+
+- **Frontend (Vercel):** promover el despliegue anterior desde el panel de Vercel, o `git revert -m 1 <merge>` en `main`.
+- **API de producción:** no cambia con el merge (Cloud Run se despliega a mano); `VERIFIER_ENABLED` sigue apagado.
+- **Staging:** pasos de cada parte en este reporte (revisiones `00001-fnl`, `00003-jlk`, `00004-7tn`, `00005-9wh`).
+

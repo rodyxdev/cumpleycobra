@@ -25,6 +25,7 @@ Nació como MVP para GOYA HACK (septiembre de 2026). Desde noviembre de 2026 sig
 - Estado del backend: `backend/state.json` por defecto, o Postgres con `STATE_BACKEND=postgres` (ver "Estado del backend").
 - Producción: backend en Cloud Run (`cumpleycobra-api`, `us-central1`) con Postgres en Cloud SQL (`cyc-pg`, base `cyc_prod`; staging usa la base `cyc`) desde el 21 de noviembre de 2026, y frontend en Vercel (Hobby). La API se queda en su URL de `run.app`. Railway se dejó el 20 de noviembre de 2026 ([`docs/mejora/puente-cloud-run.md`](docs/mejora/puente-cloud-run.md)).
 - Cada tarea se amarra a un solo programador, invitado por el cliente (ver "Tokens").
+- Verificador por ejecución (fase 3, tag `mejora-3`): detrás de `VERIFIER_ENABLED` (API) y `NEXT_PUBLIC_VERIFIER_ENABLED` (frontend), **apagados en producción**. Encendido solo en staging (`cumpleycobra-api-staging`) con la VM `cyc-verificador`. Ver "Verificador por ejecución".
 
 ## Estructura del repositorio
 
@@ -34,6 +35,8 @@ cumpleycobra/
   backend/                  # FastAPI (Python)
   frontend/                 # Next.js
   backend/storage/          # PostgresStore y migraciones SQL (solo suman)
+  backend/ejecucion/        # verificador por ejecución, lado de la API: suite, juez, regla, cola, evidencia
+  verifier/                 # trabajador de la VM: sandbox, caja negra, ingesta, perfil web, despliegue
   scripts/                  # preparación de cuentas y demo reproducible
   docs/fases/               # bitácora del hackathon (fases 0 a 5)
   docs/mejora/              # plan de mejora y un reporte por fase (mejora-N)
@@ -55,9 +58,11 @@ cumpleycobra/
 | Blockchain en backend | `stellar-sdk` de Python (firma `release` con la llave del árbitro) |
 | Frontend | Next.js + Tailwind + shadcn/ui, estilo Stripe/Vercel |
 | Wallet | `@pollar/react` + `@pollar/core` (requiere HTTPS o `localhost`) |
+| Verificador (fase 3) | Docker con gVisor (`runsc`) en una VM Spot sin credenciales; pytest en caja negra; Playwright para el perfil web; proxy squid con lista blanca para el build |
+| Evidencia (fase 3) | Capturas en Cloud Storage (`EVIDENCE_BUCKET`, 90 días) con URL firmada de 15 minutos |
 | Blockchain en frontend | `@stellar/stellar-sdk` (arma `deposit`, firma Pollar) |
 
-Todavía fuera: ejecutar el código entregado (llega en la fase 3, con el verificador aislado de v2), integración con GitHub, más lenguajes, ZKProof y prueba de propiedad de la wallet con firma de mensaje. Cotización MXN con Etherfuse, opcional.
+Todavía fuera: integración con GitHub (más allá de repos públicos con SHA), más lenguajes, mockups del cliente en el perfil web, ZKProof y prueba de propiedad de la wallet con firma de mensaje. Cotización MXN con Etherfuse, opcional.
 
 ## Arquitectura
 
@@ -122,7 +127,11 @@ def sha256_hex(data: bytes) -> str:
 - `verdict_hash` = SHA-256 de `canonical_bytes({"version": 1, "task_id", "code_hash", "approved", "reason", "stage", "comparison", "security_flags", "video_url"})`.
 - En la API los hashes van en hexadecimal; en el contrato, como `BytesN<32>` con los 32 bytes crudos.
 - Documentar esta definición en el README para que cualquiera pueda recalcular los hashes.
-- Decisión de la fusión con v2 (fase 1 del plan de mejora): se queda este helper. Rechaza lo mismo que `canonical.py` de v2: `float`, enteros fuera de ±(2^53 − 1), surrogates sueltos, claves que no son texto y claves que coinciden tras NFC. Con datos válidos produce los mismos bytes que v2 (`backend/tests/test_hashing_v2.py`), y ningún hash existente cambia. Los veredictos por ejecución (fase 3) usarán un esquema `version: 2`; los de `version: 1` siguen válidos.
+- Decisión de la fusión con v2 (fase 1 del plan de mejora): se queda este helper. Rechaza lo mismo que `canonical.py` de v2: `float`, enteros fuera de ±(2^53 − 1), surrogates sueltos, claves que no son texto y claves que coinciden tras NFC. Con datos válidos produce los mismos bytes que v2 (`backend/tests/test_hashing_v2.py`), y ningún hash existente cambia. Los de `version: 1` siguen válidos.
+- Fase 3 (verificación por ejecución), sin cambiar ningún hash anterior:
+  - `rules_hash` `version: 2` = el mismo objeto más `verification: "execution"` e `interface` (perfil script) o `interface: null` y `web: {"pages"}` (perfil web; la clave `web` solo existe en esas tareas).
+  - `verdict_hash` `version: 2` = SHA-256 de `canonical_bytes({"version": 2, "task_id", "rules_hash", "suite_hash", "workspace_hash", "approved", "stage", "criteria": [{"index", "status"}], "video_url"})`, más `evidence: {"S1": sha256, …}` solo en el perfil web. En el evento de `release`, `code_hash` es el `workspace_hash`.
+  - `suite_hash` = SHA-256 de `canonical_bytes({"version": 1, "files"})`: infraestructura fija, tests (o chequeos web), clasificación por criterio y referencia.
 
 ## Tokens (autorización sin wallets)
 
@@ -152,6 +161,7 @@ Guarda: tareas (versión final, monto, plazo, cliente, `rules_hash`), tokens, pr
 - `python -m backend.storage.transfer importar|exportar|contar` pasa el estado entre los dos formatos (exportar es el camino de regreso a JSON).
 - Sigue en memoria por instancia (aceptable, documentado): el límite de peticiones por IP y las cuotas diarias, y la caché de lecturas del contrato.
 - `state.json` y cualquier exportación van en `.gitignore`: tienen tokens.
+- Fase 3: la cola del verificador vive en `verifier_jobs` y los ZIP de las entregas en `verifier_sources` (migración `002_verificador.sql`); con `json`, en memoria (`MemoryQueue`).
 
 ## Contrato Soroban
 
@@ -326,6 +336,39 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
 - La vista del cliente nunca recibe `trace` ni `logic` ni el código antes de `Released`: solo `comparison`, `reason` y `security_flags` (el mismo aviso de seguridad que ve el programador).
 - CORS solo para `FRONTEND_ORIGIN`.
 
+### Rutas del verificador por ejecución (fase 3, 404 sin `VERIFIER_ENABLED`)
+
+| Ruta | Autorización | Qué hace |
+| --- | --- | --- |
+| `POST /tasks` con `verification: "execution"` | — | Perfil script: `interface` (funciones o clases). Perfil web: `language: "web"` y `web: {"pages": [...]}` (1 a 5 rutas). Encola la suite y devuelve `suite_status` |
+| `GET /tasks/{id}/suite` | — | Plan público: estado, tipo y plan por criterio (`test`/`lectura` en script; `navegador`/`visual`/`lectura` y los chequeos en web), `suite_hash`, `error` legible si se rechazó. Nunca el código de los tests |
+| `POST /tasks/{id}/verificaciones` | `X-Freelancer-Token` | Encola una entrega: `source` = `code` (solo script), `zip` (base64, máx. 2 MB) o `github_public` (`repo` + `sha`). `202` con `verification_id`. Errores: `SUITE_NOT_READY`, `VERIFICATION_IN_PROGRESS`, `DEADLINE_TOO_CLOSE` (menos de 300 s), más los de `/evaluate` |
+| `GET /verificaciones/{id}` | `X-Freelancer-Token` o `X-Client-Token` | Avance real por etapa y, al terminar, el veredicto (mismos campos que `/evaluate` más `verification`, con `screenshots` y URL firmada nueva en cada consulta) |
+| `GET /evidencia/{clave}?exp=&sig=` | URL firmada (HMAC, 15 min) | Una captura JPEG del perfil web |
+| `POST /verifier/claim`, `/verifier/jobs/{id}/…` | `Authorization: Bearer <VERIFIER_QUEUE_TOKEN>` + `lease_id` | Rutas del trabajador: reclamar, avance, generar y validar la suite, bajar el ZIP, entregar evidencia (la API juzga y paga) o reportar una falla (no cuenta envío) |
+
+- `/evaluate` responde `409 EXECUTION_TASK` para tareas por ejecución; `/accept` espera `SUITE_NOT_READY` hasta que la suite esté lista.
+- `GET /tasks/{id}/verdicts` agrega `screenshots` solo a los veredictos web que las tienen.
+
+## Verificador por ejecución (fase 3)
+
+Detalle, decisiones y evidencia en [`docs/mejora/fase-3.md`](docs/mejora/fase-3.md).
+
+- **Dónde corre cada cosa:** la API genera la suite y juzga con el modelo; la VM (`verifier/worker.py`) solo ejecuta, sin credenciales de Google ni del modelo, y habla con la API por HTTPS con `VERIFIER_QUEUE_TOKEN`.
+- **Suite:** el modelo (rol `suite`) clasifica cada criterio. Se valida en la VM antes de aceptarla: nada debe pasar contra una entrega vacía (y un stub), y todo debe pasar contra una referencia que escribe el modelo.
+  - Script: tests ocultos que llaman a la entrega en caja negra (`cc_channel`).
+  - Web: chequeos públicos de un catálogo fijo (`verifier/contract.py: WebCheck`) que corre Playwright, más criterios `visual` que juzga el modelo con capturas.
+- **Regla final determinista** (`backend/ejecucion/regla.py`): un test o chequeo que falla rechaza; el juez nunca convierte un fallo en aprobación. Las señales de inyección, trampa o manipulación impiden aprobar solo, y un juez sin evidencia verificable manda a revisión manual (sin pago).
+- **Aislamiento:**
+  - toda entrega corre bajo gVisor, sin red, `--read-only`, como `nobody` y con límites;
+  - el build de dependencias sale solo por el proxy con lista blanca (PyPI y npm);
+  - las reglas `DOCKER-USER` bloquean los metadatos desde antes de que arranque Docker (`cyc-red.service`).
+- **VM:**
+  - se apaga sola tras 15 min sin trabajos;
+  - la API la enciende al encolar o al consultar un trabajo en cola, con un rol que solo permite `get` y `start` sobre esa instancia;
+  - despliegue con `verifier/deploy/deploy.ps1`.
+- **Modelo:** Gemini 3.5 Flash en los dos roles (`LLM_SUITE_PROVIDER`, `LLM_JUEZ_PROVIDER`; Muse soportado pero sin medir). Corpus: 213 verificaciones del perfil script y 39 del web, 0 falsas aprobaciones.
+
 ## Motor de análisis (cuatro capas)
 
 **Capa 1, higiene.** Rechazar si el código pesa más de 10 KB (bytes UTF-8, antes de limpiar). Quitar comentarios con el tokenizador, nunca con regex (una regex de `//` rompe la división entera):
@@ -402,6 +445,12 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `NEXT_PUBLIC_POLLAR_API_KEY`, `NEXT_PUBLIC_CONTRACT_ID`, `NEXT_PUBLIC_API_URL` | frontend |
 | `NEXT_PUBLIC_WALLET` (`pollar` por defecto, `freighter` de respaldo), `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_USDC_ASSET` (`CÓDIGO:EMISOR`) | frontend |
 | `NEXT_PUBLIC_APP_MODE` (`local`, `demo` o `live`; sin valor, `demo` en build de producción y `local` con `next dev`). En `demo`: aviso de testnet en todas las páginas, faucet de Circle en lugar de comandos de terminal | frontend |
+| `VERIFIER_ENABLED`, `VERIFIER_QUEUE_TOKEN` (Secret Manager; también firma las URLs de evidencia) | backend (fase 3) |
+| `LLM_SUITE_PROVIDER`, `LLM_JUEZ_PROVIDER` (`gemini` o `muse`), `LLM_SUITE_MODEL`, `LLM_JUEZ_MODEL`; con Muse: `MODEL_API_KEY`, `MODEL_BASE_URL`, `MUSE_MODEL` | backend (fase 3) |
+| `VERIFIER_VM_NAME`, `VERIFIER_VM_ZONE`, `VERIFIER_VM_PROJECT` (encender la VM; sin nombre, no hace nada) | backend (fase 3) |
+| `EVIDENCE_BUCKET` (Cloud Storage) o `EVIDENCE_DIR` (local, por defecto `.data/evidencia`) | backend (fase 3) |
+| `VERIFIER_API_URL`, `VERIFIER_QUEUE_TOKEN`, `SANDBOX_RUNTIME`, `RUNNER_IMAGE`, `WEB_RUNNER_IMAGE`, `BUILD_NETWORK`, `BUILD_PROXY`/`BUILD_PROXY_CONTAINER`, `VERIFIER_IDLE_SHUTDOWN_SECS` (los escribe `startup.sh` en la VM) | trabajador (fase 3) |
+| `NEXT_PUBLIC_VERIFIER_ENABLED` | frontend (fase 3) |
 
 `.env` y `state.json` nunca se suben al repositorio; mantener un `.env.example`.
 
