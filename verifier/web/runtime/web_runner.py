@@ -99,6 +99,19 @@ OVERFLOW_JS = r"""
 """
 
 
+def same_page(a, b):
+    """/x, /x/, /x.html y /x/index.html son la misma página (así las sirve un servidor estático)."""
+    def clean(path):
+        path = "/" + (path or "").strip().lstrip("/")
+        for suffix in ("/index.html", "/index.htm"):
+            if path.endswith(suffix):
+                path = path[: -len(suffix)]
+        if path.endswith(".html"):
+            path = path[: -len(".html")]
+        return path.rstrip("/") or "/"
+    return clean(a) == clean(b)
+
+
 def norm(text):
     return " ".join(unicodedata.normalize("NFC", text or "").split()).casefold()
 
@@ -240,7 +253,7 @@ class Runner:
             detail = f"href={href!r}; url={page.url}; ancla a la vista={'sí' if in_view else 'no'}"
         else:
             parsed = urllib.parse.urlparse(page.url)
-            ok = page.url.rstrip("/") == dest.rstrip("/") or parsed.path.rstrip("/") == dest.rstrip("/")
+            ok = page.url.rstrip("/") == dest.rstrip("/") or (dest.startswith("/") and same_page(parsed.path, dest))
             detail = f"href={href!r}; url tras el clic={page.url}"
         sid = self.capture(page, page_path, "desktop", f"tras hacer clic en {name!r}")
         return {"passed": ok, "detail": detail, "screenshot": sid}

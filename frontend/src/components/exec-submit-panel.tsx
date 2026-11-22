@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { ScreenshotGallery } from "@/components/screenshot-gallery";
 import { SubmissionResult } from "@/components/submission-result";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +23,7 @@ export function ExecSubmitPanel({ task, mine, secondsLeft, onDone }: {
   task: TaskView; mine: FreelancerTask; secondsLeft: number | null; onDone: () => void;
 }) {
   const [casos, setCasos] = useState<Caso[]>([]);
-  const [mode, setMode] = useState<Mode>("caso");
+  const [mode, setMode] = useState<Mode>(task.web ? "zip" : "caso");
   const [selected, setSelected] = useState("A");
   const [pasted, setPasted] = useState("");
   const [zip, setZip] = useState<File | null>(null);
@@ -36,6 +37,7 @@ export function ExecSubmitPanel({ task, mine, secondsLeft, onDone }: {
     api.demo().then((d) => setCasos(d.casos), () => undefined);
   }, []);
 
+  const web = !!task.web;
   const moduleName = task.interface?.symbols[0]?.module ?? "solucion";
   const caso = casos.find((c) => c.id === selected);
   const funded = task.onchain?.status === "Funded";
@@ -67,17 +69,28 @@ export function ExecSubmitPanel({ task, mine, secondsLeft, onDone }: {
     onDone();
   }
 
-  const modes: [Mode, string][] = [["caso", "Casos de la demo"], ["pegar", "Pegar código"], ["zip", "Subir ZIP"], ["repo", "Repositorio público"]];
+  const modes: [Mode, string][] = web
+    ? [["zip", "Subir ZIP"], ["repo", "Repositorio público"]]
+    : [["caso", "Casos de la demo"], ["pegar", "Pegar código"], ["zip", "Subir ZIP"], ["repo", "Repositorio público"]];
 
   return (
     <div className="contents">
       <SubmissionResult lines={lines} now={now} busy={busy} amount={task.onchain?.amount} verdict={verdict} />
+      {!busy && verdict?.verification?.screenshots?.length ? (
+        <div className="order-2 min-w-0"><ScreenshotGallery shots={verdict.verification.screenshots} /></div>
+      ) : null}
       <Card className="order-3 min-w-0">
         <CardHeader>
           <CardTitle>Entregar para verificar ejecutando</CardTitle>
           <CardDescription>
-            Tu entrega corre en un contenedor aislado, sin red, contra la suite oculta. Debe exponer{" "}
-            <code className="font-mono">{task.interface?.symbols.map((s) => `${s.module}.${s.name}`).join(", ")}</code>.
+            {web ? (
+              <>Tu sitio se sirve en un contenedor aislado, sin internet, y se revisa en un navegador real las páginas{" "}
+                <code className="font-mono">{task.web!.pages.join(", ")}</code>. Entrega un index.html en la raíz o un
+                proyecto npm con package-lock.json y un script build.</>
+            ) : (
+              <>Tu entrega corre en un contenedor aislado, sin red, contra la suite oculta. Debe exponer{" "}
+                <code className="font-mono">{task.interface?.symbols.map((s) => `${s.module}.${s.name}`).join(", ")}</code>.</>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -111,7 +124,9 @@ export function ExecSubmitPanel({ task, mine, secondsLeft, onDone }: {
               <Label htmlFor="zip">ZIP del proyecto (máximo 2 MB)</Label>
               <Input id="zip" type="file" accept=".zip,application/zip" disabled={busy}
                 onChange={(e) => setZip(e.target.files?.[0] ?? null)} />
-              <p className="text-xs text-muted-foreground">Si usas dependencias, decláralas en requirements.txt; solo se instalan las permitidas.</p>
+              <p className="text-xs text-muted-foreground">{web
+                ? "Sin node_modules: las dependencias permitidas se instalan con npm ci desde tu package-lock.json."
+                : "Si usas dependencias, decláralas en requirements.txt; solo se instalan las permitidas."}</p>
             </div>
           )}
           {mode === "repo" && (

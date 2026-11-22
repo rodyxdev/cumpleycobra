@@ -15,7 +15,11 @@ export type Spec = {
   language: string;
   allowed_deps: string[];
   examples: Example[];
+  /** Perfil web (fase 3): páginas que se revisan en el navegador. */
+  web?: WebPages | null;
 };
+
+export type WebPages = { pages: string[] };
 
 export type Caso = { id: string; nombre: string; principal: boolean; codigo: string };
 
@@ -39,8 +43,21 @@ export type Interface = { language: "python"; symbols: InterfaceSymbol[] };
 export type SuitePlan = {
   status: "pendiente" | "validando" | "lista" | "rechazada";
   suite_hash: string | null;
-  criteria: { index: number; tipo: "test" | "lectura" | null; plan: string[]; problems: string[] }[];
+  /** "web": los chequeos son públicos y corren en un navegador real. */
+  profile?: "web";
+  criteria: {
+    index: number;
+    tipo: "test" | "lectura" | "navegador" | "visual" | null;
+    plan: string[];
+    problems: string[];
+    checks?: WebCheck[];
+  }[];
 };
+
+export type WebCheck = { id: string; kind: string; page: string; args: string[] };
+
+/** Captura de una entrega web; `url` es relativa a la API y vence a los 15 minutos. */
+export type Screenshot = { id: string; page: string; viewport: "desktop" | "mobile" | string; label: string; sha256: string; url?: string | null };
 
 export type VerificationSource =
   | { kind: "code"; code: string }
@@ -139,12 +156,14 @@ export type Verdict = {
   /** Enlace de Drive normalizado (…/preview) que entró al verdict_hash, o null. */
   video_url: string | null;
   submissions_used: number;
+  /** Fase 3: detalle de la verificación por ejecución (en el perfil web, las capturas). */
+  verification?: { profile?: string; screenshots?: Screenshot[] };
 };
 
 export type ClientVerdict = Pick<
   Verdict,
   "code_hash" | "approved" | "stage" | "reason" | "comparison" | "security_flags" | "transaction_hash"
-> & { video_url?: string | null; consented?: boolean };
+> & { video_url?: string | null; consented?: boolean; screenshots?: Screenshot[] };
 
 export class ApiError extends Error {
   constructor(

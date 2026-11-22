@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SuitePlan } from "@/lib/api";
-import { SUITE_STATUS_LABEL } from "@/lib/verification";
+import { SUITE_STATUS_LABEL, TIPO_LABEL } from "@/lib/verification";
 
 /** Plan de la suite oculta (fase 3): qué se comprueba ejecutando y qué leyendo. Nunca el código de los tests. */
 export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria: string[] }) {
@@ -10,8 +10,9 @@ export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria:
       <CardHeader>
         <CardTitle>Cómo se va a verificar</CardTitle>
         <CardDescription>
-          El verificador ejecuta la entrega en un contenedor aislado contra una suite de tests oculta. Aquí ves
-          qué comprueba cada test, no su código, para que nadie escriba solo para pasarlos.
+          {suite.profile === "web"
+            ? "El verificador abre el sitio en un navegador real, aislado y sin internet, a 1440 px y a 390 px. Los chequeos son públicos: así se comprueba cada criterio."
+            : "El verificador ejecuta la entrega en un contenedor aislado contra una suite de tests oculta. Aquí ves qué comprueba cada test, no su código, para que nadie escriba solo para pasarlos."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -26,7 +27,7 @@ export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria:
                   <span className="font-medium">Criterio {c.index}</span>
                   {c.tipo && (
                     <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-semibold text-primary">
-                      {c.tipo === "test" ? "Se comprueba ejecutando" : "Se comprueba leyendo el código"}
+                      {TIPO_LABEL[c.tipo] ?? c.tipo}
                     </span>
                   )}
                 </div>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildInterface, guessInterface, interfaceProblem, isFinal, parseRepo, progressLines, zipSource } from "../src/lib/verification.ts";
+import { buildInterface, guessInterface, interfaceProblem, isFinal, parsePages, parseRepo, progressLines, zipSource } from "../src/lib/verification.ts";
 
 test("propone la interfaz desde la firma de la descripción", () => {
   const spec = {
@@ -48,4 +48,13 @@ test("las líneas de avance salen de los eventos reales, con su segundo", () => 
   ]);
   assert.equal(isFinal({ status: "running" }), false);
   assert.equal(isFinal({ status: "failed" }), true);
+});
+
+test("parsePages acepta rutas del sitio y rechaza las inválidas", () => {
+  assert.deepEqual(parsePages("/, /contacto\n/precios"), ["/", "/contacto", "/precios"]);
+  assert.match(parsePages(""), /al menos una/);
+  assert.match(parsePages("contacto"), /no es una ruta válida/);
+  assert.match(parsePages("/../etc"), /no es una ruta válida/);
+  assert.match(parsePages("/, /"), /repetidas/);
+  assert.match(parsePages("/a,/b,/c,/d,/e,/f"), /Máximo 5/);
 });

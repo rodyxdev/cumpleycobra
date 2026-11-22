@@ -7,6 +7,7 @@ import { KeyRound } from "lucide-react";
 
 import { Money } from "@/components/money";
 import { VideoDemo } from "@/components/video-demo";
+import { ScreenshotGallery } from "@/components/screenshot-gallery";
 import { VerdictCard } from "@/components/verdict-card";
 import { ClientProposals } from "@/components/client-proposals";
 import { RatingCard } from "@/components/rating-card";
@@ -26,6 +27,7 @@ import { manualApproval } from "@/lib/approval";
 import { SHOW_DEV_HINTS, USDC_FAUCET_URL } from "@/lib/app-mode";
 import { loadProblem } from "@/lib/load-problem";
 import { formatUsdc, shortHash } from "@/lib/format";
+import { STAGE_LABEL } from "@/lib/verification";
 import { buildClientRelease, buildDeposit, type UsdcStatus } from "@/lib/soroban";
 import { keys, store, useStored, type ClientTask } from "@/lib/store";
 
@@ -149,8 +151,9 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           {verdicts.map((v) => (
             <VerdictCard key={v.code_hash} approved={v.approved} reason={v.reason} comparison={v.comparison}
               securityFlags={v.security_flags ?? []} transactionHash={v.transaction_hash} amount={task?.onchain?.amount}
-              meta={<>Capa {v.stage === "deterministic" ? "determinista" : v.stage === "cache" ? "caché" : "Gemini"} · código <span className="font-mono">{shortHash(v.code_hash)}</span></>}>
+              meta={<>Capa {STAGE_LABEL[v.stage] ?? v.stage} · código <span className="font-mono">{shortHash(v.code_hash)}</span></>}>
               <VideoDemo url={v.video_url} />
+              {v.screenshots?.length ? <ScreenshotGallery shots={v.screenshots} /> : null}
             </VerdictCard>
           ))}
         </div>

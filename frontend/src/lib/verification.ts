@@ -14,6 +14,26 @@ export const STAGE_LABEL: Record<string, string> = {
   final: "regla final",
 };
 
+export const TIPO_LABEL: Record<string, string> = {
+  test: "Se comprueba ejecutando",
+  lectura: "Se comprueba leyendo el código",
+  navegador: "Se comprueba en un navegador",
+  visual: "Lo juzga el modelo con capturas",
+};
+
+const PAGE = /^\/[A-Za-z0-9._~/-]{0,100}$/;
+
+/** Páginas de un sitio web, separadas por comas o líneas: «/, /contacto». */
+export function parsePages(raw: string): string[] | string {
+  const pages = raw.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
+  if (pages.length === 0) return "Indica al menos una página, por ejemplo /.";
+  if (pages.length > 5) return "Máximo 5 páginas.";
+  const bad = pages.find((p) => !PAGE.test(p) || p.includes(".."));
+  if (bad) return `«${bad}» no es una ruta válida: empieza con / y usa letras, números, - o _.`;
+  if (new Set(pages).size !== pages.length) return "Hay páginas repetidas.";
+  return pages;
+}
+
 export const SUITE_STATUS_LABEL: Record<SuitePlan["status"], string> = {
   pendiente: "Preparando la suite oculta",
   validando: "Validando la suite oculta",

@@ -22,7 +22,7 @@ from ..llm import Usage, structured
 from .juez import EvidenceChecker, _neutralize, render_submission
 from .senales import Signal
 
-MIN_OBSERVATION_CHARS = 10
+MIN_OBSERVATION_CHARS = 3   # una observación o el texto visible copiado de la captura
 
 
 class WebEvidence(BaseModel):
@@ -67,8 +67,8 @@ chequeo del navegador, que ya corrió Playwright. No vuelvas a juzgar los criter
 Emite un veredicto por cada criterio "visual" o "lectura", con su número:
 - "visual": mira las capturas. S* de "desktop" son a 1440 px y de "mobile" a 390 px de ancho.
   pass solo si se ve claramente en las capturas; si no se puede confirmar, fail. La evidencia debe
-  incluir al menos una captura: kind=captura, ref = su ID (p. ej. "S2"), quote = lo que se ve en ella
-  (una frase concreta).
+  incluir al menos una captura: kind=captura, ref = su ID (p. ej. "S2"), quote = una frase concreta
+  sobre lo que se ve en ella (posición, tamaño, orden), no solo el texto que aparece.
 - "lectura": léelo en el código. Evidencia kind=code, ref "ruta:LINEA", quote = texto literal de esa
   línea. Si no puedes confirmarlo, fail.
 - contract: ref "criterio N", quote = fragmento literal del acuerdo.

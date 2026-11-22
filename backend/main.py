@@ -27,6 +27,7 @@ from stellar_sdk import StrKey
 from . import drafting, ejecucion, gemini, identidad, reputacion
 from .ejecucion import suite as exec_suite
 from .ejecucion import arranque as exec_arranque
+from .ejecucion import evidencia as exec_evidencia
 from .ejecucion import web as exec_web
 from .ejecucion.perfil import execution_spec as exec_spec_for
 from .ejecucion.perfil import public_plan as exec_public_plan
@@ -470,7 +471,9 @@ async def verdicts(task_id: str, x_client_token: str | None = Header(default=Non
              "security_flags": r.get("security_flags", []),
              "transaction_hash": r["transaction_hash"],
              "video_url": task["codes"].get(r["code_hash"], {}).get("video_url"),
-             "consented": task.get("consented_code_hash") == r["code_hash"]}
+             "consented": task.get("consented_code_hash") == r["code_hash"],
+             # Perfil web: capturas de la entrega con URL firmada de 15 minutos (nunca el código).
+             "screenshots": exec_evidencia.public_screenshots((r.get("verification") or {}).get("screenshots") or [])}
             for r in task["cache"].values()
         ],
     }

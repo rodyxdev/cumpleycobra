@@ -76,6 +76,9 @@ docker pull -q python:3.12-slim >/dev/null
 # Imagen de los tests ocultos (pytest). Se construye aquí con la red del host: los contenedores
 # del build de Docker no pasan por el proxy y el DNS de la VM (metadatos) les queda bloqueado.
 docker build -q --network host -t cumpleycobra-runner:vm verifier/sandbox/runner_image >/dev/null
+# Perfil web: Playwright (lado confiable) y Node para el build de los sitios con npm.
+docker build -q --network host -t cumpleycobra-web-runner:vm verifier/web/runner_image >/dev/null
+docker pull -q node:22-slim >/dev/null
 
 if [ ! -x /opt/cyc/.venv/bin/python ]; then
   python3 -m venv /opt/cyc/.venv
@@ -95,6 +98,7 @@ VERIFIER_WORK_DIR=/var/lib/cyc/verifier
 TMPDIR=/var/lib/cyc/tmp
 SANDBOX_RUNTIME=runsc
 RUNNER_IMAGE=cumpleycobra-runner:vm
+WEB_RUNNER_IMAGE=cumpleycobra-web-runner:vm
 BUILD_NETWORK=cc-build
 BUILD_PROXY_CONTAINER=cyc-proxy
 PYTHONIOENCODING=utf-8
