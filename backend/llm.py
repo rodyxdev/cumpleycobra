@@ -10,8 +10,8 @@ Variables por rol: `LLM_SUITE_PROVIDER`, `LLM_JUEZ_PROVIDER` (`gemini` | `muse`)
 `LLM_SUITE_MODEL`, `LLM_JUEZ_MODEL`. Nunca se imprimen las credenciales.
 
 `structured()` devuelve una instancia validada del modelo Pydantic pedido, o lanza `LLMError`.
-Reintentos: 2 ante errores transitorios (timeout, 429, 5xx) con espera de 1 y 3 s, y 1 ante una
-respuesta fuera de esquema.
+Reintentos: hasta 4 ante cuota (429) con espera de 4 a 40 s, 2 ante otros errores transitorios
+(timeout, 5xx) con espera de 1 y 3 s, y 1 ante una respuesta fuera de esquema.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import copy
 import json
 import logging
 import os
+import random
 import time
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
@@ -34,6 +35,7 @@ T = TypeVar("T", bound=BaseModel)
 Role = Literal["suite", "juez"]
 PROVIDERS = ("gemini", "muse")
 BACKOFF_SECS = (1, 3)
+QUOTA_BACKOFF_SECS = (4, 10, 20, 40)  # ante 429, aparte de los reintentos transitorios
 DEFAULT_TIMEOUT_SECS = 90
 
 
@@ -170,6 +172,13 @@ def _muse_transient(exc: Exception) -> bool:
     return isinstance(exc, (httpx.TimeoutException, httpx.TransportError, asyncio.TimeoutError, TimeoutError))
 
 
+def _is_quota(exc: Exception) -> bool:
+    """429: cuota o límite de peticiones del proveedor."""
+    if isinstance(exc, _HttpStatus):
+        return exc.status == 429
+    return getattr(exc, "code", None) == 429
+
+
 # --- Punto de entrada ----------------------------------------------------------------------
 
 async def structured(role: Role, system: str, turns: list[dict], output: type[T], *,
@@ -183,7 +192,7 @@ async def structured(role: Role, system: str, turns: list[dict], output: type[T]
     if provider == "gemini" and gemini_client is None:
         raise LLMError("No hay cliente de Gemini configurado")
     started = time.monotonic()
-    transient = schema = 0
+    transient = schema = quota = 0
     attempt = 0
     while True:
         attempt += 1
@@ -198,6 +207,12 @@ async def structured(role: Role, system: str, turns: list[dict], output: type[T]
             is_transient = _gemini_transient(exc) if provider == "gemini" else _muse_transient(exc)
             log.warning("LLM %s/%s: intento %d falló (%s: %s)", role, provider, attempt, type(exc).__name__,
                         str(exc)[:200])
+            if _is_quota(exc) and quota < len(QUOTA_BACKOFF_SECS):
+                # Cuota (429): esperar más y con variación al azar, para que llamadas en paralelo no
+                # vuelvan a chocar al mismo tiempo. No consume los reintentos de errores transitorios.
+                await asyncio.sleep(QUOTA_BACKOFF_SECS[quota] * random.uniform(0.75, 1.25))
+                quota += 1
+                continue
             if is_transient and transient < len(BACKOFF_SECS):
                 await asyncio.sleep(BACKOFF_SECS[transient])
                 transient += 1

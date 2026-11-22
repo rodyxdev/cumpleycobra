@@ -597,3 +597,35 @@ def test_cola_en_postgres_no_entrega_dos_veces_el_mismo_trabajo():
         assert q.get_source(sid) == b"PK\x03\x04datos"
     finally:
         store.close()
+
+
+def test_ante_cuota_el_adaptador_espera_mas_y_no_gasta_los_reintentos(monkeypatch):
+    import asyncio
+
+    from backend import llm
+
+    class Quota(Exception):
+        code = 429
+
+    calls, sleeps = {"n": 0}, []
+
+    async def fake_call(*a, **k):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise Quota("429 RESOURCE_EXHAUSTED")
+        return '{"ok": true}', 1, 1
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    class Out(llm.BaseModel):
+        ok: bool
+
+    monkeypatch.setenv("LLM_JUEZ_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_MODEL", "falso")
+    monkeypatch.setattr(llm, "_gemini_call", fake_call)
+    monkeypatch.setattr(llm, "_gemini_transient", lambda exc: True)
+    monkeypatch.setattr(llm.asyncio, "sleep", fake_sleep)
+    out = asyncio.run(llm.structured("juez", "s", [], Out, gemini_client=object()))
+    assert out.ok and calls["n"] == 4
+    assert [round(s / b, 2) >= 0.75 for s, b in zip(sleeps, llm.QUOTA_BACKOFF_SECS)] == [True, True, True]
