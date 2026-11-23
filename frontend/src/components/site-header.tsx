@@ -16,6 +16,9 @@ export function SiteHeader() {
           </span>
         </Link>
         <nav className="flex flex-wrap items-center gap-2 text-base sm:gap-3">
+          <Link href="/probar" className="rounded-lg bg-success-soft px-3 py-2 font-bold text-success-strong transition-colors hover:bg-secondary hover:text-primary">
+            Pruébalo
+          </Link>
           <Link href="/cliente" className="rounded-lg px-3 py-2 font-medium text-[#2E3A4D] transition-colors hover:bg-secondary hover:text-primary">
             Soy cliente
           </Link>

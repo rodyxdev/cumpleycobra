@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse
 
 LIMITED_PATHS = {"/tasks/draft", "/tasks/draft/review", "/evaluate"}
 WRITE_PATHS = {("POST", "/tasks"), ("POST", "/propuestas"), ("GET", "/auth/challenge"),
-               ("POST", "/auth/token"), ("PUT", "/perfil")}
+               ("POST", "/auth/token"), ("PUT", "/perfil"), ("GET", "/probar")}
 WINDOW_SECS = 60
 MSG_WRITES = "Demasiadas solicitudes desde tu conexión. Espera un minuto y vuelve a intentarlo."
 MSG_PER_IP = ("Demasiadas solicitudes al motor de análisis desde tu conexión. "

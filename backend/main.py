@@ -8,6 +8,7 @@ import asyncio
 import hmac
 import logging
 import os
+import random
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -462,6 +463,46 @@ async def demo():
         "casos": [{"id": c["id"], "nombre": c["nombre"], "principal": c["principal"],
                    "codigo": (CASOS_DIR / c["archivo"]).read_text(encoding="utf-8")} for c in CASOS],
     }
+
+
+TRIAL_MIN_SECONDS = 15 * 60  # una tarea de prueba que vence pronto no se reparte
+
+
+def trial_task_ids() -> list[str]:
+    """`DEMO_TRIAL_TASKS`: tareas ya depositadas (scripts/tareas_jueces.py) que se reparten en /probar."""
+    return [t.strip() for t in os.environ.get("DEMO_TRIAL_TASKS", "").split(",") if t.strip()]
+
+
+def trial_out(task: dict, available: int, yours: bool) -> dict:
+    return {"task_id": task["task_id"], "available": available, "yours": yours,
+            "invite_path": f"/tarea/{task['task_id']}?invitacion={task['invite_token']}"}
+
+
+@app.get("/probar")
+async def trial(address: str = ""):
+    """Reparte una tarea de prueba ya depositada a quien visita la demo (botón «Pruébalo»).
+
+    Exige la dirección de la wallet conectada: si ya tiene una tarea de prueba, recibe la misma (así una
+    wallet no se queda con varias). Si no, recibe una al azar entre las que nadie aceptó, siguen
+    `Funded` on-chain y tienen al menos 15 minutos de plazo. El enlace es el mismo de la invitación.
+    """
+    check_address(address, "address")
+    tasks = [t for t in (store().tasks.get(i) for i in trial_task_ids()) if t is not None]
+    mine = next((t for t in tasks if t["freelancer_address"] == address), None)
+    free = [t for t in tasks if not t["freelancer_address"]
+            and (t.get("verification") != "execution" or t["suite"]["status"] == "lista")]
+    if mine:
+        return trial_out(mine, len(free), True)
+    random.shuffle(free)
+    for task in free[:5]:
+        try:
+            onchain, now = await read_chain(task["task_id"])
+        except ApiError:
+            continue
+        if onchain and onchain["status"] == "Funded" and onchain["deadline"] - now >= TRIAL_MIN_SECONDS:
+            return trial_out(task, len(free), False)
+    raise err(404, "NO_TRIAL_TASKS",
+              "Ya se usaron todas las tareas de prueba. Puedes crear la tuya en «Soy cliente».")
 
 
 @app.get("/tasks/{task_id}/verdicts")

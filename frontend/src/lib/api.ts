@@ -276,6 +276,9 @@ export const api = {
         ...(headers.client ? { "X-Client-Token": headers.client } : {}),
       },
     }),
+  trial: (address: string) =>
+    request<{ task_id: string; invite_path: string; available: number; yours: boolean }>(
+      `/probar?address=${encodeURIComponent(address)}`),
   verifierAccess: (address: string) =>
     request<{ available: boolean }>(`/verifier/acceso?address=${encodeURIComponent(address)}`),
   retrySuite: (id: string, clientToken: string) =>

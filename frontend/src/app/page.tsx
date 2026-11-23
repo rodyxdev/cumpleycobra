@@ -46,8 +46,11 @@ export default function Home() {
               libera solo cuando el motor confirma que el código cumple.
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <Link href="/cliente" className="inline-flex h-13 items-center gap-2.5 rounded-xl bg-[var(--success)] px-6 text-[1.05rem] font-bold text-white transition-colors hover:bg-[var(--success-strong)]">
-                Probar la demo <ArrowRight className="size-5" aria-hidden="true" />
+              <Link href="/probar" className="inline-flex h-13 items-center gap-2.5 rounded-xl bg-[var(--success)] px-6 text-[1.05rem] font-bold text-white transition-colors hover:bg-[var(--success-strong)]">
+                Pruébalo en 3 minutos <ArrowRight className="size-5" aria-hidden="true" />
+              </Link>
+              <Link href="/cliente" className="inline-flex h-13 items-center rounded-xl border-[1.5px] border-white/45 px-6 text-[1.05rem] font-semibold text-white transition-colors hover:bg-white/10">
+                Crear una tarea
               </Link>
               <Link href="/programadores" className="inline-flex h-13 items-center rounded-xl border-[1.5px] border-white/45 px-6 text-[1.05rem] font-semibold text-white transition-colors hover:bg-white/10">
                 Ver programadores
@@ -142,8 +145,8 @@ export default function Home() {
             se paga.
           </p>
         </div>
-        <Link href="/cliente" className="inline-flex h-13 items-center rounded-xl bg-white px-6 text-[1.05rem] font-bold text-primary transition-colors hover:bg-secondary">
-          Probar la demo
+        <Link href="/probar" className="inline-flex h-13 items-center rounded-xl bg-white px-6 text-[1.05rem] font-bold text-primary transition-colors hover:bg-secondary">
+          Pruébalo en 3 minutos
         </Link>
       </section>
 
