@@ -125,3 +125,19 @@ Cómo volver atrás:
 - Para cerrarlo sin apagarlo: `VERIFIER_ALLOWED_CLIENTS` con las cuentas de prueba.
 
 Pendiente: la lista de aceptación (pruebas con personas externas, sandbox de Chromium, árbitro propio de staging y tu revisión del código), el monitor sobre `/health/verificador` y el texto de la portada cuando deje de ser beta. Después de la cumbre: devolver el mínimo de instancias a 0.
+
+### Revisión de pantallas en producción con una sesión real de Pollar (22 de noviembre, noche)
+
+Recorrido de Rodrigo y Claude en https://cumpleycobra.vercel.app con la wallet `GA7MXQ…BEVJ` (cliente y programador a la vez):
+- Tarea `Fzw_5tOvZG-FmM7o`: suite lista en alrededor de un minuto; depósito con Pollar `985cd992…`.
+- Caso C rechazado por señales de inyección, sin pago.
+- Caso A aprobado y pagado en 18.4 s, tx `c806382e0c353c5269174eecfb01f7032f4dab92b9981694c2234b3963e57345`. La vista del cliente dice «Pagada», con los dos veredictos y «Ver código».
+
+Hallazgos, corregidos y publicados el mismo día (`c3e707e`, `d89aa06`), y comprobados en el sitio:
+
+| Hallazgo | Arreglo |
+| --- | --- |
+| La interfaz sugerida tomaba prosa por código: «precios (números)» → función `precios` | Solo se sugiere una firma real (nombre pegado al paréntesis y, además, guion bajo, tipos o retorno); si no hay, los campos quedan en blanco |
+| El programador no veía el módulo ni la firma antes de aceptar | La tarjeta de criterios muestra «Lo que tu entrega debe exponer» (archivo y firma) y las páginas del perfil web |
+| En celular, el plan de la suite empujaba la invitación y el depósito muy abajo | Antes del depósito, la tarjeta con la invitación y «Depositar» va arriba del plan |
+| Un rechazo por inyección decía «No cumple lo acordado» con 4 de 4 criterios cumplidos | «Rechazado por un aviso de seguridad» y «4 de 4 criterios, pero hay un aviso de seguridad» |
