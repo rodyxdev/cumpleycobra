@@ -340,8 +340,11 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
 
 | Ruta | Autorización | Qué hace |
 | --- | --- | --- |
-| `POST /tasks` con `verification: "execution"` | — | Perfil script: `interface` (funciones o clases). Perfil web: `language: "web"` y `web: {"pages": [...]}` (1 a 5 rutas). Encola la suite y devuelve `suite_status` |
-| `GET /tasks/{id}/suite` | — | Plan público: estado, tipo y plan por criterio (`test`/`lectura` en script; `navegador`/`visual`/`lectura` y los chequeos en web), `suite_hash`, `error` legible si se rechazó. Nunca el código de los tests |
+| `POST /tasks` con `verification: "execution"` | — | Perfil script: `interface` (funciones o clases). Perfil web: `language: "web"` y `web: {"pages": [...]}` (1 a 5 rutas). Encola la suite y devuelve `suite_status`. Errores propios: `403 VERIFIER_NOT_AVAILABLE` (cuenta fuera de `VERIFIER_ALLOWED_CLIENTS`), `503 VERIFIER_BUSY` (cupo de suites activas), `429 RATE_LIMITED` (ventana por IP o cuota diaria de suites) |
+| `GET /verifier/acceso?address=G…` | — | `{available}`: si esa cuenta puede crear tareas por ejecución (el frontend muestra la opción solo si sí) |
+| `GET /tasks/{id}/suite` | — | Plan público: estado, tipo y plan por criterio (`test`/`lectura` en script; `navegador`/`visual`/`lectura` y los chequeos en web), `suite_hash`, `error` legible si se rechazó y `retries_left`. Recupera una suite sin trabajo activo (la reencola o la rechaza). Nunca el código de los tests |
+| `POST /tasks/{id}/suite/reintentar` | `X-Client-Token` | Prepara otra vez una suite rechazada, sin crear otra tarea ni cambiar el `rules_hash` (máximo 2). Errores: `SUITE_NOT_REJECTED`, `TOO_MANY_SUITE_RETRIES`, más los límites de crear |
+| `GET /health/verificador` | — | Conteos de la cola y `oldest_queued_secs`; `503` si un trabajo lleva más de `VERIFIER_STUCK_SECS` (15 min) en cola. Para un monitor externo |
 | `POST /tasks/{id}/verificaciones` | `X-Freelancer-Token` | Encola una entrega: `source` = `code` (solo script), `zip` (base64, máx. 2 MB) o `github_public` (`repo` + `sha`). `202` con `verification_id`. Errores: `SUITE_NOT_READY`, `VERIFICATION_IN_PROGRESS`, `DEADLINE_TOO_CLOSE` (menos de 300 s), más los de `/evaluate` |
 | `GET /verificaciones/{id}` | `X-Freelancer-Token` o `X-Client-Token` | Avance real por etapa y, al terminar, el veredicto (mismos campos que `/evaluate` más `verification`, con `screenshots` y URL firmada nueva en cada consulta) |
 | `GET /evidencia/{clave}?exp=&sig=` | URL firmada (HMAC, 15 min) | Una captura JPEG del perfil web |
@@ -349,6 +352,7 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
 
 - `/evaluate` responde `409 EXECUTION_TASK` para tareas por ejecución; `/accept` espera `SUITE_NOT_READY` hasta que la suite esté lista.
 - `GET /tasks/{id}/verdicts` agrega `screenshots` solo a los veredictos web que las tienen.
+- `POST /tasks/draft` y `/tasks/draft/review` aceptan `profile: "web"` (opcional): criterios que se comprueban en el navegador, no leyendo código; el borrador trae `language: "web"`.
 
 ## Verificador por ejecución (fase 3)
 
@@ -367,6 +371,9 @@ Detalle, decisiones y evidencia en [`docs/mejora/fase-3.md`](docs/mejora/fase-3.
   - se apaga sola tras 15 min sin trabajos;
   - la API la enciende al encolar o al consultar un trabajo en cola, con un rol que solo permite `get` y `start` sobre esa instancia;
   - despliegue con `verifier/deploy/deploy.ps1`.
+- **Costo y abuso** (la suite se prepara antes del depósito): cupo de suites activas, ventana por IP y cuotas diarias propias (`demo` y `live` fijan 10, 2 por minuto, 50 suites y 200 verificaciones al día); tope de llamadas simultáneas al modelo (`LLM_MAX_CONCURRENT`).
+- **Pago:** si otro proceso firmó con el árbitro (staging y producción lo comparten), el `release` recibe `txBAD_SEQ` y se arma de nuevo con la secuencia recargada (hasta 3 veces).
+- **Producción** (pendiente, con permiso de Rodrigo): VM propia (`deploy.ps1 -Vm cyc-verificador-prod -SecretoToken …-prod`), nunca la de staging; se puede abrir solo a una lista de cuentas (`VERIFIER_ALLOWED_CLIENTS`). Ver [`docs/mejora/verificador-produccion.md`](docs/mejora/verificador-produccion.md).
 - **Modelo:** Gemini 3.5 Flash en los dos roles (`LLM_SUITE_PROVIDER`, `LLM_JUEZ_PROVIDER`; Muse soportado pero sin medir). Corpus: 213 verificaciones del perfil script y 39 del web, 0 falsas aprobaciones.
 
 ## Motor de análisis (cuatro capas)
@@ -446,6 +453,7 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `NEXT_PUBLIC_WALLET` (`pollar` por defecto, `freighter` de respaldo), `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_USDC_ASSET` (`CÓDIGO:EMISOR`) | frontend |
 | `NEXT_PUBLIC_APP_MODE` (`local`, `demo` o `live`; sin valor, `demo` en build de producción y `local` con `next dev`). En `demo`: aviso de testnet en todas las páginas, faucet de Circle en lugar de comandos de terminal | frontend |
 | `VERIFIER_ENABLED`, `VERIFIER_QUEUE_TOKEN` (Secret Manager; también firma las URLs de evidencia) | backend (fase 3) |
+| `VERIFIER_ALLOWED_CLIENTS` (cuentas G… que pueden crear tareas por ejecución; vacío = todas), `RATE_LIMIT_DAILY_SUITE`, `RATE_LIMIT_DAILY_VERIFICACION`, `RATE_LIMIT_SUITES_PER_MINUTE`, `MAX_PENDING_SUITES`, `LLM_MAX_CONCURRENT` (4), `VERIFIER_STUCK_SECS` (900) | backend (verificador en producción) |
 | `LLM_SUITE_PROVIDER`, `LLM_JUEZ_PROVIDER` (`gemini` o `muse`), `LLM_SUITE_MODEL`, `LLM_JUEZ_MODEL`; con Muse: `MODEL_API_KEY`, `MODEL_BASE_URL`, `MUSE_MODEL` | backend (fase 3) |
 | `VERIFIER_VM_NAME`, `VERIFIER_VM_ZONE`, `VERIFIER_VM_PROJECT` (encender la VM; sin nombre, no hace nada) | backend (fase 3) |
 | `EVIDENCE_BUCKET` (Cloud Storage) o `EVIDENCE_DIR` (local, por defecto `.data/evidencia`) | backend (fase 3) |
