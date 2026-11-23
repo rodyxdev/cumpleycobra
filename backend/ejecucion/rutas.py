@@ -29,7 +29,7 @@ import time
 from typing import Annotated, Literal, Union
 
 from fastapi import APIRouter, Header, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from . import MAX_PASTE_BYTES, MAX_ZIP_BYTES, VERIFY_MIN_SECONDS, enabled, queue_token
@@ -606,10 +606,10 @@ async def task_suite(task_id: str):
     await reconcile_suite(task)
     if arranque.suite_waiting(task["suite"]):
         arranque.wake(api().app)
-    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": _retries_left(task)}
+    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": retries_left(task)}
 
 
-def _retries_left(task: dict) -> int:
+def retries_left(task: dict) -> int:
     return max(0, MAX_SUITE_RETRIES - task.get("suite_retries", 0))
 
 
@@ -630,7 +630,7 @@ async def retry_suite(task_id: str, request: Request, x_client_token: str | None
     async with m.store().lock(task_id):
         if task["suite"]["status"] != "rechazada":
             raise m.err(409, "SUITE_NOT_REJECTED", "Solo se puede pedir otro intento de una suite rechazada")
-        if _retries_left(task) <= 0:
+        if retries_left(task) <= 0:
             raise m.err(429, "TOO_MANY_SUITE_RETRIES",
                         f"Ya se usaron los {MAX_SUITE_RETRIES} intentos extra; crea otra tarea con los criterios ajustados")
         admit_suite(client_ip(request))
@@ -638,7 +638,7 @@ async def retry_suite(task_id: str, request: Request, x_client_token: str | None
         task["suite_retries"] = task.get("suite_retries", 0) + 1
         m.store().save()
     arranque.wake(m.app)
-    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": _retries_left(task)}
+    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": retries_left(task)}
 
 
 class CodeSource(Strict):
@@ -783,6 +783,30 @@ async def verification_status(job_id: str, x_freelancer_token: str | None = Head
         out["error"] = res.get("error", "VERIFIER_FAILED")
         out["message"] = res.get("message") or "El verificador no pudo terminar; el envío no se contó."
     return out
+
+
+DEFAULT_STUCK_SECS = 15 * 60
+
+
+@router.get("/health/verificador")
+async def verifier_health():
+    """Salud de la cola para un monitor externo (p. ej. un uptime check de Cloud Monitoring).
+
+    Responde 503 si el trabajo más viejo lleva en cola más de `VERIFIER_STUCK_SECS` (15 min por
+    defecto): la VM tarda 1 o 2 minutos en encender, así que eso significa que nadie está tomando
+    trabajos. Solo conteos agregados: ni tareas, ni tokens, ni código.
+    """
+    guard_enabled()
+    stats = queue().stats()
+    oldest = stats["oldest_queued_at"]
+    waiting = max(0, round(time.time() - oldest)) if oldest else 0
+    stuck_after = _limit("VERIFIER_STUCK_SECS") or DEFAULT_STUCK_SECS
+    if oldest:
+        arranque.wake(api().app)  # hay trabajo esperando: que la VM esté encendida
+    ok = waiting < stuck_after
+    return JSONResponse({"ok": ok, "queued": stats["queued"], "running": stats["running"],
+                         "oldest_queued_secs": waiting, "stuck_after_secs": stuck_after},
+                        status_code=200 if ok else 503)
 
 
 @router.get("/evidencia/{key:path}")

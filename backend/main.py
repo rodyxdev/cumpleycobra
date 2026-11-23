@@ -400,7 +400,8 @@ async def get_task(task_id: str):
         # Calificación pública del cliente (también aparece en el perfil del programador).
         "rating": task.get("rating"),
         "verification": task.get("verification", "static"),
-        "suite": exec_public_plan(task.get("suite")),
+        "suite": ({**exec_public_plan(task["suite"]), "retries_left": exec_rutas.retries_left(task)}
+                  if task.get("suite") else exec_public_plan(None)),
     }
 
 

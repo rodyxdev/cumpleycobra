@@ -125,7 +125,10 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
 
   return (
     <div className="space-y-6">
-      {task?.verification === "execution" && task.suite && <SuitePlanCard suite={task.suite} criteria={task.criteria} />}
+      {task?.verification === "execution" && task.suite && (
+        <SuitePlanCard suite={task.suite} criteria={task.criteria}
+          onRetry={async () => { await api.retrySuite(taskId, ct.client_token); refresh(); }} />
+      )}
       {task ? <StatusCard task={task} secondsLeft={secondsLeft} /> : error ? (
         <p className="text-sm text-[var(--alert-foreground)]" role="alert">
           {loadProblem(error.code, error.status, error.message).text}

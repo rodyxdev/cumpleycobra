@@ -234,3 +234,24 @@ def test_llamadas_al_modelo_respetan_el_tope(monkeypatch):
     monkeypatch.setenv("LLM_MAX_CONCURRENT", "0")  # sin tope
     asyncio.run(many(10))
     assert state["max"] == 10
+
+
+# --- salud de la cola --------------------------------------------------------------------------
+
+def test_salud_del_verificador(world, monkeypatch):
+    r = world.get("/health/verificador")
+    assert r.status_code == 200 and r.json()["ok"] and r.json()["queued"]["suite"] == 0
+    created = create_task(world)
+    assert world.get("/health/verificador").json()["queued"]["suite"] == 1
+    job_id = main.app.state.store.tasks[created["task_id"]]["suite_job"]
+    main.app.state.queue.jobs[job_id]["created_at"] -= 20 * 60   # 20 minutos sin que nadie lo tome
+    r = world.get("/health/verificador")
+    assert r.status_code == 503 and not r.json()["ok"] and r.json()["oldest_queued_secs"] >= 1200
+    assert "task" not in r.text and created["task_id"] not in r.text
+    monkeypatch.setenv("VERIFIER_STUCK_SECS", "3600")
+    assert world.get("/health/verificador").status_code == 200
+
+
+def test_salud_del_verificador_es_404_sin_flag(world, monkeypatch):
+    monkeypatch.delenv("VERIFIER_ENABLED")
+    assert world.get("/health/verificador").status_code == 404

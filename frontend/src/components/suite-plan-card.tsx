@@ -1,10 +1,35 @@
+"use client";
+
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SuitePlan } from "@/lib/api";
 import { SUITE_STATUS_LABEL, TIPO_LABEL, WEB_SUITE_STATUS_LABEL } from "@/lib/verification";
 
 /** Plan de la suite oculta (fase 3): qué se comprueba ejecutando y qué leyendo. Nunca el código de los tests. */
-export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria: string[] }) {
+export function SuitePlanCard({ suite, criteria, onRetry }: {
+  suite: SuitePlan;
+  criteria: string[];
+  /** Solo el cliente: pide preparar otra vez una suite rechazada (sin crear otra tarea). */
+  onRetry?: () => Promise<void>;
+}) {
   const working = suite.status === "pendiente" || suite.status === "validando";
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const canRetry = suite.status === "rechazada" && !!onRetry && (suite.retries_left ?? 0) > 0;
+
+  async function retry() {
+    if (!onRetry) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      await onRetry();
+    } catch (e) {
+      setRetryError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRetrying(false);
+    }
+  }
   return (
     <Card data-testid="suite-plan">
       <CardHeader>
@@ -21,7 +46,20 @@ export function SuitePlanCard({ suite, criteria }: { suite: SuitePlan; criteria:
           {working ? "… (de 1 a 3 minutos si hay que encender el verificador)" : ""}
         </p>
         {suite.status === "rechazada" && suite.error && (
-          <p className="text-sm text-[var(--alert-foreground)]">{suite.error}. Crea la tarea de nuevo para intentarlo otra vez.</p>
+          <p className="text-sm text-[var(--alert-foreground)]">
+            {suite.error}.{canRetry ? "" : " Crea la tarea de nuevo para intentarlo otra vez."}
+          </p>
+        )}
+        {canRetry && (
+          <div className="space-y-2">
+            <Button variant="outline" size="sm" disabled={retrying} onClick={retry}>
+              {retrying ? "Pidiendo otro intento…" : "Intentar de nuevo"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Los criterios y el depósito no cambian. Te quedan {suite.retries_left} {suite.retries_left === 1 ? "intento" : "intentos"}.
+            </p>
+            {retryError && <p role="alert" className="text-sm text-[var(--alert-foreground)]">{retryError}</p>}
+          </div>
         )}
         {suite.status !== "pendiente" && (
           <ol className="divide-y divide-border">

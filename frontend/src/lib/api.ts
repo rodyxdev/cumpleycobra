@@ -47,6 +47,8 @@ export type SuitePlan = {
   profile?: "web";
   /** Motivo, si la suite quedó rechazada (p. ej. el verificador no pudo ejecutar). */
   error?: string | null;
+  /** Intentos extra que todavía puede pedir el cliente si la suite quedó rechazada. */
+  retries_left?: number;
   criteria: {
     index: number;
     tipo: "test" | "lectura" | "navegador" | "visual" | null;
@@ -272,6 +274,10 @@ export const api = {
         ...(headers.freelancer ? { "X-Freelancer-Token": headers.freelancer } : {}),
         ...(headers.client ? { "X-Client-Token": headers.client } : {}),
       },
+    }),
+  retrySuite: (id: string, clientToken: string) =>
+    request<SuitePlan & { task_id: string }>(`/tasks/${encodeURIComponent(id)}/suite/reintentar`, {
+      method: "POST", headers: { "X-Client-Token": clientToken },
     }),
   delivery: (id: string, clientToken: string) =>
     request<{ code: string; video_url: string | null; code_hash: string }>(
