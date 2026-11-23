@@ -45,7 +45,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 <Image src="/brand/logo-mark.png" alt="" width={28} height={25} />
                 Cumple&amp;Cobra · Pago verificado para código
               </span>
-              <span>Motor de Análisis Estático de Código basado en LLM · Testnet de Stellar</span>
+              <span>Verificación por ejecución en un contenedor aislado · Testnet de Stellar</span>
             </div>
           </footer>
         </Providers>
