@@ -15,6 +15,14 @@ test("propone la interfaz desde la firma de la descripción", () => {
   assert.deepEqual(guessInterface({ description: "Sin firma", criteria: [] }), { module: "solucion", name: "", signature: "" });
 });
 
+test("no confunde prosa entre paréntesis con una firma", () => {
+  const vacio = { module: "solucion", name: "", signature: "" };
+  assert.deepEqual(guessInterface({ description: "Recibe una lista de precios (números) y un porcentaje.", criteria: [] }), vacio);
+  assert.deepEqual(guessInterface({ description: "Devuelve los precios(números) en orden.", criteria: [] }), vacio);
+  // La primera firma real gana aunque antes haya prosa con paréntesis.
+  assert.equal(guessInterface({ description: "Lista de precios (números).", criteria: ["Define f(x: int) -> int."] }).name, "f");
+});
+
 test("la interfaz solo acepta nombres de Python y una firma que empiece con la función", () => {
   assert.equal(interfaceProblem("descuentos", "aplicar_descuento", "aplicar_descuento(p)"), null);
   assert.match(interfaceProblem("mi-modulo", "f", "f()"), /módulo/);

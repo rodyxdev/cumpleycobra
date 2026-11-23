@@ -58,7 +58,10 @@ const MODULE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
  */
 export function guessInterface(spec: Pick<Spec, "description" | "criteria">): { module: string; name: string; signature: string } {
   const text = [spec.description, ...spec.criteria].join("\n");
-  const match = text.match(/([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*(->\s*[^,.;\n]+)?/);
+  // Solo algo que parezca una firma de Python: el nombre pegado al paréntesis y, además, un guion bajo
+  // en el nombre, parámetros con tipo o un tipo de retorno. «precios (números)» en un criterio es prosa.
+  const match = [...text.matchAll(/(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\(([^()]*)\)\s*(->\s*[^,.;\n]+)?/g)]
+    .find((m) => m[1].includes("_") || m[2].includes(":") || !!m[3]);
   if (!match) return { module: "solucion", name: "", signature: "" };
   const name = match[1];
   const signature = `${name}(${match[2].trim()})${match[3] ? " " + match[3].trim() : ""}`;
