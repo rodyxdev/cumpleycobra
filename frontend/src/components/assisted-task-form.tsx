@@ -27,12 +27,27 @@ export function AssistedTaskForm() {
   const [error, setError] = useState<string | null>(null);
   const [amount, setAmount] = useState("20");
   const [minutes, setMinutes] = useState("10");
-  // Fase 3: verificar ejecutando (solo si el backend lo tiene habilitado).
-  const [execute, setExecute] = useState(false);
+  // Fase 3: verificar ejecutando (solo si el backend lo tiene habilitado y abierto para esta wallet:
+  // en producción puede estar limitado a una lista de cuentas mientras se prueba).
+  const [executeChoice, setExecute] = useState(false);
+  const [access, setAccess] = useState<{ address: string; ok: boolean } | null>(null);
+  const verifierOk = VERIFIER_ENABLED && !!wallet.address && access?.address === wallet.address && access.ok;
+  const execute = executeChoice && verifierOk;
   const [iface, setIface] = useState({ module: "", name: "", signature: "" });
   // Perfil web: un sitio (HTML/CSS/JS) que se revisa en un navegador; en lugar de interfaz, páginas.
   const [kind, setKind] = useState<"script" | "web">("script");
   const [pagesText, setPagesText] = useState("/");
+
+  useEffect(() => {
+    const address = wallet.address;
+    if (!VERIFIER_ENABLED || !address) return;
+    let alive = true;
+    api.verifierAccess(address).then(
+      (r) => { if (alive) setAccess({ address, ok: r.available }); },
+      () => { if (alive) setAccess({ address, ok: false }); },
+    );
+    return () => { alive = false; };
+  }, [wallet.address]);
 
   useEffect(() => {
     let alive = true;
@@ -71,7 +86,7 @@ export function AssistedTaskForm() {
     setBusy("draft");
     setError(null);
     try {
-      const result = await api.draft(raw);
+      const result = await api.draft(raw, execute && kind === "web" ? "web" : undefined);
       setSpec(result);
       setOriginal(raw);
       setReviews(null);
@@ -84,7 +99,7 @@ export function AssistedTaskForm() {
     if (!spec) return;
     setBusy("review");
     setError(null);
-    try { setReviews((await api.reviewDraft(spec.criteria)).criteria); }
+    try { setReviews((await api.reviewDraft(spec.criteria, execute && kind === "web" ? "web" : undefined)).criteria); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   }
@@ -227,7 +242,7 @@ export function AssistedTaskForm() {
               <div className="space-y-2"><Label htmlFor="plazo">Plazo (minutos)</Label>
                 <Input id="plazo" value={minutes} inputMode="numeric" disabled={!!busy} onChange={(e) => setMinutes(e.target.value)} /></div>
             </div>
-            {VERIFIER_ENABLED && (
+            {verifierOk && (
               <div className="space-y-3 rounded-lg border p-4" data-testid="verificar-ejecutando">
                 <label className="flex items-start gap-2 text-sm font-medium">
                   <input type="checkbox" checked={execute} disabled={!!busy} onChange={(e) => toggleExecute(e.target.checked)} />

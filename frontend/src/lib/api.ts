@@ -47,6 +47,8 @@ export type SuitePlan = {
   profile?: "web";
   /** Motivo, si la suite quedó rechazada (p. ej. el verificador no pudo ejecutar). */
   error?: string | null;
+  /** Intentos extra que todavía puede pedir el cliente si la suite quedó rechazada. */
+  retries_left?: number;
   criteria: {
     index: number;
     tipo: "test" | "lectura" | "navegador" | "visual" | null;
@@ -240,11 +242,12 @@ export const api = {
     request<{ consented: boolean; code_hash: string }>(`/tasks/${encodeURIComponent(id)}/consent`, {
       method: "POST", headers: { "X-Freelancer-Token": token }, body: JSON.stringify({ code_hash }),
     }),
-  draft: (raw_request: string) =>
-    request<Spec>("/tasks/draft", { method: "POST", body: JSON.stringify({ raw_request }) }),
-  reviewDraft: (criteria: string[]) =>
+  // `profile: "web"` (verificador, perfil web): criterios que se comprueban en un navegador.
+  draft: (raw_request: string, profile?: "web") =>
+    request<Spec>("/tasks/draft", { method: "POST", body: JSON.stringify(profile ? { raw_request, profile } : { raw_request }) }),
+  reviewDraft: (criteria: string[], profile?: "web") =>
     request<{ criteria: CriterionReview[] }>("/tasks/draft/review", {
-      method: "POST", body: JSON.stringify({ criteria }),
+      method: "POST", body: JSON.stringify(profile ? { criteria, profile } : { criteria }),
     }),
   demo: () => request<Demo>("/demo"),
   task: (id: string) => request<TaskView>(`/tasks/${encodeURIComponent(id)}`),
@@ -272,6 +275,12 @@ export const api = {
         ...(headers.freelancer ? { "X-Freelancer-Token": headers.freelancer } : {}),
         ...(headers.client ? { "X-Client-Token": headers.client } : {}),
       },
+    }),
+  verifierAccess: (address: string) =>
+    request<{ available: boolean }>(`/verifier/acceso?address=${encodeURIComponent(address)}`),
+  retrySuite: (id: string, clientToken: string) =>
+    request<SuitePlan & { task_id: string }>(`/tasks/${encodeURIComponent(id)}/suite/reintentar`, {
+      method: "POST", headers: { "X-Client-Token": clientToken },
     }),
   delivery: (id: string, clientToken: string) =>
     request<{ code: string; video_url: string | null; code_hash: string }>(

@@ -19,6 +19,9 @@ MSG_PER_IP = ("Demasiadas solicitudes al motor de análisis desde tu conexión. 
               "Espera un minuto y vuelve a intentarlo.")
 MSG_DAILY = ("Se alcanzó el límite diario de {group} de esta demo. "
              "Vuelve a intentarlo mañana.")
+# Nombre legible de cada cuota diaria (las dos primeras conservan su texto de siempre).
+DAILY_LABELS = {"borrador": "borrador", "motor": "motor", "suite": "tareas con verificación por ejecución",
+                "verificacion": "verificaciones por ejecución"}
 
 
 class RateLimited(Exception):
@@ -97,10 +100,10 @@ class RateLimiter:
         with self.lock:
             if today != self.day:
                 self.day, self.day_count = today, {"borrador": 0, "motor": 0}
-            if self.day_count[group] >= daily:
+            if self.day_count.get(group, 0) >= daily:
                 tomorrow = (int(now) // 86400 + 1) * 86400
-                raise RateLimited(MSG_DAILY.format(group=group), max(1, tomorrow - int(now)))
-            self.day_count[group] += 1
+                raise RateLimited(MSG_DAILY.format(group=DAILY_LABELS.get(group, group)), max(1, tomorrow - int(now)))
+            self.day_count[group] = self.day_count.get(group, 0) + 1
 
 
 rate_limiter = RateLimiter()

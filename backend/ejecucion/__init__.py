@@ -17,5 +17,19 @@ def enabled() -> bool:
     return os.environ.get("VERIFIER_ENABLED", "").strip().lower() in ("1", "true", "yes")
 
 
+def allowed_clients() -> frozenset[str] | None:
+    """`VERIFIER_ALLOWED_CLIENTS`: direcciones G… separadas por comas que pueden crear tareas por
+    ejecución (para probar en producción sin abrirlo al público). Sin la variable: todas."""
+    raw = os.environ.get("VERIFIER_ALLOWED_CLIENTS", "").strip()
+    if not raw:
+        return None
+    return frozenset(a.strip() for a in raw.split(",") if a.strip())
+
+
+def client_allowed(address: str) -> bool:
+    allowed = allowed_clients()
+    return allowed is None or address in allowed
+
+
 def queue_token() -> str | None:
     return os.environ.get("VERIFIER_QUEUE_TOKEN") or None

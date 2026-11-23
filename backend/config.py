@@ -89,7 +89,11 @@ def load_settings() -> Settings:
 
 APP_MODES = ("local", "demo", "live")
 # Valores por defecto de los límites cuando el modo es público y la variable no está definida.
-PUBLIC_LIMIT_DEFAULTS = {"RATE_LIMIT_PER_MINUTE": "10", "RATE_LIMIT_DAILY": "500"}
+PUBLIC_LIMIT_DEFAULTS = {"RATE_LIMIT_PER_MINUTE": "10", "RATE_LIMIT_DAILY": "500",
+                         # Verificador (fase 3): cada tarea prepara una suite (hasta 8 llamadas al modelo
+                         # y tiempo de la VM) antes del depósito, así que tiene su propia cuota, más baja.
+                         "RATE_LIMIT_DAILY_SUITE": "50", "RATE_LIMIT_DAILY_VERIFICACION": "200",
+                         "RATE_LIMIT_SUITES_PER_MINUTE": "2", "MAX_PENDING_SUITES": "10"}
 
 
 def app_mode() -> str:

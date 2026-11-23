@@ -14,6 +14,9 @@ El contenido de un turno es texto o una lista de partes: {"type": "text", "text"
 {"type": "image", "mime_type": "image/jpeg", "data": bytes} (juez visual del perfil web).
 Reintentos: hasta 4 ante cuota (429) con espera de 4 a 40 s, 2 ante otros errores transitorios
 (timeout, 5xx) con espera de 1 y 3 s, y 1 ante una respuesta fuera de esquema.
+Tope de llamadas simultáneas por proceso: `LLM_MAX_CONCURRENT` (4 por defecto; 0 = sin tope). Una
+suite pide hasta 8 a la vez y varias tareas juntas agotaban la cuota de Vertex (429); con el tope
+esperan su turno en lugar de chocar. La espera del turno no cuenta para el tope de tiempo del intento.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import logging
 import os
 import random
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
@@ -40,6 +44,42 @@ PROVIDERS = ("gemini", "muse")
 BACKOFF_SECS = (1, 3)
 QUOTA_BACKOFF_SECS = (4, 10, 20, 40)  # ante 429, aparte de los reintentos transitorios
 DEFAULT_TIMEOUT_SECS = 90
+DEFAULT_MAX_CONCURRENT = 4
+# Un semáforo por event loop (los tests abren varios loops; un semáforo no se comparte entre loops).
+_SLOTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[int, asyncio.Semaphore]]" = weakref.WeakKeyDictionary()
+
+
+def max_concurrent() -> int:
+    try:
+        return max(0, int((os.environ.get("LLM_MAX_CONCURRENT") or str(DEFAULT_MAX_CONCURRENT)).strip()))
+    except ValueError:
+        return DEFAULT_MAX_CONCURRENT
+
+
+def _slots() -> asyncio.Semaphore | None:
+    n = max_concurrent()
+    if not n:
+        return None
+    loop = asyncio.get_running_loop()
+    current = _SLOTS.get(loop)
+    if current is None or current[0] != n:
+        current = (n, asyncio.Semaphore(n))
+        _SLOTS[loop] = current
+    return current[1]
+
+
+async def _call(provider: str, client, model: str, system: str, turns: list[dict], output, timeout: float):
+    slots = _slots()
+    if slots is None:
+        return await _provider_call(provider, client, model, system, turns, output, timeout)
+    async with slots:
+        return await _provider_call(provider, client, model, system, turns, output, timeout)
+
+
+async def _provider_call(provider, client, model, system, turns, output, timeout):
+    if provider == "gemini":
+        return await _gemini_call(client, model, system, turns, output, timeout)
+    return await _muse_call(model, system, turns, output, timeout)
 
 
 class LLMError(RuntimeError):
@@ -215,10 +255,7 @@ async def structured(role: Role, system: str, turns: list[dict], output: type[T]
     while True:
         attempt += 1
         try:
-            if provider == "gemini":
-                raw, tin, tout = await _gemini_call(gemini_client, model, system, turns, output, timeout)
-            else:
-                raw, tin, tout = await _muse_call(model, system, turns, output, timeout)
+            raw, tin, tout = await _call(provider, gemini_client, model, system, turns, output, timeout)
         except LLMError:
             raise
         except Exception as exc:  # noqa: BLE001 - se clasifica abajo

@@ -134,11 +134,12 @@ export default function Home() {
 
       <section className="flex flex-wrap items-center justify-between gap-8 rounded-[1.5rem] bg-primary px-6 py-10 text-white sm:px-11" aria-labelledby="sigue">
         <div className="max-w-2xl space-y-3">
-          <span className="inline-block rounded-full bg-white/15 px-3 py-1 text-xs font-bold tracking-[0.08em] uppercase">Lo que sigue</span>
+          <span className="inline-block rounded-full bg-white/15 px-3 py-1 text-xs font-bold tracking-[0.08em] uppercase">Nuevo · beta</span>
           <h2 id="sigue" className="brand-heading text-3xl">Verificación por ejecución</h2>
           <p className="text-base leading-relaxed text-[#D5E1EF] sm:text-lg">
-            El código correrá en un contenedor aislado contra pruebas ocultas, y las páginas web se revisarán en un
-            navegador real, con capturas como evidencia.
+            Al crear la tarea, elige «Verificar ejecutando»: el código corre en un contenedor aislado contra pruebas
+            ocultas, y un sitio web se revisa en un navegador real, con capturas como evidencia. Si una prueba falla, no
+            se paga.
           </p>
         </div>
         <Link href="/cliente" className="inline-flex h-13 items-center rounded-xl bg-white px-6 text-[1.05rem] font-bold text-primary transition-colors hover:bg-secondary">
@@ -147,8 +148,9 @@ export default function Home() {
       </section>
 
       <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-        El Motor de Análisis Estático de Código basado en LLM evalúa el código contra los criterios acordados. El
-        depósito y el pago quedan registrados en el contrato Soroban.
+        El código se verifica ejecutándolo en un contenedor aislado contra pruebas ocultas (beta) o leyéndolo con el
+        Motor de Análisis Estático de Código basado en LLM. El depósito y el pago quedan registrados en el contrato
+        Soroban.
       </p>
     </div>
   );
