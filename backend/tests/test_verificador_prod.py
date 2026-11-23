@@ -196,3 +196,41 @@ def test_reintento_usa_la_cuota_de_suites(world, monkeypatch):
 def test_reintento_es_404_sin_flag(world, monkeypatch, path):
     monkeypatch.delenv("VERIFIER_ENABLED")
     assert world.post(path).status_code == 404
+
+
+# --- tope de llamadas simultáneas al modelo ----------------------------------------------------
+
+def test_llamadas_al_modelo_respetan_el_tope(monkeypatch):
+    import asyncio
+
+    from pydantic import BaseModel
+
+    from backend import llm
+
+    class Out(BaseModel):
+        ok: bool
+
+    state = {"now": 0, "max": 0}
+
+    async def fake_call(client, model, system, turns, output, timeout):
+        state["now"] += 1
+        state["max"] = max(state["max"], state["now"])
+        await asyncio.sleep(0.01)
+        state["now"] -= 1
+        return '{"ok": true}', 1, 1
+
+    monkeypatch.setattr(llm, "_gemini_call", fake_call)
+    monkeypatch.setenv("GEMINI_MODEL", "falso")
+
+    async def many(n):
+        await asyncio.gather(*(llm.structured("suite", "s", [{"role": "user", "content": "x"}], Out,
+                                              gemini_client=object()) for _ in range(n)))
+
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "3")
+    asyncio.run(many(10))
+    assert state["max"] == 3
+
+    state["max"] = 0
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "0")  # sin tope
+    asyncio.run(many(10))
+    assert state["max"] == 10
