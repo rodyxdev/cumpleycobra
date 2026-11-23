@@ -6,6 +6,8 @@ Uso (contra la versión pública; nunca antes de que pase la prueba de punta a p
 
   --comprobar   solo revisa el backend, el saldo de cyc-client y el contrato; no crea nada.
   --usdc 1      monto por tarea (USDC).      --dias 7   plazo on-chain (máximo del backend: 7 días).
+  --ejecucion   tareas con verificación por ejecución (interfaz de la demo): espera la suite oculta antes de
+                depositar y escribe en docs/probar-cumbre.md y scripts/.logs/tareas-cumbre.json.
 
 Cada tarea usa la plantilla de la demo, la crea el backend con cyc-client como cliente y se deposita
 con la Stellar CLI (la identidad cyc-client firma; el cliente on-chain coincide, así que /evaluate
@@ -38,6 +40,11 @@ USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
 HORIZON = "https://horizon-testnet.stellar.org"
 OUT = ROOT / "docs" / "probar-en-linea.md"
 LOG = ROOT / "scripts" / ".logs" / "tareas-jueces.json"
+OUT_EJECUCION = ROOT / "docs" / "probar-cumbre.md"
+LOG_EJECUCION = ROOT / "scripts" / ".logs" / "tareas-cumbre.json"
+INTERFACE = {"language": "python", "symbols": [{
+    "module": "descuentos", "name": "aplicar_descuento", "kind": "function",
+    "signature": "aplicar_descuento(precios: list[float], porcentaje: float) -> list[float]"}]}
 
 
 def cli_address(identity: str) -> str:
@@ -73,6 +80,55 @@ def wait_funded(api: str, task_id: str) -> dict:
             return view
         time.sleep(2)
     raise RuntimeError(f"La tarea {task_id} no aparece como Funded en el contrato")
+
+
+def wait_suite(api: str, task_id: str) -> None:
+    """La suite oculta debe quedar lista antes de depositar: si se rechaza, no se ata dinero."""
+    for _ in range(90):
+        plan = httpx.get(f"{api}/tasks/{task_id}/suite", timeout=30).json()
+        if plan.get("status") == "lista":
+            return
+        if plan.get("status") == "rechazada":
+            raise RuntimeError(f"La suite de {task_id} se rechazó: {plan.get('error')}")
+        time.sleep(5)
+    raise RuntimeError(f"La suite de {task_id} no quedó lista en 7.5 minutos")
+
+
+def render_ejecucion(app: str, tasks: list[dict], usdc: str, days: int, generated_at: str) -> str:
+    """docs/probar-cumbre.md: tareas con verificación por ejecución para el público de la cumbre."""
+    rows = "\n".join(
+        f"| {i} | [`{t['task_id']}`]({t['invite']}) | {t['expires_at']} |" for i, t in enumerate(tasks, start=1))
+    return f"""# Probar Cumple&Cobra en la cumbre
+
+Versión pública: **{app}** (testnet de Stellar; nada usa dinero real).
+
+Cada enlace es una tarea real, ya depositada en el contrato con **{usdc} USDC** de testnet, con un plazo de **{days} días** y
+**verificación por ejecución**: la entrega corre en un contenedor aislado contra una suite de tests oculta. El primero
+que acepta queda amarrado a la tarea: si un enlace ya está tomado, usa el siguiente.
+
+## Qué hacer (unos 3 minutos)
+
+1. **Abre un enlace.**
+2. **Inicia sesión con Pollar** (arriba a la derecha) con tu correo. No necesitas XLM ni instalar nada.
+3. **Activa USDC** cuando la página lo pida (Pollar patrocina la reserva).
+4. Revisa los criterios y lo que la entrega debe exponer, y pulsa **«Acepto los criterios»**.
+5. Elige **«Caso C: inyección en el docstring»** y **«Enviar al verificador»**: se **rechaza** por el intento de manipular
+   al evaluador, sin pago.
+6. Elige **«Caso A: implementación correcta»** y envíalo: los tests ocultos pasan y el contrato te **paga** en segundos.
+   Abre **«Ver el pago en Stellar»**.
+
+Si la primera verificación tarda 1 o 2 minutos más, es que el verificador estaba apagado y se está encendiendo.
+Máximo 3 envíos por tarea.
+
+## Tareas
+
+| # | Tarea (enlace de invitación) | El plazo on-chain vence |
+| --- | --- | --- |
+{{rows}}
+
+Generado el {generated_at} con `scripts/tareas_jueces.py --ejecucion`. Una tarea que nadie use devuelve su depósito al
+cliente de la demo con `timeout_refund` cuando vence el plazo.
+""".replace("{rows}", rows)
 
 
 def render_markdown(app: str, tasks: list[dict], usdc: str, days: int, generated_at: str) -> str:
@@ -136,7 +192,9 @@ def main() -> int:
     parser.add_argument("--identidad", default="cyc-client")
     parser.add_argument("--comprobar", action="store_true", help="solo revisa requisitos; no crea nada")
     parser.add_argument("--permitir-local", action="store_true", help="aceptar URLs de localhost (pruebas)")
+    parser.add_argument("--ejecucion", action="store_true", help="verificación por ejecución (espera la suite)")
     args = parser.parse_args()
+    out, log_path = (OUT_EJECUCION, LOG_EJECUCION) if args.ejecucion else (OUT, LOG)
 
     app = os.environ.get("CYC_APP_URL", "").rstrip("/")
     api = os.environ.get("CYC_API_URL", "").rstrip("/")
@@ -172,26 +230,30 @@ def main() -> int:
     # --- Crear y depositar ------------------------------------------------------------------------------
     minutes = args.dias * 24 * 60
     created, log = [], {"app": app, "api": api, "client": client, "tasks": []}
-    LOG.parent.mkdir(parents=True, exist_ok=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    extra = {"verification": "execution", "interface": INTERFACE} if args.ejecucion else {}
     for i in range(1, args.n + 1):
         r = httpx.post(f"{api}/tasks", timeout=30, json={
             "client_address": client, "raw_request": DEMO_RAW_REQUEST, **DEMO_SPEC,
-            "amount": units, "deadline_minutes": minutes,
+            "amount": units, "deadline_minutes": minutes, **extra,
         })
         r.raise_for_status()
         task = r.json()
+        if args.ejecucion:
+            wait_suite(api, task["task_id"])
         tx = deposit(contract_id, args.identidad, task["task_id"], units, minutes * 60, task["rules_hash"])
         view = wait_funded(api, task["task_id"])
         expires = datetime.fromtimestamp(view["onchain"]["deadline"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         invite = f"{app}/tarea/{quote(task['task_id'])}?invitacion={quote(task['invite_token'])}"
         created.append({"task_id": task["task_id"], "invite": invite, "expires_at": expires})
         log["tasks"].append({**task, "deposit": tx, "expires_at": expires})
-        LOG.write_text(json.dumps(log, indent=1), encoding="utf-8")  # tokens solo aquí (ignorado por git)
+        log_path.write_text(json.dumps(log, indent=1), encoding="utf-8")  # tokens solo aquí (ignorado por git)
         print(f"{i}/{args.n} tarea {task['task_id']} depositada: {tx}")
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    OUT.write_text(render_markdown(app, created, args.usdc, args.dias, generated), encoding="utf-8")
-    print(f"Enlaces en {OUT.relative_to(ROOT)}; tokens del cliente en {LOG.relative_to(ROOT)}.")
+    render = render_ejecucion if args.ejecucion else render_markdown
+    out.write_text(render(app, created, args.usdc, args.dias, generated), encoding="utf-8")
+    print(f"Enlaces en {out.relative_to(ROOT)}; tokens del cliente en {log_path.relative_to(ROOT)}.")
     last = datetime.now(timezone.utc) + timedelta(days=args.dias)
     print(f"Después de {last:%Y-%m-%d %H:%M} UTC, las no usadas se reembolsan con timeout_refund (ver docs/demo.md).")
     return 0

@@ -141,3 +141,28 @@ Hallazgos, corregidos y publicados el mismo día (`c3e707e`, `d89aa06`), y compr
 | El programador no veía el módulo ni la firma antes de aceptar | La tarjeta de criterios muestra «Lo que tu entrega debe exponer» (archivo y firma) y las páginas del perfil web |
 | En celular, el plan de la suite empujaba la invitación y el depósito muy abajo | Antes del depósito, la tarjeta con la invitación y «Depositar» va arriba del plan |
 | Un rechazo por inyección decía «No cumple lo acordado» con 4 de 4 criterios cumplidos | «Rechazado por un aviso de seguridad» y «4 de 4 criterios, pero hay un aviso de seguridad» |
+
+### Para la cumbre: límites más altos y tareas ya depositadas (22 de noviembre, noche)
+
+En el Wi-Fi del evento todos comparten la misma IP, así que se subieron los límites por conexión, a pedido de Rodrigo.
+
+- **Revisión:** `cumpleycobra-api-00006-x76`.
+- **Valores:**
+  - `RATE_LIMIT_PER_MINUTE=60` (era 10);
+  - `RATE_LIMIT_SUITES_PER_MINUTE=10` (era 2);
+  - `MAX_PENDING_SUITES=20` (era 10);
+  - `RATE_LIMIT_DAILY_SUITE=100` (era 50);
+  - `RATE_LIMIT_DAILY_VERIFICACION=300` (era 200).
+- **Sin cambio:** `RATE_LIMIT_DAILY=500`.
+- **Costo máximo del modelo:** sigue acotado por las cuotas diarias, unos US$5 al día.
+
+**Después de la cumbre**, para volver a los valores del modo `demo`:
+```
+gcloud run services update cumpleycobra-api --region=us-central1 --update-env-vars=RATE_LIMIT_PER_MINUTE=10 --remove-env-vars=RATE_LIMIT_SUITES_PER_MINUTE,MAX_PENDING_SUITES,RATE_LIMIT_DAILY_SUITE,RATE_LIMIT_DAILY_VERIFICACION
+```
+
+**Tareas ya depositadas para el público:** `scripts/tareas_jueces.py --ejecucion` crea tareas con verificación por ejecución y espera la suite oculta antes de depositar. Los enlaces quedan en `docs/probar-cumbre.md` y los tokens en `scripts/.logs/tareas-cumbre.json`; los dos están fuera de git.
+
+- **Fondos:** 15 USDC de testnet pasaron de `cyc-freelancer` a `cyc-client` (tx `c869e1f243f31252002c4f03d4d3e4d70c4bff9dbd0db946021c9fea081293d6`).
+- **Tareas:** 10, de 1 USDC y 2 días.
+- **Las que no se usen:** vuelven a `cyc-client` con `timeout_refund` cuando vence el plazo.
