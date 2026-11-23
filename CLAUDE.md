@@ -25,7 +25,7 @@ Nació como MVP para GOYA HACK (septiembre de 2026). Desde noviembre de 2026 sig
 - Estado del backend: `backend/state.json` por defecto, o Postgres con `STATE_BACKEND=postgres` (ver "Estado del backend").
 - Producción: backend en Cloud Run (`cumpleycobra-api`, `us-central1`) con Postgres en Cloud SQL (`cyc-pg`, base `cyc_prod`; staging usa la base `cyc`) desde el 21 de noviembre de 2026, y frontend en Vercel (Hobby). La API se queda en su URL de `run.app`. Railway se dejó el 20 de noviembre de 2026 ([`docs/mejora/puente-cloud-run.md`](docs/mejora/puente-cloud-run.md)).
 - Cada tarea se amarra a un solo programador, invitado por el cliente (ver "Tokens").
-- Verificador por ejecución (fase 3, tag `mejora-3`): detrás de `VERIFIER_ENABLED` (API) y `NEXT_PUBLIC_VERIFIER_ENABLED` (frontend), **apagados en producción**. Encendido solo en staging (`cumpleycobra-api-staging`) con la VM `cyc-verificador`. Ver "Verificador por ejecución".
+- Verificador por ejecución (fase 3, tag `mejora-3`): detrás de `VERIFIER_ENABLED` (API) y `NEXT_PUBLIC_VERIFIER_ENABLED` (frontend). **Encendido en producción desde el 22 de noviembre de 2026** (beta, abierto a todos, a pedido de Rodrigo para la cumbre): API `cumpleycobra-api-00005-rs5` con la VM `cyc-verificador-prod`. Staging usa la VM `cyc-verificador`. Ver "Verificador por ejecución" y [`docs/mejora/verificador-produccion.md`](docs/mejora/verificador-produccion.md).
 
 ## Estructura del repositorio
 
@@ -373,7 +373,7 @@ Detalle, decisiones y evidencia en [`docs/mejora/fase-3.md`](docs/mejora/fase-3.
   - despliegue con `verifier/deploy/deploy.ps1`.
 - **Costo y abuso** (la suite se prepara antes del depósito): cupo de suites activas, ventana por IP y cuotas diarias propias (`demo` y `live` fijan 10, 2 por minuto, 50 suites y 200 verificaciones al día); tope de llamadas simultáneas al modelo (`LLM_MAX_CONCURRENT`).
 - **Pago:** si otro proceso firmó con el árbitro (staging y producción lo comparten), el `release` recibe `txBAD_SEQ` y se arma de nuevo con la secuencia recargada (hasta 3 veces).
-- **Producción** (pendiente, con permiso de Rodrigo): VM propia (`deploy.ps1 -Vm cyc-verificador-prod -SecretoToken …-prod`), nunca la de staging; se puede abrir solo a una lista de cuentas (`VERIFIER_ALLOWED_CLIENTS`). Ver [`docs/mejora/verificador-produccion.md`](docs/mejora/verificador-produccion.md).
+- **Producción** (encendido el 22 de noviembre de 2026): VM propia `cyc-verificador-prod` con su token (`cyc-verifier-queue-token-prod`) y su bucket (`cyc-evidencia-prod-…`), nunca la de staging; se puede cerrar a una lista de cuentas con `VERIFIER_ALLOWED_CLIENTS`. Ver [`docs/mejora/verificador-produccion.md`](docs/mejora/verificador-produccion.md).
 - **Modelo:** Gemini 3.5 Flash en los dos roles (`LLM_SUITE_PROVIDER`, `LLM_JUEZ_PROVIDER`; Muse soportado pero sin medir). Corpus: 213 verificaciones del perfil script y 39 del web, 0 falsas aprobaciones.
 
 ## Motor de análisis (cuatro capas)

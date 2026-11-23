@@ -2,7 +2,7 @@
 
 Rama `mejora/verificador-prod`, sobre `main` (`00dbd3f`, tag `mejora-3`). Empezó el 22 de noviembre de 2026.
 
-**Nada de esto está desplegado.** Producción sigue igual: `VERIFIER_ENABLED` apagado en Cloud Run y `NEXT_PUBLIC_VERIFIER_ENABLED` apagado en Vercel. Todo lo nuevo está detrás de esas variables, o solo actúa con el verificador encendido.
+**Actualización del 22 de noviembre de 2026 (noche):** a pedido de Rodrigo, el verificador quedó **encendido en producción para todos**, como beta, para que el público de la cumbre lo pueda usar. Ver «Encendido en producción» al final. La lista de aceptación de abajo sigue pendiente: es lo que falta para quitarle la etiqueta beta.
 
 Rodrigo decide cuándo llega a producción, con la lista de aceptación de abajo. Antes de cualquier cambio en producción se le pregunta (regla 14 de `CLAUDE.md`).
 
@@ -49,7 +49,7 @@ Ver «Comandos y salida» al final.
 - [ ] El monitor de `/health/verificador` avisa cuando la VM está apagada y hay trabajo.
 - [ ] Rodrigo revisó el código del verificador y está de acuerdo.
 
-## Cómo se enciende en producción (cuando se apruebe; NO aplicado)
+## Cómo se enciende en producción (aplicado el 22 de noviembre, ver al final)
 
 Cada paso es un cambio de producción y necesita el permiso de Rodrigo.
 
@@ -102,3 +102,26 @@ $ ./verifier/deploy/deploy.ps1 -Vm cyc-verificador-prod -SecretoToken cyc-verifi
 ```
 
 No se probó en staging ni en la VM: staging comparte el árbitro con producción y no se usa hasta después de la cumbre. Es el primer punto de la lista de aceptación.
+
+## Encendido en producción (22 de noviembre de 2026, noche)
+
+A pedido de Rodrigo («súbelo a la demo… que si entran ahí lo puedan usar, y quitar el mensaje de que se usa LLM estático»). Orden seguido: primero staging, después producción.
+
+| Paso | Resultado |
+| --- | --- |
+| Imagen | `api:aab6541` (Cloud Build, 1 min 10 s) |
+| Staging | Revisión `cumpleycobra-api-staging-00006-v8q` y código nuevo en la VM `cyc-verificador`. Tarea `Q2BXmA5FD6q03bg6`: suite lista en 68.6 s; caso B rechazado por los tests (bucle infinito); caso A aprobado y pagado en 20.8 s, tx `cd98014f9db95bbc574659ee755a3a61233b789369cf1d9f4ea00b08ef873367`, `Released` |
+| Token de producción | Secreto `cyc-verifier-queue-token-prod`, generado sin imprimirse; `secretAccessor` para `cyc-api` |
+| Evidencia | Bucket `cyc-evidencia-prod-1017372721585`: privado (acceso uniforme y `public_access_prevention`), borrado a los 90 días, `objectCreator` y `objectViewer` para `cyc-api` |
+| VM | `cyc-verificador-prod` (e2-standard-2 Spot, sin cuenta de servicio), creada con `deploy.ps1`; reutilizó las reglas de firewall y el rol. gVisor `release-20261116.0`, imágenes del runner, del web runner y del proxy construidas. El rol de encendido se otorgó solo sobre esta VM. Metadato `verifier-idle-secs=3600` (rige desde el siguiente arranque) |
+| API de producción | Revisión `cumpleycobra-api-00005-rs5`, imagen `api:aab6541`, con `VERIFIER_ENABLED=true`, `VERIFIER_QUEUE_TOKEN` (secreto `-prod`), `VERIFIER_VM_*` y `EVIDENCE_BUCKET`. Sin `VERIFIER_ALLOWED_CLIENTS`: abierto a todos. Límites del modo `demo`: 10 suites activas, 2 por minuto por IP, 50 suites y 200 verificaciones al día. Sigue con 1 instancia mínima. Lo anterior responde igual (`/demo`, `/fx/usd-mxn`, la tarea de ensayo `7IU46sQJ469img4l` en `Released`) |
+| Recorrido real en producción | Tarea `LmCJh9GYgKmxf3fI`: suite lista en 62.7 s; caso A aprobado y pagado en 20.9 s, tx `06d01104c02c1faeb545637d49044b753ab77beeb280e201b380bf1d442802bf`, `Released` |
+| Frontend | `NEXT_PUBLIC_VERIFIER_ENABLED=true` en Vercel (producción) y `main` (`6fce55d`) desplegado. En el sitio publicado, `VERIFIER_ENABLED` compila a `true`; la portada dice «Nuevo · beta» y el pie «Verificación por ejecución en un contenedor aislado» |
+
+Cómo volver atrás:
+- API: `gcloud run services update-traffic cumpleycobra-api --region=us-central1 --to-revisions=cumpleycobra-api-00004-nhk=100` (la revisión anterior, sin verificador).
+- Frontend: `vercel promote https://cumpleycobra-g7z213a7d-rodyx-dev.vercel.app` (el despliegue anterior), o quitar `NEXT_PUBLIC_VERIFIER_ENABLED` y redesplegar.
+- VM: `gcloud compute instances stop cyc-verificador-prod --zone=us-central1-a`.
+- Para cerrarlo sin apagarlo: `VERIFIER_ALLOWED_CLIENTS` con las cuentas de prueba.
+
+Pendiente: la lista de aceptación (pruebas con personas externas, sandbox de Chromium, árbitro propio de staging y tu revisión del código), el monitor sobre `/health/verificador` y el texto de la portada cuando deje de ser beta. Después de la cumbre: devolver el mínimo de instancias a 0.
