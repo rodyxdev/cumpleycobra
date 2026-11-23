@@ -166,3 +166,18 @@ gcloud run services update cumpleycobra-api --region=us-central1 --update-env-va
 - **Fondos:** 15 USDC de testnet pasaron de `cyc-freelancer` a `cyc-client` (tx `c869e1f243f31252002c4f03d4d3e4d70c4bff9dbd0db946021c9fea081293d6`).
 - **Tareas:** 10, de 1 USDC y 2 días.
 - **Las que no se usen:** vuelven a `cyc-client` con `timeout_refund` cuando vence el plazo.
+
+### Botón «Pruébalo» (22 de noviembre, noche)
+
+La presentación ya estaba entregada y no lleva los enlaces de invitación. Por eso el sitio reparte las tareas solo.
+
+- **Portada:** el botón principal ahora es «Pruébalo en 3 minutos» y lleva a `/probar`. El menú tiene «Pruébalo» y «Crear una tarea» va como segundo botón.
+- **`/probar`:** explica los 4 pasos, pide entrar con Pollar y activar USDC, y el botón «Darme una tarea de prueba» llama a `GET /probar?address=…`, que devuelve la invitación de una tarea libre.
+- **`GET /probar`:**
+  - a la wallet que ya aceptó una tarea de prueba le devuelve esa misma;
+  - si no, una libre al azar, `Funded` y con al menos 15 min de plazo;
+  - cuenta en la ventana de escrituras (30 por minuto por IP).
+- **Despliegue:** API `cumpleycobra-api-00007-m6m` (imagen `api:c61d08f`) con `DEMO_TRIAL_TASKS` = las 10 tareas de `docs/probar-cumbre.md`.
+- **Comprobado en el sitio** a 375 px: la portada lleva a `/probar` y el botón lleva a una tarea `Depositada` con «Acepto los criterios». No se aceptó, para no gastarla.
+- **Código QR:** `docs/qr-probar.png` apunta a `https://cumpleycobra.vercel.app/probar`.
+- **Para agregar tareas:** `scripts/tareas_jueces.py --ejecucion` y agregar sus `task_id` a `DEMO_TRIAL_TASKS` (`gcloud run services update … --update-env-vars="^@^DEMO_TRIAL_TASKS=…"`).

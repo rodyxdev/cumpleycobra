@@ -269,6 +269,7 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | `GET /demo` | — | Plantilla fija y casos A–D (fuente única: `backend/plantilla.py` y `backend/casos/`) |
 | `GET /fx/usd-mxn` | — | `rate`, `as_of`, `source`, `fallback`: tipo de cambio de referencia de Frankfurter; si falla, valor fijo de respaldo con `fallback: true` |
 | `GET /health` | — | `{"ok": true}` |
+| `GET /probar?address=G…` | — | Reparte una tarea de prueba ya depositada (lista en `DEMO_TRIAL_TASKS`): la que esa wallet ya aceptó o una libre al azar, `Funded` y con al menos 15 min de plazo. `{task_id, invite_path, available, yours}`; `404 NO_TRIAL_TASKS` si no queda ninguna. Lo usa la página `/probar` |
 
 Rutas aditivas de identidad (SEP-10), reputación y propuestas. El flujo del dinero no las exige; «sesión» es el header `Authorization: Bearer <token>` que devuelve `/auth/token`:
 
