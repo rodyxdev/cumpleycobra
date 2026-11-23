@@ -76,3 +76,29 @@ Cada paso es un cambio de producción y necesita el permiso de Rodrigo.
 **Cómo volver atrás:** `VERIFIER_ENABLED` vacío en una revisión nueva de Cloud Run y `NEXT_PUBLIC_VERIFIER_ENABLED` vacío en Vercel. Las tareas por ejecución ya creadas conservan su depósito on-chain: el cliente puede usar `client_release` o, al vencer el plazo, `timeout_refund`.
 
 ## Comandos y salida
+
+22 de noviembre de 2026, en la rama `mejora/verificador-prod`, con Docker Desktop 29.7.2 (sin gVisor: `runsc` solo existe en la VM).
+
+```
+$ python -m pytest -q backend/tests verifier/tests
+486 passed, 10 skipped, 2 warnings in 317.69s (0:05:17)
+```
+
+Los 10 saltados son los de Postgres (sin `CYC_TEST_DATABASE_URL`), los mismos que al cerrar la fase 3. Las pruebas nuevas son:
+- `backend/tests/test_verificador_prod.py` (19): costo de la suite, suites trabadas, reintento, salud, lista de clientes y tope de llamadas al modelo;
+- `backend/tests/test_stellar_release.py` (4): reintento ante `txBAD_SEQ`;
+- 2 en `backend/tests/test_drafting.py`: borrador y revisión web.
+
+```
+$ cd frontend && npx tsc --noEmit && npm run lint && npm test
+(sin errores de tipos ni de lint)
+ℹ pass 27
+ℹ fail 0
+```
+
+```
+$ ./verifier/deploy/deploy.ps1 -Vm cyc-verificador-prod -SecretoToken cyc-verifier-queue-token-prod -ApiUrl https://ejemplo.run.app
+(solo imprime los comandos: firewall, VM Spot sin cuenta de servicio y copia del código; «No se aplicó nada»)
+```
+
+No se probó en staging ni en la VM: staging comparte el árbitro con producción y no se usa hasta después de la cumbre. Es el primer punto de la lista de aceptación.
