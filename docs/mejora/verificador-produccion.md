@@ -181,3 +181,11 @@ La presentación ya estaba entregada y no lleva los enlaces de invitación. Por 
 - **Comprobado en el sitio** a 375 px: la portada lleva a `/probar` y el botón lleva a una tarea `Depositada` con «Acepto los criterios». No se aceptó, para no gastarla.
 - **Código QR:** `docs/qr-probar.png` apunta a `https://cumpleycobra.vercel.app/probar`.
 - **Para agregar tareas:** `scripts/tareas_jueces.py --ejecucion` y agregar sus `task_id` a `DEMO_TRIAL_TASKS` (`gcloud run services update … --update-env-vars="^@^DEMO_TRIAL_TASKS=…"`).
+
+**Diez tareas más (22 de noviembre, noche):**
+
+- **Fondos:** 5 USDC de testnet pasaron de `cyc-freelancer` a `cyc-client` (tx `6229db5f32c13feb465df94f183b782550e71ebf30b87194522ce769d11ecd56`).
+- **Tareas:** se crearon 10 más con `tareas_jueces.py --ejecucion`. Vencen el 25 de noviembre hacia las 05:51 UTC.
+- **API:** `DEMO_TRIAL_TASKS` tiene las 20 tareas (revisión `cumpleycobra-api-00008-dbv`) y `GET /probar` reporta 20 disponibles.
+- **Archivos:** `docs/probar-cumbre.md` y `scripts/.logs/tareas-cumbre.json` juntan las dos tandas.
+- **Saldo:** a `cyc-client` le quedan 3 USDC.
