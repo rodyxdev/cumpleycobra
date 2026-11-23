@@ -58,6 +58,17 @@ class Queue(Protocol):
     def for_task(self, task_id: str) -> list[dict]: ...
     def put_source(self, task_id: str, data: bytes) -> str: ...
     def get_source(self, source_id: str) -> bytes | None: ...
+    def stats(self) -> dict: ...
+
+
+def _stats(rows) -> dict:
+    """Trabajos activos por estado y tipo, y el más viejo en cola (para límites y monitoreo)."""
+    out = {"queued": {"suite": 0, "verify": 0}, "running": {"suite": 0, "verify": 0}, "oldest_queued_at": None}
+    for kind, status, created_at in rows:
+        out[status][kind] = out[status].get(kind, 0) + 1
+        if status == "queued" and (out["oldest_queued_at"] is None or created_at < out["oldest_queued_at"]):
+            out["oldest_queued_at"] = created_at
+    return out
 
 
 class MemoryQueue:
@@ -120,6 +131,7 @@ class MemoryQueue:
 
     def for_task(self, task_id):
         with self._lock:
+            self._expire(time.time())  # un plazo vencido no debe parecer trabajo activo
             jobs = sorted((j for j in self.jobs.values() if j["task_id"] == task_id), key=lambda j: j["created_at"])
             return copy.deepcopy(jobs)
 
@@ -132,6 +144,12 @@ class MemoryQueue:
     def get_source(self, source_id):
         with self._lock:
             return self.sources.get(source_id)
+
+    def stats(self):
+        with self._lock:
+            self._expire(time.time())
+            return _stats([(j["kind"], j["status"], j["created_at"]) for j in self.jobs.values()
+                           if j["status"] in ("queued", "running")])
 
 
 _KEYS = ("id", "kind", "task_id", "status", "payload", "progress", "result", "attempts",
@@ -217,7 +235,8 @@ class PgQueue:
                 (status, _dumps(result), time.time(), job_id)).fetchone())
 
     def for_task(self, task_id):
-        with self.pool.connection() as conn:
+        with self.pool.connection() as conn, conn.transaction():
+            self._expire(conn, time.time())  # un plazo vencido no debe parecer trabajo activo
             rows = conn.execute(f"SELECT {_COLUMNS} FROM verifier_jobs WHERE task_id = %s ORDER BY created_at",
                                 (task_id,)).fetchall()
         return [_row(r) for r in rows]
@@ -233,6 +252,13 @@ class PgQueue:
         with self.pool.connection() as conn:
             row = conn.execute("SELECT data FROM verifier_sources WHERE id = %s", (source_id,)).fetchone()
         return bytes(row[0]) if row else None
+
+    def stats(self):
+        with self.pool.connection() as conn, conn.transaction():
+            self._expire(conn, time.time())
+            rows = conn.execute("SELECT kind, status, created_at FROM verifier_jobs "
+                                "WHERE status IN ('queued', 'running')").fetchall()
+        return _stats(rows)
 
 
 def make_queue(store) -> Queue:

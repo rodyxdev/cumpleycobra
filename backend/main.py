@@ -29,7 +29,6 @@ from .ejecucion import suite as exec_suite
 from .ejecucion import arranque as exec_arranque
 from .ejecucion import evidencia as exec_evidencia
 from .ejecucion import web as exec_web
-from .ejecucion.perfil import execution_spec as exec_spec_for
 from .ejecucion.perfil import public_plan as exec_public_plan
 from .ejecucion.cola import make_queue
 from verifier.contract import Interface, WebSpec
@@ -46,7 +45,7 @@ from .config import (
 from .deterministic import analyze
 from .hashing import code_hash, rules_hash, verdict_hash
 from .fx import FxReference
-from .limites import RateLimited, RateLimitMiddleware, limited_response, rate_limiter
+from .limites import RateLimited, RateLimitMiddleware, client_ip, limited_response, rate_limiter
 from .video import normalize_video
 from .plantilla import DEMO_RAW_REQUEST, DEMO_SPEC
 from . import stellar_client
@@ -271,7 +270,7 @@ async def fx_usd_mxn():
 
 
 @app.post("/tasks")
-async def create_task(body: CreateTaskIn):
+async def create_task(body: CreateTaskIn, request: Request):
     check_address(body.client_address, "client_address")
     web_task = body.web is not None
     if web_task and body.language != "web":
@@ -308,6 +307,9 @@ async def create_task(body: CreateTaskIn):
             spec["interface"] = body.interface.model_dump(mode="json")
     elif body.interface is not None or web_task:
         raise err(400, "INVALID_REQUEST", "'interface' y 'web' solo aplican con verification: 'execution'")
+    if execution:
+        # La suite cuesta modelo y VM antes del depósito: límites propios (VERIFIER_BUSY o 429).
+        exec_rutas.admit_suite(client_ip(request))
     task_id = secrets.token_urlsafe(12)
     task = {
         "task_id": task_id,
@@ -334,8 +336,7 @@ async def create_task(body: CreateTaskIn):
     store().tasks[task_id] = task
     store().save()
     if execution:
-        job = app.state.queue.enqueue("suite", task_id, {"spec": exec_spec_for(spec)})
-        task["suite_job"] = job["id"]
+        exec_rutas.start_suite(task)
         store().save()
         exec_arranque.wake(app)
     out = {
@@ -375,6 +376,8 @@ async def get_task(task_id: str):
             left = onchain["deadline"] - now
     except ApiError as exc:
         chain_error = exc.message
+    if exec_arranque.suite_waiting(task.get("suite")) and ejecucion.enabled():
+        await exec_rutas.reconcile_suite(task)  # suite sin trabajo activo: reencolar o rechazar
     if exec_arranque.suite_waiting(task.get("suite")):
         exec_arranque.wake(app)  # la suite espera al verificador: que la VM esté encendida
     return {
@@ -1138,5 +1141,6 @@ async def reject_proposal(proposal_id: str, authorization: str | None = Header(d
 # Detrás de VERIFIER_ENABLED; sin la variable responden 404.
 # ---------------------------------------------------------------------------
 from .ejecucion.rutas import router as verifier_router  # noqa: E402
+from .ejecucion import rutas as exec_rutas  # noqa: E402
 
 app.include_router(verifier_router)

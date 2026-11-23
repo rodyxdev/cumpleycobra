@@ -23,6 +23,7 @@ import binascii
 import hashlib
 import hmac
 import logging
+import os
 import re
 import time
 from typing import Annotated, Literal, Union
@@ -42,6 +43,7 @@ from .regla import decide, decide_web
 from .seguridad import security_scan
 from .senales import collect_signals, load_sources, output_signals
 from ..hashing import verdict_hash_v2
+from ..limites import client_ip, rate_limiter
 from ..llm import LLMError, Usage
 
 router = APIRouter()
@@ -131,6 +133,85 @@ def leased(job_id: str, lease_id: str) -> dict:
 
 def execution_spec(spec: dict) -> dict:
     return perfil.execution_spec(spec)
+
+
+# --- ciclo de la suite: límites, arranque, recuperación y reintento ----------------------
+
+MAX_SUITE_RETRIES = 2        # reintentos que puede pedir el cliente tras una suite rechazada
+SUITE_GRACE_SECS = 30        # tras encolar, no se "recupera" una suite que apenas empezó
+
+
+def _limit(name: str) -> int:
+    try:
+        return max(0, int((os.environ.get(name) or "0").strip()))
+    except ValueError:
+        return 0
+
+
+def admit_suite(ip: str) -> None:
+    """Antes de preparar una suite (hasta 8 llamadas al modelo y tiempo de la VM, antes del depósito).
+
+    1. Si ya hay `MAX_PENDING_SUITES` suites en cola o corriendo: 503 VERIFIER_BUSY.
+    2. Ventana por IP (`RATE_LIMIT_SUITES_PER_MINUTE`).
+    3. Cuota diaria global `RATE_LIMIT_DAILY_SUITE` (se consume al final: un rechazo no gasta cuota).
+    Sin variables no hay límite (modo local); `demo` y `live` fijan valores por defecto.
+    """
+    cap = _limit("MAX_PENDING_SUITES")
+    if cap:
+        stats = queue().stats()
+        if stats["queued"].get("suite", 0) + stats["running"].get("suite", 0) >= cap:
+            raise api().err(503, "VERIFIER_BUSY",
+                            "El verificador está preparando muchas tareas a la vez. Inténtalo en unos minutos.")
+    refused = rate_limiter.check_ip(ip, _limit("RATE_LIMIT_SUITES_PER_MINUTE"), "suite")
+    if refused:
+        raise refused
+    rate_limiter.consume_daily("suite")
+
+
+def start_suite(task: dict) -> None:
+    """Suite nueva (o reiniciada) y su trabajo en la cola. Quien llama guarda el estado."""
+    spec = task["spec"]
+    task["suite"] = web_mod.new_suite_state(spec) if spec.get("web") else suite_mod.new_suite_state(spec)
+    task["suite"]["started_at"] = time.time()
+    task["suite_job"] = queue().enqueue("suite", task["task_id"], {"spec": execution_spec(spec)})["id"]
+
+
+def _suite_jobs(task: dict) -> list[dict]:
+    """Trabajos de la suite vigente (los de antes de un reintento del cliente no cuentan)."""
+    since = task["suite"].get("started_at", 0)
+    return [j for j in queue().for_task(task["task_id"]) if j["kind"] == "suite" and j["created_at"] >= since - 1]
+
+
+def _suite_gave_up(suite: dict, detail: str) -> None:
+    suite["status"] = "rechazada"
+    suite["error"] = detail[:300]
+    suite["error_public"] = "El verificador no estuvo disponible; no es un problema de tu acuerdo. Puedes pedir otro intento"
+
+
+async def reconcile_suite(task: dict) -> None:
+    """Recupera una suite sin trabajo activo (p. ej. la VM Spot se detuvo tres veces y el plazo del
+    trabajo venció sin pasar por /fail): la reencola o, agotados los intentos, la marca rechazada
+    para que el cliente pueda pedir otro intento. Sin esto la tarea se queda «preparando» para siempre."""
+    suite = task.get("suite")
+    if not arranque.suite_waiting(suite) or time.time() - suite.get("started_at", 0) < SUITE_GRACE_SECS:
+        return
+    if any(j["status"] in ("queued", "running") for j in _suite_jobs(task)):
+        return
+    m = api()
+    async with m.store().lock(task["task_id"]):
+        if not arranque.suite_waiting(task["suite"]):
+            return
+        jobs = _suite_jobs(task)
+        if any(j["status"] in ("queued", "running") for j in jobs):
+            return
+        if len(jobs) < SUITE_JOB_ATTEMPTS:
+            task["suite_job"] = queue().enqueue("suite", task["task_id"], {"spec": execution_spec(task["spec"])})["id"]
+            log.warning("suite de %s sin trabajo activo: se reencola (%d de %d)", task["task_id"], len(jobs) + 1,
+                        SUITE_JOB_ATTEMPTS)
+        else:
+            _suite_gave_up(task["suite"], "el trabajo de la suite venció sin respuesta del verificador")
+            log.warning("suite de %s sin trabajo activo y sin intentos: rechazada", task["task_id"])
+        m.store().save()
 
 
 # --- trabajador ------------------------------------------------------------------------
@@ -268,13 +349,13 @@ async def fail(job_id: str, body: FailIn, authorization: str | None = Header(def
         m = api()
         task = m.get_task_or_404(job["task_id"])
         async with m.store().lock(task["task_id"]):
-            tries = sum(1 for j in queue().for_task(task["task_id"]) if j["kind"] == "suite")
+            if job["id"] != task.get("suite_job") or not arranque.suite_waiting(task["suite"]):
+                return {"ok": True}  # trabajo de una suite anterior (el cliente pidió otro intento)
+            tries = len(_suite_jobs(task))
             if tries < SUITE_JOB_ATTEMPTS:
                 task["suite_job"] = queue().enqueue("suite", task["task_id"], job["payload"])["id"]
             else:
-                task["suite"]["status"] = "rechazada"
-                task["suite"]["error"] = f"el verificador no pudo ejecutar la suite: {body.message[:200]}"
-                task["suite"]["error_public"] = "El verificador no estuvo disponible; no es un problema de tu acuerdo"
+                _suite_gave_up(task["suite"], f"el verificador no pudo ejecutar la suite: {body.message[:200]}")
             m.store().save()
     return {"ok": True}
 
@@ -522,9 +603,42 @@ async def task_suite(task_id: str):
     task = api().get_task_or_404(task_id)
     if task.get("verification") != "execution":
         raise api().err(404, "NOT_FOUND", "Esta tarea no usa verificación por ejecución")
+    await reconcile_suite(task)
     if arranque.suite_waiting(task["suite"]):
         arranque.wake(api().app)
-    return {"task_id": task_id, **perfil.public_plan(task["suite"])}
+    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": _retries_left(task)}
+
+
+def _retries_left(task: dict) -> int:
+    return max(0, MAX_SUITE_RETRIES - task.get("suite_retries", 0))
+
+
+@router.post("/tasks/{task_id}/suite/reintentar", status_code=202)
+async def retry_suite(task_id: str, request: Request, x_client_token: str | None = Header(default=None)):
+    """El cliente pide preparar otra vez una suite rechazada, sin crear otra tarea.
+
+    El `rules_hash` no depende de la suite, así que sirve también si ya depositó. Solo con la suite
+    rechazada y como máximo `MAX_SUITE_RETRIES` veces; usa la misma cuota que crear una tarea.
+    """
+    guard_enabled()
+    m = api()
+    task = m.get_task_or_404(task_id)
+    if task.get("verification") != "execution":
+        raise m.err(404, "NOT_FOUND", "Esta tarea no usa verificación por ejecución")
+    if not m.token_ok(task["client_token"], x_client_token):
+        raise m.err(403, "INVALID_TOKEN", "Token de cliente inválido para esta tarea")
+    async with m.store().lock(task_id):
+        if task["suite"]["status"] != "rechazada":
+            raise m.err(409, "SUITE_NOT_REJECTED", "Solo se puede pedir otro intento de una suite rechazada")
+        if _retries_left(task) <= 0:
+            raise m.err(429, "TOO_MANY_SUITE_RETRIES",
+                        f"Ya se usaron los {MAX_SUITE_RETRIES} intentos extra; crea otra tarea con los criterios ajustados")
+        admit_suite(client_ip(request))
+        start_suite(task)
+        task["suite_retries"] = task.get("suite_retries", 0) + 1
+        m.store().save()
+    arranque.wake(m.app)
+    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": _retries_left(task)}
 
 
 class CodeSource(Strict):
@@ -592,6 +706,7 @@ async def enqueue_verification(task_id: str, body: VerifyIn, x_freelancer_token:
         src = body.source
         if isinstance(src, CodeSource) and task["suite"].get("profile") == "web":
             raise m.err(400, "INVALID_REQUEST", "Un sitio web se entrega como ZIP o como repositorio público")
+        zip_data = None
         if isinstance(src, CodeSource):
             if len(src.code.encode("utf-8")) > MAX_PASTE_BYTES:
                 raise m.err(400, "INVALID_REQUEST", f"El código pegado supera {MAX_PASTE_BYTES} bytes; usa un ZIP o un repositorio")
@@ -608,8 +723,12 @@ async def enqueue_verification(task_id: str, body: VerifyIn, x_freelancer_token:
                 raise m.err(400, "INVALID_REQUEST", "zip_b64 no es base64 válido") from None
             if len(data) > MAX_ZIP_BYTES:
                 raise m.err(400, "INVALID_REQUEST", f"El ZIP supera {MAX_ZIP_BYTES} bytes")
-            source = {"kind": "zip", "source_id": queue().put_source(task_id, data)}
+            zip_data = data
 
+        # Al final de las validaciones y antes de guardar el ZIP: un rechazo anterior no gasta cuota.
+        rate_limiter.consume_daily("verificacion")
+        if zip_data is not None:
+            source = {"kind": "zip", "source_id": queue().put_source(task_id, zip_data)}
         job = queue().enqueue("verify", task_id, {"spec": execution_spec(task["spec"]), "source": source,
                                                   "video_url": video_url})
         task.setdefault("verifications", []).append({"job_id": job["id"], "at": int(time.time())})
