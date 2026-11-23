@@ -123,12 +123,75 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
     }
   }
 
+  const taskCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle>Tarea {taskId}</CardTitle>
+        <CardDescription>
+          <Money units={ct.amount} inline /> acordados · plazo de {ct.deadline_minutes} minutos a partir del depósito
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <CopyField label="Enlace de invitación para tu programador" value={invite} secret />
+        {!task?.onchain && (
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">Depósito</div>
+            {usdc.units < ct.amount && (
+              <div className="space-y-2 text-sm text-[var(--alert-foreground)]" data-testid="saldo-insuficiente">
+                <p>Tu saldo ({formatUsdc(usdc.units)}) no alcanza para el depósito de {formatUsdc(ct.amount)}.</p>
+                {SHOW_DEV_HINTS ? (
+                  <p>
+                    Para la demo:{" "}
+                    <code className="break-all font-mono text-sm">bash scripts/fondear.sh {wallet.address} {formatUsdc(ct.amount - usdc.units).replace(" USDC", "")}</code>
+                  </p>
+                ) : (
+                  <p>
+                    Pide USDC de prueba en el{" "}
+                    <a href={USDC_FAUCET_URL} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-4">faucet de Circle</a>{" "}
+                    (red Stellar) con tu dirección; el saldo se actualiza solo en unos segundos.
+                  </p>
+                )}
+                {!SHOW_DEV_HINTS && wallet.address && <CopyField label="Tu dirección" value={wallet.address} />}
+              </div>
+            )}
+            <Button
+              data-testid="depositar"
+              disabled={!sameWallet || deposit.phase === "signing" || usdc.units < ct.amount}
+              onClick={() =>
+                run(setDeposit, () =>
+                  buildDeposit({
+                    client: ct.client_address,
+                    taskId,
+                    amount: ct.amount,
+                    deadlineSecs: ct.deadline_minutes * 60,
+                    rulesHash: ct.rules_hash,
+                  }),
+                )
+              }
+            >
+              {deposit.phase === "signing" ? "Firmando y enviando…" : `Depositar ${formatUsdc(ct.amount)} con ${walletLabel}`}
+            </Button>
+          </div>
+        )}
+        <TxResult state={deposit} label="Depósito" />
+        {SHOW_DEV_HINTS && <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">Respaldo si la wallet no firma el depósito</summary>
+          <p className="mt-2">
+            Un depósito desde la terminal lo firma otra cuenta, y el motor exige que el cliente en el contrato sea
+            quien creó la tarea. Crea una tarea nueva desde la terminal con{" "}
+            <code className="font-mono">backend/.venv/Scripts/python scripts/tarea_respaldo.py</code> y comparte el
+            enlace que imprime.
+          </p>
+        </details>}
+        <div className="text-xs text-muted-foreground">
+          rules_hash <span className="break-all font-mono">{ct.rules_hash}</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
   return (
     <div className="space-y-6">
-      {task?.verification === "execution" && task.suite && (
-        <SuitePlanCard suite={task.suite} criteria={task.criteria}
-          onRetry={async () => { await api.retrySuite(taskId, ct.client_token); refresh(); }} />
-      )}
       {task ? <StatusCard task={task} secondsLeft={secondsLeft} /> : error ? (
         <p className="text-sm text-[var(--alert-foreground)]" role="alert">
           {loadProblem(error.code, error.status, error.message).text}
@@ -138,6 +201,12 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
         <p className="rounded-md border border-[var(--alert)] bg-[var(--alert-background)] p-3 text-sm text-[var(--alert-foreground)]">
           Esta tarea se creó con la wallet {shortHash(ct.client_address, 6)}; conecta esa wallet para depositar o aprobar.
         </p>
+      )}
+      {/* Antes del depósito, la invitación y el botón van arriba: el plan de la suite es largo. */}
+      {!task?.onchain ? taskCard : null}
+      {task?.verification === "execution" && task.suite && (
+        <SuitePlanCard suite={task.suite} criteria={task.criteria}
+          onRetry={async () => { await api.retrySuite(taskId, ct.client_token); refresh(); }} />
       )}
 
       <section className="space-y-5" aria-label="Veredictos del motor">
@@ -165,70 +234,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
       <ClientProposals taskId={taskId} clientToken={ct.client_token} clientAddress={ct.client_address}
         freelancerAddress={task?.freelancer_address ?? null} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Tarea {taskId}</CardTitle>
-          <CardDescription>
-            <Money units={ct.amount} inline /> acordados · plazo de {ct.deadline_minutes} minutos a partir del depósito
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <CopyField label="Enlace de invitación para tu programador" value={invite} secret />
-          {!task?.onchain && (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground">Depósito</div>
-              {usdc.units < ct.amount && (
-                <div className="space-y-2 text-sm text-[var(--alert-foreground)]" data-testid="saldo-insuficiente">
-                  <p>Tu saldo ({formatUsdc(usdc.units)}) no alcanza para el depósito de {formatUsdc(ct.amount)}.</p>
-                  {SHOW_DEV_HINTS ? (
-                    <p>
-                      Para la demo:{" "}
-                      <code className="break-all font-mono text-sm">bash scripts/fondear.sh {wallet.address} {formatUsdc(ct.amount - usdc.units).replace(" USDC", "")}</code>
-                    </p>
-                  ) : (
-                    <p>
-                      Pide USDC de prueba en el{" "}
-                      <a href={USDC_FAUCET_URL} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-4">faucet de Circle</a>{" "}
-                      (red Stellar) con tu dirección; el saldo se actualiza solo en unos segundos.
-                    </p>
-                  )}
-                  {!SHOW_DEV_HINTS && wallet.address && <CopyField label="Tu dirección" value={wallet.address} />}
-                </div>
-              )}
-              <Button
-                data-testid="depositar"
-                disabled={!sameWallet || deposit.phase === "signing" || usdc.units < ct.amount}
-                onClick={() =>
-                  run(setDeposit, () =>
-                    buildDeposit({
-                      client: ct.client_address,
-                      taskId,
-                      amount: ct.amount,
-                      deadlineSecs: ct.deadline_minutes * 60,
-                      rulesHash: ct.rules_hash,
-                    }),
-                  )
-                }
-              >
-                {deposit.phase === "signing" ? "Firmando y enviando…" : `Depositar ${formatUsdc(ct.amount)} con ${walletLabel}`}
-              </Button>
-            </div>
-          )}
-          <TxResult state={deposit} label="Depósito" />
-          {SHOW_DEV_HINTS && <details className="text-xs text-muted-foreground">
-            <summary className="cursor-pointer">Respaldo si la wallet no firma el depósito</summary>
-            <p className="mt-2">
-              Un depósito desde la terminal lo firma otra cuenta, y el motor exige que el cliente en el contrato sea
-              quien creó la tarea. Crea una tarea nueva desde la terminal con{" "}
-              <code className="font-mono">backend/.venv/Scripts/python scripts/tarea_respaldo.py</code> y comparte el
-              enlace que imprime.
-            </p>
-          </details>}
-          <div className="text-xs text-muted-foreground">
-            rules_hash <span className="break-all font-mono">{ct.rules_hash}</span>
-          </div>
-        </CardContent>
-      </Card>
+      {task?.onchain ? taskCard : null}
 
 
       {(canApprove || manual.phase !== "idle") && (

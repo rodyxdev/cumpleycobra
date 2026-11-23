@@ -1,7 +1,10 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { Spec } from "@/lib/api";
+import type { Interface, Spec } from "@/lib/api";
 
-export function CriteriaCard({ spec, title = "Criterios acordados" }: { spec: Spec; title?: string }) {
+/** `interface` (verificación por ejecución) es parte del acuerdo: el programador la ve ANTES de aceptar. */
+export function CriteriaCard({ spec, title = "Criterios acordados" }: { spec: Spec & { interface?: Interface | null }; title?: string }) {
+  const symbols = spec.interface?.symbols ?? [];
+  const pages = spec.web?.pages ?? [];
   return (
     <Card>
       <CardHeader>
@@ -29,6 +32,24 @@ export function CriteriaCard({ spec, title = "Criterios acordados" }: { spec: Sp
                 </div>
               ))}
             </div>
+          </div>
+        )}
+        {symbols.length > 0 && (
+          <div className="space-y-1.5" data-testid="interfaz-acordada">
+            <div className="text-sm font-medium text-muted-foreground">Lo que tu entrega debe exponer</div>
+            <div className="space-y-2 rounded-md border bg-muted/40 p-4 text-sm">
+              {symbols.map((sym) => (
+                <div key={`${sym.module}.${sym.name}`} className="space-y-0.5">
+                  <div className="text-muted-foreground">En el archivo <span className="font-mono text-foreground">{sym.module.replaceAll(".", "/")}.py</span>:</div>
+                  <div className="break-all font-mono">{sym.signature}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {pages.length > 0 && (
+          <div className="text-sm text-muted-foreground">
+            Páginas que se revisan en el navegador: <span className="font-mono text-foreground">{pages.join(", ")}</span>
           </div>
         )}
         <div className="text-sm text-muted-foreground">

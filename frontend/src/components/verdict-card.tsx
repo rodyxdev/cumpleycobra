@@ -22,6 +22,7 @@ export function VerdictCard({ approved, reason, comparison, securityFlags = [], 
   const Icon = approved ? Check : X;
   const met = comparison.filter((line) => line.trimStart().startsWith("✓")).length;
   const status = paid ? "Aprobado y pagado" : approved ? "Aprobado · sin pago" : "Rechazado";
+  const blockedBySecurity = !approved && securityFlags.length > 0;
   return (
     <section className="surface overflow-hidden" aria-label="Veredicto">
       <div className={`h-1.5 ${approved ? "bg-success" : "bg-danger"}`} aria-hidden="true" />
@@ -35,10 +36,15 @@ export function VerdictCard({ approved, reason, comparison, securityFlags = [], 
           <div className="min-w-0 flex-1 basis-72 space-y-3.5">
             {/* Sin text-transform: los ensayos leen innerText y buscan «Rechazado» tal cual. */}
             <p className={`text-base font-bold ${approved ? "text-success-strong" : "text-danger"}`}>{status}</p>
-            <h2 className="brand-heading text-3xl leading-tight sm:text-[2.25rem]">{approved ? "Cumple lo acordado" : "No cumple lo acordado"}</h2>
+            {/* Un aviso de seguridad impide aprobar aunque todos los criterios se cumplan: se dice así. */}
+            <h2 className="brand-heading text-3xl leading-tight sm:text-[2.25rem]">
+              {approved ? "Cumple lo acordado" : blockedBySecurity ? "Rechazado por un aviso de seguridad" : "No cumple lo acordado"}
+            </h2>
             <p className="max-w-3xl text-base leading-relaxed text-[#2E3A4D] sm:text-lg">{reason}</p>
             {comparison.length > 0 && (
-              <p className="inline-flex rounded-full bg-muted px-3 py-1.5 text-sm text-[#2E3A4D]">{met} de {comparison.length} criterios</p>
+              <p className="inline-flex rounded-full bg-muted px-3 py-1.5 text-sm text-[#2E3A4D]">
+                {met} de {comparison.length} criterios{blockedBySecurity && met === comparison.length ? ", pero hay un aviso de seguridad" : ""}
+              </p>
             )}
           </div>
         </div>
