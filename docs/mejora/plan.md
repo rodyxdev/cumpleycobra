@@ -177,6 +177,42 @@ Lo medido en ambos proyectos (tokens reales). Los precios vienen de agregadores,
 
 Si se acaban los créditos, lo primero que se cambia es la base de datos: Neon gratis en lugar de Cloud SQL. Son unos $12 menos y basta con cambiar la URL.
 
+### Validado el 22 de noviembre de 2026 (medido y con la configuración real)
+
+Las estimaciones de arriba se revisaron contra los tokens medidos en la fase 3 (`docs/mejora/fase-3.md`) y contra la configuración leída con `gcloud`. Tipo de cambio de referencia: 19.03 MXN por USD.
+
+**Modelo (Gemini 3.5 Flash por Vertex, $1.50 / $9.00 por M; precio de agregadores, no de la página oficial de Google).** Los $0.038 y $0.014 de la tabla de modelos son de Muse Spark en v2, no del modelo que usa v1.
+
+| Concepto | Tokens medidos | USD | MXN |
+| --- | --- | --- | --- |
+| Verificación de script (juez) | ≈6.3k / 0.8k por entrega (corpus: 380k / 49k en 60 entregas) | ≈0.017–0.02 | ≈0.35 |
+| Verificación web (juez con capturas) | ≈6.6k / 0.4k | ≈0.014 | ≈0.26 |
+| Suite de script, por acuerdo | ≈13k / 3.5–4.6k (hasta 8 llamadas) | ≈0.05–0.06 | ≈1.05 |
+| Suite web, por acuerdo | ≈7.4k / 2.2k | ≈0.03 | ≈0.60 |
+| Envío al motor estático de producción | ≈500 de salida (`docs/fases/fase-2.md`) | ≈0.007 (estimado) | ≈0.13 |
+| **Proyecto completo** (borrador, revisión, suite y 3 verificaciones; máximo 3 envíos por tarea) | | **≈0.12–0.20** (hasta ≈0.25 si la suite necesita 2 rondas) | **≈2.5–5** |
+
+**Infraestructura (configuración real):**
+
+| Pieza | Configuración | USD al mes |
+| --- | --- | --- |
+| Cloud Run `cumpleycobra-api` | 1 vCPU, 512 MiB, facturación por petición, máximo 3 | ≈0 con mínimo 0; ≈10 con mínimo 1 (tiempo inactivo de instancia mínima: $0.0000025 por vCPU-s y por GiB-s) |
+| Cloud SQL `cyc-pg` | db-f1-micro, zonal, 10 GB SSD, 7 respaldos y PITR; una instancia para `cyc` (staging) y `cyc_prod` | ≈10–12 (instancia 7.67, disco 1.70, respaldos ≈1). Sin SLA por ser de núcleo compartido |
+| VM `cyc-verificador` | e2-standard-2 Spot, 30 GB pd-standard, apagada sola tras 15 min | ≈1.2 apagada (disco); ≈0.6 más por 20 h de uso; ≈22 siempre prendida |
+| Evidencia | Medido en staging: ≈48 KB por verificación web (3 JPEG de un sitio sencillo), no 1 MB | <0.01 |
+| Artifact Registry y Secret Manager | ≈5 GB de imágenes | ≈0.5 |
+| Vercel | Hobby (los términos lo limitan a uso personal o no comercial) | 0 hoy; 20 con Pro al cobrar comisión |
+| **Total con volumen bajo** | | **≈15 sin Vercel Pro; ≈35–40 con Pro** (≈700–760 MXN). ≈65 con mínimo 1 y la VM siempre prendida |
+
+Punto de equilibrio con una comisión de 5% y ≈760 MXN fijos al mes: ~8 proyectos de $2,000, ~3 de $5,000 o ~2 de $10,000. El costo del modelo (≈$3–5 por proyecto) es despreciable frente a la comisión.
+
+Notas:
+
+- **El proyecto de Google Cloud es compartido** con otros servicios (`chatbot`, `chatbot-panel`, `mostrador-*`). La factura total mezcla proyectos: para medir Cumple&Cobra hay que filtrar por servicio o poner etiquetas.
+- **Falta el costo de Pollar en mainnet** (patrocinio de comisiones y custodia). Las comisiones de Stellar son centavos.
+- Fuera de estas cuentas: tiempo de Rodrigo, auditoría del contrato, impuestos (IVA e ISR), conversión de USDC a pesos y soporte. Hoy todo se paga con créditos (duran hasta agosto–noviembre de 2027).
+- En el piloto, registrar el costo real por proyecto (tokens por llamada) y la factura mensual filtrada.
+
 ## Fases siguientes
 
 | Fase | Qué incluye |
