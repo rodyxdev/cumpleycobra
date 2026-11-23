@@ -195,3 +195,29 @@ def test_limites_tambien_al_crear(setup, changed):
     r = client.post("/tasks", json={**DEMO_SPEC, "client_address": CLIENT, "amount": 10_000_000,
                                     "deadline_minutes": 10, **changed})
     assert r.status_code == 400
+
+
+def test_borrador_web_usa_criterios_de_navegador(setup):
+    client, responses, calls = setup
+    web = {"description": "Sitio de una cafetería con menú y contacto.",
+           "criteria": ["La página / muestra el nombre de la cafetería.", "El enlace «Menú» lleva a /menu.",
+                        "En celular no hay scroll horizontal."],
+           "language": "web", "allowed_deps": [], "examples": []}
+    responses.append(web)
+    r = client.post("/tasks/draft", json={"raw_request": "Quiero un sitio para mi café", "profile": "web"})
+    assert r.status_code == 200 and r.json() == web
+    assert calls[0]["config"].response_schema is drafting.WebDraft
+    assert "navegador real" in calls[0]["config"].system_instruction
+    # Sin profile, el borrador de siempre (Python, leyendo código).
+    responses.append(DEMO_SPEC)
+    assert client.post("/tasks/draft", json={"raw_request": "x"}).json() == DEMO_SPEC
+    assert calls[1]["config"].response_schema is drafting.Draft
+
+
+def test_revision_web_y_perfil_invalido(setup):
+    client, responses, calls = setup
+    responses.append(REVIEW)
+    r = client.post("/tasks/draft/review", json={"criteria": ["Que sea bonito", "Muestra el menú."], "profile": "web"})
+    assert r.status_code == 200
+    assert "SITIO WEB" in calls[0]["config"].system_instruction
+    assert client.post("/tasks/draft", json={"raw_request": "x", "profile": "movil"}).status_code == 400

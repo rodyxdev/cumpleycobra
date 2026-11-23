@@ -71,7 +71,7 @@ export function AssistedTaskForm() {
     setBusy("draft");
     setError(null);
     try {
-      const result = await api.draft(raw);
+      const result = await api.draft(raw, execute && kind === "web" ? "web" : undefined);
       setSpec(result);
       setOriginal(raw);
       setReviews(null);
@@ -84,7 +84,7 @@ export function AssistedTaskForm() {
     if (!spec) return;
     setBusy("review");
     setError(null);
-    try { setReviews((await api.reviewDraft(spec.criteria)).criteria); }
+    try { setReviews((await api.reviewDraft(spec.criteria, execute && kind === "web" ? "web" : undefined)).criteria); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   }

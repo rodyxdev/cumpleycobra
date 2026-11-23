@@ -242,11 +242,12 @@ export const api = {
     request<{ consented: boolean; code_hash: string }>(`/tasks/${encodeURIComponent(id)}/consent`, {
       method: "POST", headers: { "X-Freelancer-Token": token }, body: JSON.stringify({ code_hash }),
     }),
-  draft: (raw_request: string) =>
-    request<Spec>("/tasks/draft", { method: "POST", body: JSON.stringify({ raw_request }) }),
-  reviewDraft: (criteria: string[]) =>
+  // `profile: "web"` (verificador, perfil web): criterios que se comprueban en un navegador.
+  draft: (raw_request: string, profile?: "web") =>
+    request<Spec>("/tasks/draft", { method: "POST", body: JSON.stringify(profile ? { raw_request, profile } : { raw_request }) }),
+  reviewDraft: (criteria: string[], profile?: "web") =>
     request<{ criteria: CriterionReview[] }>("/tasks/draft/review", {
-      method: "POST", body: JSON.stringify({ criteria }),
+      method: "POST", body: JSON.stringify(profile ? { criteria, profile } : { criteria }),
     }),
   demo: () => request<Demo>("/demo"),
   task: (id: string) => request<TaskView>(`/tasks/${encodeURIComponent(id)}`),

@@ -350,18 +350,20 @@ async def create_task(body: CreateTaskIn, request: Request):
     return out
 
 
-@app.post("/tasks/draft", response_model=drafting.Draft)
+@app.post("/tasks/draft", response_model=drafting.Draft | drafting.WebDraft)
 async def draft_task(body: drafting.DraftIn):
     try:
-        return await drafting.draft(app.state.gemini, app.state.settings.gemini_model, body.raw_request)
+        return await drafting.draft(app.state.gemini, app.state.settings.gemini_model, body.raw_request,
+                                    profile=body.profile)
     except gemini.EngineUnavailable as exc:
         raise err(502, "ENGINE_UNAVAILABLE", "No se pudo preparar el pedido. Inténtalo de nuevo o usa la plantilla de la demo.") from exc
 
 
 @app.post("/tasks/draft/review", response_model=drafting.Review)
-async def review_draft(body: drafting.ReviewIn):
+async def review_draft(body: drafting.ReviewRequestIn):
     try:
-        return await drafting.review(app.state.gemini, app.state.settings.gemini_model, body.criteria)
+        return await drafting.review(app.state.gemini, app.state.settings.gemini_model, body.criteria,
+                                     profile=body.profile)
     except gemini.EngineUnavailable as exc:
         raise err(502, "ENGINE_UNAVAILABLE", "No se pudieron revisar los criterios. Inténtalo de nuevo.") from exc
 
