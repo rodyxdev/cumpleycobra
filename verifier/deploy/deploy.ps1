@@ -17,11 +17,19 @@ API la encienda cuando hay trabajo (backend/ejecucion/arranque.py). No puede det
 El token de la cola se lee de Secret Manager desde ESTA máquina (tu gcloud), nunca se imprime y
 viaja a la VM solo como metadato de la instancia.
 
+Una segunda VM (p. ej. la de producción) usa las mismas reglas de firewall (misma etiqueta) y el
+mismo rol: si ya existen, el script las deja como están y solo crea lo que falta. Cada VM atiende
+UNA API (`VERIFIER_API_URL`) con SU token: producción nunca comparte VM ni token con staging.
+
 Uso:
   ./verifier/deploy/deploy.ps1 -ApiUrl https://cumpleycobra-api-staging-....run.app            # muestra
   ./verifier/deploy/deploy.ps1 -ApiUrl https://... -Aplicar                                    # crea
   ./verifier/deploy/deploy.ps1 -SoloCodigo -Aplicar                                            # actualiza el código
   ./verifier/deploy/deploy.ps1 -Arranque -CuentaApi cyc-api@PROYECTO.iam.gserviceaccount.com -Aplicar
+Producción (otra VM, otro secreto):
+  ./verifier/deploy/deploy.ps1 -Vm cyc-verificador-prod -SecretoToken cyc-verifier-queue-token-prod -ApiUrl https://cumpleycobra-api-....run.app -Aplicar
+  ./verifier/deploy/deploy.ps1 -Vm cyc-verificador-prod -SoloCodigo -Aplicar
+  ./verifier/deploy/deploy.ps1 -Vm cyc-verificador-prod -Arranque -CuentaApi cyc-api@PROYECTO.iam.gserviceaccount.com -Aplicar
 #>
 param(
     [string]$ApiUrl = "",
@@ -38,6 +46,21 @@ param(
 # Cada paso se juzga por su código de salida.
 $ErrorActionPreference = "Continue"
 
+function Existe([string[]]$describir) {
+    # Solo con -Aplicar se consulta: sin él, el script únicamente imprime los comandos.
+    if (-not $Aplicar) { return $false }
+    & gcloud @describir *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function PasoSiFalta([string]$texto, [string[]]$describir, [string[]]$comando) {
+    if (Existe $describir) {
+        Write-Host "`n# $texto`n(ya existe: no se cambia)"
+        return
+    }
+    Paso $texto $comando
+}
+
 function Paso([string]$texto, [string[]]$comando) {
     Write-Host "`n# $texto"
     Write-Host ("gcloud " + ($comando -join " "))
@@ -50,7 +73,8 @@ function Paso([string]$texto, [string[]]$comando) {
 if ($Arranque) {
     if (-not $CuentaApi) { throw "Falta -CuentaApi (la cuenta de servicio de Cloud Run)" }
     $proyecto = (& gcloud config get-value project 2>$null | Out-String).Trim()
-    Paso "Rol mínimo para encender la VM (leer su estado y encenderla; nada más)" @(
+    PasoSiFalta "Rol mínimo para encender la VM (leer su estado y encenderla; nada más)" @(
+        "iam", "roles", "describe", $Rol, "--project=$proyecto") @(
         "iam", "roles", "create", $Rol, "--project=$proyecto", "--title=Encender el verificador de Cumple&Cobra",
         "--permissions=compute.instances.get,compute.instances.start", "--stage=GA")
     Paso "Ese rol, solo sobre la VM del verificador, para la cuenta de la API" @(
@@ -63,16 +87,20 @@ if ($Arranque) {
 if (-not $SoloCodigo) {
     if (-not $ApiUrl) { throw "Falta -ApiUrl (la URL de la API que atiende la cola)" }
 
-    Paso "Firewall: SSH solo desde IAP" @(
+    PasoSiFalta "Firewall: SSH solo desde IAP" @(
+        "compute", "firewall-rules", "describe", "cyc-verificador-iap-ssh") @(
         "compute", "firewall-rules", "create", "cyc-verificador-iap-ssh", "--network=default", "--direction=INGRESS",
         "--action=ALLOW", "--rules=tcp:22", "--source-ranges=35.235.240.0/20", "--target-tags=cyc-verificador", "--priority=1000")
-    Paso "Firewall: ninguna otra entrada" @(
+    PasoSiFalta "Firewall: ninguna otra entrada" @(
+        "compute", "firewall-rules", "describe", "cyc-verificador-deny-ingress") @(
         "compute", "firewall-rules", "create", "cyc-verificador-deny-ingress", "--network=default", "--direction=INGRESS",
         "--action=DENY", "--rules=all", "--source-ranges=0.0.0.0/0", "--target-tags=cyc-verificador", "--priority=2000")
-    Paso "Firewall: salida solo al 443" @(
+    PasoSiFalta "Firewall: salida solo al 443" @(
+        "compute", "firewall-rules", "describe", "cyc-verificador-allow-443") @(
         "compute", "firewall-rules", "create", "cyc-verificador-allow-443", "--network=default", "--direction=EGRESS",
         "--action=ALLOW", "--rules=tcp:443", "--destination-ranges=0.0.0.0/0", "--target-tags=cyc-verificador", "--priority=1000")
-    Paso "Firewall: ninguna otra salida (el DNS y la hora van al servidor de metadatos, que no pasa por el firewall)" @(
+    PasoSiFalta "Firewall: ninguna otra salida (el DNS y la hora van al servidor de metadatos, que no pasa por el firewall)" @(
+        "compute", "firewall-rules", "describe", "cyc-verificador-deny-egress") @(
         "compute", "firewall-rules", "create", "cyc-verificador-deny-egress", "--network=default", "--direction=EGRESS",
         "--action=DENY", "--rules=all", "--destination-ranges=0.0.0.0/0", "--target-tags=cyc-verificador", "--priority=2000")
 

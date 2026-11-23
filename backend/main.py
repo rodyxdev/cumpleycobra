@@ -292,6 +292,9 @@ async def create_task(body: CreateTaskIn, request: Request):
     if execution:
         if not ejecucion.enabled():
             raise err(400, "INVALID_REQUEST", "La verificación por ejecución no está habilitada")
+        if not ejecucion.client_allowed(body.client_address):
+            raise err(403, "VERIFIER_NOT_AVAILABLE",
+                      "La verificación por ejecución todavía está en pruebas y no está abierta para esta cuenta")
         if web_task:
             if body.interface is not None:
                 raise err(400, "INVALID_REQUEST", "Una tarea web lleva 'web' (páginas) y no 'interface'")

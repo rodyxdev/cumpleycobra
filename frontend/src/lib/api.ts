@@ -276,6 +276,8 @@ export const api = {
         ...(headers.client ? { "X-Client-Token": headers.client } : {}),
       },
     }),
+  verifierAccess: (address: string) =>
+    request<{ available: boolean }>(`/verifier/acceso?address=${encodeURIComponent(address)}`),
   retrySuite: (id: string, clientToken: string) =>
     request<SuitePlan & { task_id: string }>(`/tasks/${encodeURIComponent(id)}/suite/reintentar`, {
       method: "POST", headers: { "X-Client-Token": clientToken },

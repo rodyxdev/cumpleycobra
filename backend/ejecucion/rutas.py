@@ -788,6 +788,15 @@ async def verification_status(job_id: str, x_freelancer_token: str | None = Head
 DEFAULT_STUCK_SECS = 15 * 60
 
 
+@router.get("/verifier/acceso")
+async def verifier_access(address: str = ""):
+    """¿Esta dirección puede crear tareas por ejecución? El frontend muestra la opción solo si sí."""
+    guard_enabled()
+    from . import client_allowed
+
+    return {"available": bool(address) and client_allowed(address)}
+
+
 @router.get("/health/verificador")
 async def verifier_health():
     """Salud de la cola para un monitor externo (p. ej. un uptime check de Cloud Monitoring).

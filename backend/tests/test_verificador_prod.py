@@ -255,3 +255,22 @@ def test_salud_del_verificador(world, monkeypatch):
 def test_salud_del_verificador_es_404_sin_flag(world, monkeypatch):
     monkeypatch.delenv("VERIFIER_ENABLED")
     assert world.get("/health/verificador").status_code == 404
+
+
+# --- lista de clientes permitidos ----------------------------------------------------------------
+
+def test_lista_de_clientes_permitidos(world, monkeypatch):
+    other = "GDOEMEMACZEM77IREHP6UTOMOJ5MZAKGA4KVPG2CPIKMGT5R5WDPHPNK"
+    monkeypatch.setenv("VERIFIER_ALLOWED_CLIENTS", f" {other} , GXXXX")
+    r = world.post("/tasks", json=body())
+    assert r.status_code == 403 and r.json()["error"] == "VERIFIER_NOT_AVAILABLE"
+    assert world.get(f"/verifier/acceso?address={CLIENT}").json() == {"available": False}
+    assert world.get(f"/verifier/acceso?address={other}").json() == {"available": True}
+    # La tarea estática sigue abierta para todos.
+    static = {k: v for k, v in body().items() if k not in ("verification", "interface")}
+    assert world.post("/tasks", json=static).status_code == 200
+    monkeypatch.setenv("VERIFIER_ALLOWED_CLIENTS", CLIENT)
+    assert world.post("/tasks", json=body()).status_code == 200
+    monkeypatch.delenv("VERIFIER_ALLOWED_CLIENTS")
+    assert world.get(f"/verifier/acceso?address={other}").json() == {"available": True}
+    assert world.get("/verifier/acceso").json() == {"available": False}
