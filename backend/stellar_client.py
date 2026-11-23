@@ -31,6 +31,8 @@ ERR_DEADLINE_PASSED = 9
 CONTRACT_ERR_RE = re.compile(r"Error\(Contract, #(\d+)\)")
 BACKOFF_SECS = (1, 3)
 POLL_ATTEMPTS = 30
+BAD_SEQ_RETRIES = 3
+BAD_SEQ_BACKOFF_SECS = 1
 # Todas las firmas del árbitro usan la misma cuenta y su número de secuencia: dos release en
 # paralelo (dos tareas a la vez) armarían transacciones con la misma secuencia y una fallaría.
 RELEASE_LOCK = threading.Lock()
@@ -65,6 +67,22 @@ def _is_transient(exc: Exception) -> bool:
     if isinstance(exc, BadResponseError):
         return exc.status == 429 or exc.status >= 500
     return False
+
+
+def _bad_sequence(error_result_xdr: str | None) -> bool:
+    """True si el RPC rechazó la transacción por número de secuencia viejo (txBAD_SEQ).
+
+    Pasa si otro proceso firmó con la misma cuenta del árbitro entre `load_account` y el envío
+    (staging y producción comparten árbitro, y cada base de datos tiene su propio candado). Una
+    transacción rechazada así nunca se aplica: es seguro volver a armarla con la secuencia nueva.
+    """
+    if not error_result_xdr:
+        return False
+    try:
+        result = stellar_xdr.TransactionResult.from_xdr(error_result_xdr)
+    except Exception:  # noqa: BLE001 - XDR ilegible: no se adivina
+        return False
+    return result.result.code == stellar_xdr.TransactionResultCode.txBAD_SEQ
 
 
 def _with_retries(fn):
@@ -199,7 +217,9 @@ class StellarClient:
                     raise ContractError(code, err) from None
                 raise StellarUnavailable("la simulación de release falló") from None
 
-        for i in range(len(BACKOFF_SECS) + 1):
+        bad_seq = 0
+        i = 0
+        while True:
             prepared = _with_retries(prepare)
             prepared.sign(self._keypair)
             tx_hash = prepared.hash_hex()
@@ -207,6 +227,13 @@ class StellarClient:
             sent = _with_retries(lambda: self.server.send_transaction(prepared))
             if sent.status == SendTransactionStatus.TRY_AGAIN_LATER and i < len(BACKOFF_SECS):
                 time.sleep(BACKOFF_SECS[i])
+                i += 1
+                continue
+            if (sent.status == SendTransactionStatus.ERROR and bad_seq < BAD_SEQ_RETRIES
+                    and _bad_sequence(sent.error_result_xdr)):
+                # Otra firma del árbitro ganó la secuencia: se arma de nuevo con la cuenta recargada.
+                bad_seq += 1
+                time.sleep(BAD_SEQ_BACKOFF_SECS * bad_seq)
                 continue
             if sent.status in (SendTransactionStatus.ERROR, SendTransactionStatus.TRY_AGAIN_LATER):
                 return ReleaseOutcome("failed", tx_hash, f"sendTransaction: {sent.status.value}")
