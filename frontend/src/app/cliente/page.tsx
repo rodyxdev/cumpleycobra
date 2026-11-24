@@ -61,7 +61,7 @@ export default function ClientePage({ searchParams }: { searchParams: Promise<{ 
               onClick={() => {
                 const ok = window.confirm(
                   "¿Borrar la lista de tareas de este navegador?\n\nSe borran los enlaces y tokens de esas tareas: ya no podrás ver " +
-                  "sus veredictos ni su código desde aquí. Los depósitos y pagos en el contrato no cambian, y tu sesión de Pollar se conserva.",
+                  "sus veredictos ni su código desde aquí. Los depósitos y pagos en el contrato no cambian, y tu sesión se conserva.",
                 );
                 if (!ok) return;
                 store.clearTasks();
@@ -110,7 +110,8 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
   const status = task?.onchain?.status;
   const approval = manualApproval({ status, freelancer: task?.freelancer_address, verdicts, secondsLeft });
   const canApprove = approval.can;
-  const walletLabel = wallet.mode === "pollar" ? "Pollar" : "Freighter";
+  // Solo se nombra la wallet en el respaldo (Freighter); con la sesión normal basta el verbo.
+  const withWallet = wallet.mode === "pollar" ? "" : " con Freighter";
 
   async function run(set: (s: TxState) => void, build: () => Promise<string>) {
     set({ phase: "signing" });
@@ -169,7 +170,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
                 )
               }
             >
-              {deposit.phase === "signing" ? "Firmando y enviando…" : `Depositar ${formatUsdc(ct.amount)} con ${walletLabel}`}
+              {deposit.phase === "signing" ? "Firmando y enviando…" : `Depositar ${formatUsdc(ct.amount)}${withWallet}`}
             </Button>
           </div>
         )}
@@ -261,7 +262,7 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
                   )
                 }
               >
-                {manual.phase === "signing" ? "Firmando y enviando…" : `Aprobar manualmente con ${walletLabel}`}
+                {manual.phase === "signing" ? "Firmando y enviando…" : `Aprobar manualmente${withWallet}`}
               </Button>
             )}
             <TxResult state={manual} label="Aprobación manual" />

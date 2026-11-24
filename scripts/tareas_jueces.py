@@ -109,8 +109,8 @@ que acepta queda amarrado a la tarea: si un enlace ya está tomado, usa el sigui
 ## Qué hacer (unos 3 minutos)
 
 1. **Abre un enlace.**
-2. **Inicia sesión con Pollar** (arriba a la derecha) con tu correo. No necesitas XLM ni instalar nada.
-3. **Activa USDC** cuando la página lo pida (Pollar patrocina la reserva).
+2. **Inicia sesión** (arriba a la derecha) con tu correo. No necesitas XLM ni instalar nada.
+3. **Activa USDC** cuando la página lo pida (la reserva va patrocinada).
 4. Revisa los criterios y lo que la entrega debe exponer, y pulsa **«Acepto los criterios»**.
 5. Elige **«Caso C: inyección en el docstring»** y **«Enviar al verificador»**: se **rechaza** por el intento de manipular
    al evaluador, sin pago.
@@ -145,9 +145,9 @@ y un plazo de **{days} días**. El primer juez que la acepta queda amarrado a el
 ## Qué hacer (unos 5 minutos)
 
 1. **Abre un enlace** de la tabla.
-2. **Inicia sesión con Pollar** (botón arriba a la derecha) con tu correo: recibes un código y se crea tu wallet de Stellar.
+2. **Inicia sesión** (botón arriba a la derecha) con tu correo: recibes un código y se crea tu wallet de Stellar.
    No necesitas XLM ni instalar nada.
-3. **Activa USDC** cuando la página lo pida. Pollar patrocina la reserva, así que funciona con 0 XLM.
+3. **Activa USDC** cuando la página lo pida. La reserva va patrocinada, así que funciona con 0 XLM.
 4. Revisa los criterios acordados y pulsa **«Acepto los criterios»**.
 5. Elige **«Caso C: inyección en el docstring»** y pulsa **Enviar**: el Motor de Análisis Estático de Código basado en LLM lo
    **rechaza** por el intento de manipular al evaluador (verás el aviso de seguridad y el veredicto criterio por criterio).

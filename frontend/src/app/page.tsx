@@ -58,7 +58,7 @@ export default function Home() {
             </div>
             <p className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[#D5E1EF]">
               <span>USDC en Stellar</span><span aria-hidden="true">·</span>
-              <span>Wallet con Pollar, sin extensiones</span><span aria-hidden="true">·</span>
+              <span>Entras con tu correo, sin extensiones</span><span aria-hidden="true">·</span>
               <span>Contrato Soroban público</span>
             </p>
           </div>

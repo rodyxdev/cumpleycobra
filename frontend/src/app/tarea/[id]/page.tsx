@@ -86,7 +86,7 @@ export default function TareaPage({
               <div className="order-3">
                 <EmptyState icon={UserCheck} title="Otra wallet ya aceptó esta tarea" testId="tarea-tomada"
                   actions={[{ label: "Ver programadores", href: "/programadores" }, { label: "Ir al inicio", href: "/" }]}>
-                  Solo esa wallet puede entregar y cobrar. Si tú la aceptaste, inicia sesión con la misma cuenta de Pollar.
+                  Solo esa wallet puede entregar y cobrar. Si tú la aceptaste, inicia sesión con la misma cuenta.
                 </EmptyState>
               </div>
             ) : (

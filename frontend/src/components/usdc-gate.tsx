@@ -51,7 +51,7 @@ export function UsdcGate({ role, children }: { role: "cliente" | "programador"; 
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button onClick={wallet.connect}>{wallet.mode === "pollar" ? "Iniciar sesión con Pollar" : "Conectar Freighter"}</Button>
+          <Button onClick={wallet.connect}>{wallet.mode === "pollar" ? "Iniciar sesión" : "Conectar Freighter"}</Button>
         </CardContent>
       </Card>
     );
@@ -61,8 +61,8 @@ export function UsdcGate({ role, children }: { role: "cliente" | "programador"; 
     return (
       <Card>
         <CardContent className="text-sm">
-          Esta wallet ({wallet.custody}) no es una cuenta clásica de Stellar (G…). Para Cumple&amp;Cobra usa una cuenta
-          de Pollar con Google o correo.
+          Esta wallet ({wallet.custody}) no es una cuenta clásica de Stellar (G…). Para Cumple&amp;Cobra inicia sesión
+          con Google o con tu correo.
         </CardContent>
       </Card>
     );
@@ -89,7 +89,7 @@ export function UsdcGate({ role, children }: { role: "cliente" | "programador"; 
           <CardDescription>
             {status.exists
               ? "Tu cuenta todavía no puede recibir USDC. Activa la trustline antes de continuar."
-              : "Tu cuenta todavía no existe en la red de Stellar. Pollar la crea al activar USDC; si no, fondéala primero."}
+              : "Tu cuenta todavía no existe en la red de Stellar. Se crea al activar USDC; si no, fondéala primero."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

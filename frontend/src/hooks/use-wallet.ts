@@ -96,7 +96,7 @@ function usePollarWallet(): Wallet {
     supported: isClassic(pAddress),
     connect: () => pollar.openLoginModal(),
     signAndSend: async (xdr) => {
-      if (!pollar.isAuthenticated || !pAddress) throw new ChainError("Inicia sesión con Pollar primero.");
+      if (!pollar.isAuthenticated || !pAddress) throw new ChainError("Inicia sesión primero.");
       if (!pollar.verified) throw new ChainError("La sesión de Pollar todavía se está confirmando; intenta en unos segundos.");
       // Las wallets custodiales de Pollar no tienen XLM (Pollar patrocina sus reservas). El
       // client.signTx de @pollar/core firma en el servidor y, con el patrocinio del dashboard,

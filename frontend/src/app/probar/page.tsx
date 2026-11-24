@@ -12,7 +12,7 @@ import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError } from "@/lib/api";
 
 const PASOS = [
-  { titulo: "Entra con tu correo", texto: "Pollar te crea una wallet de Stellar. No instalas nada ni necesitas criptomonedas." },
+  { titulo: "Entra con tu correo", texto: "Se crea tu wallet de Stellar. No instalas nada ni necesitas criptomonedas." },
   { titulo: "Recibe una tarea real", texto: "Un cliente ya acordó los criterios y depositó 1 USDC de prueba en el contrato." },
   { titulo: "Entrega el código", texto: "Corre en un contenedor aislado contra pruebas ocultas. Prueba el caso C (intenta engañar a la IA) y el caso A (correcto)." },
   { titulo: "Cobra en segundos", texto: "Si cumple lo acordado, el contrato te paga y ves la transacción en Stellar." },

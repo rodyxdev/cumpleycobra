@@ -233,7 +233,7 @@ export function AssistedTaskForm() {
         <Card>
           <CardHeader>
             <CardTitle>3. Crea la tarea</CardTitle>
-            <CardDescription>Al crearla, los criterios quedan acordados. Después podrás invitar a tu programador y depositar con Pollar.</CardDescription>
+            <CardDescription>Al crearla, los criterios quedan acordados. Después podrás invitar a tu programador y depositar.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-5 sm:grid-cols-2">

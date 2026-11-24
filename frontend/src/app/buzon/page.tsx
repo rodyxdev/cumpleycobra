@@ -25,7 +25,7 @@ export default function BuzonPage() {
       <p>Revisa el pedido y sus criterios antes de aceptar el trabajo.</p>
     </div>
     {!wallet.address ? <Card><CardContent className="space-y-4" data-testid="buzon-sin-wallet"><p>Inicia sesión con tu wallet para ver las propuestas dirigidas a ti.</p>
-      <Button onClick={wallet.connect}>{wallet.mode === "pollar" ? "Iniciar sesión con Pollar" : "Conectar Freighter"}</Button></CardContent></Card> : !session ? (
+      <Button onClick={wallet.connect}>{wallet.mode === "pollar" ? "Iniciar sesión" : "Conectar Freighter"}</Button></CardContent></Card> : !session ? (
       <Card><CardContent className="space-y-4"><p>Verifica tu identidad para abrir las propuestas dirigidas a tu wallet.</p><VerifyIdentityButton address={wallet.address} /></CardContent></Card>
     ) : <InboxList key={session.token} session={session} />}
   </div>;
