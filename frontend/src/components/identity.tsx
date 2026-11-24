@@ -59,19 +59,22 @@ export function dropSessionIfRejected(address: string | null | undefined, e: unk
   if (address && e instanceof ApiError && e.code === "SESSION_REQUIRED") store.clearSession(address);
 }
 
-export function IdentityBadge({ className = "" }: { className?: string }) {
+export function IdentityBadge({ className = "", compact = false }: { className?: string; compact?: boolean }) {
   return (
-    <span data-testid="identidad-verificada"
+    <span data-testid="identidad-verificada" title="Identidad verificada"
       className={`inline-flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-sm font-medium text-primary ${className}`}>
-      <ShieldCheck className="size-4" aria-hidden="true" /> Identidad verificada
+      <ShieldCheck className="size-4" aria-hidden="true" />
+      <span className={compact ? "sr-only sm:not-sr-only" : undefined}>Identidad verificada</span>
     </span>
   );
 }
 
-export function VerifyIdentityButton({ address, size = "sm", onVerified }: {
+export function VerifyIdentityButton({ address, size = "sm", onVerified, compact = false }: {
   address: string;
   size?: "sm" | "default";
   onVerified?: () => void;
+  /** En el encabezado: en celular solo el ícono, para que la cuenta quepa junto al logo. */
+  compact?: boolean;
 }) {
   const sign = useSep10Signer();
   const [busy, setBusy] = useState(false);
@@ -94,9 +97,10 @@ export function VerifyIdentityButton({ address, size = "sm", onVerified }: {
 
   return (
     <span className="inline-flex flex-col items-start gap-1">
-      <Button size={size} variant="outline" data-testid="verificar-identidad" disabled={busy} onClick={verify}>
+      <Button size={size} variant="outline" data-testid="verificar-identidad" disabled={busy} onClick={verify}
+        aria-label={compact ? "Verificar identidad" : undefined} className={compact ? "min-h-10 sm:min-h-0" : undefined}>
         <ShieldCheck aria-hidden="true" data-icon="inline-start" />
-        {busy ? "Firmando el reto…" : "Verificar identidad"}
+        <span className={compact ? "hidden sm:inline" : undefined}>{busy ? "Firmando el reto…" : "Verificar identidad"}</span>
       </Button>
       {error && <span role="alert" className="max-w-xs text-xs text-[var(--alert-foreground)]">{error}</span>}
     </span>
@@ -108,5 +112,5 @@ export function HeaderIdentity() {
   const wallet = useWallet();
   const { verified } = useIdentity(wallet.address);
   if (!wallet.address || !wallet.supported) return null;
-  return verified ? <IdentityBadge /> : <VerifyIdentityButton address={wallet.address} />;
+  return verified ? <IdentityBadge compact /> : <VerifyIdentityButton address={wallet.address} compact />;
 }

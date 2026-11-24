@@ -69,7 +69,7 @@ export default function ProgramadoresPage() {
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-3">
                       <Link href={`/programador/${p.address}`}
-                        className={`group inline-flex items-center gap-2 text-lg font-medium text-primary underline-offset-4 hover:underline ${p.nombre ? "" : "font-mono"}`}
+                        className={`group inline-flex min-h-10 items-center gap-2 text-lg font-medium text-primary underline-offset-4 hover:underline ${p.nombre ? "" : "font-mono"}`}
                         title={p.address}>
                         {p.nombre ?? shortHash(p.address, 10)}
                         <ArrowRight className="size-4" aria-hidden="true" />

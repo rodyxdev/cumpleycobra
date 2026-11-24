@@ -26,11 +26,11 @@ function TaskTimeline({ task }: { task: TaskView }) {
   const steps = taskSteps(task);
   const current = steps.findIndex((s) => !s.done);
   return (
-    <ol className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 lg:grid-cols-5" aria-label="Línea de estado de la tarea">
+    <ol className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-x-3 sm:gap-y-5 lg:grid-cols-5" aria-label="Línea de estado de la tarea">
       {steps.map((s, i) => {
         const active = i === current;
         return (
-          <li key={s.name} aria-current={active ? "step" : undefined} className="flex flex-col gap-2.5">
+          <li key={s.name} aria-current={active ? "step" : undefined} className="flex items-center gap-3 sm:flex-col sm:items-stretch sm:gap-2.5">
             <div className="flex items-center gap-2">
               <span className={`flex size-9 shrink-0 items-center justify-center rounded-full border-2 text-sm font-extrabold ${
                 s.done ? "border-success bg-success text-white"
@@ -40,8 +40,10 @@ function TaskTimeline({ task }: { task: TaskView }) {
               </span>
               {i < steps.length - 1 && <span className={`hidden h-[3px] flex-1 rounded-full lg:block ${s.done ? "bg-success" : "bg-border"}`} aria-hidden="true" />}
             </div>
-            <span className={`text-[0.95rem] font-bold ${active ? "text-primary" : ""}`}>{s.name}</span>
-            <span className="text-[0.8rem] leading-snug text-muted-foreground">{s.detail}</span>
+            <span className="flex min-w-0 flex-col sm:gap-2.5">
+              <span className={`text-[0.95rem] font-bold ${active ? "text-primary" : ""}`}>{s.name}</span>
+              <span className="text-[0.8rem] leading-snug text-muted-foreground">{s.detail}</span>
+            </span>
           </li>
         );
       })}
@@ -56,20 +58,20 @@ export function StatusCard({ task, secondsLeft }: { task: TaskView; secondsLeft:
   const tone = status === "Released" ? "text-success-strong" : status === "Funded" ? "text-primary" : "text-muted-foreground";
   return (
     <div className="space-y-4">
-      <section className="surface p-5 sm:p-7"><TaskTimeline task={task} /></section>
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-[1fr_1.35fr_1fr_.8fr]">
-        <div className="surface space-y-2 p-5">
+      <section className="surface p-4 sm:p-7"><TaskTimeline task={task} /></section>
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-[1fr_1.35fr_1fr_.8fr]">
+        <div className="surface space-y-1.5 p-4 sm:space-y-2 sm:p-5">
           <p className="text-sm text-muted-foreground">Estado en el contrato</p>
           <div className={`brand-heading flex items-center gap-2 text-2xl ${tone}`} data-testid="estado">
             <span className="size-2.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
             {onchain ? STATUS_LABEL[onchain.status] ?? onchain.status : "Sin depósito"}
           </div>
         </div>
-        <div className="surface space-y-2 p-5">
+        <div className="surface space-y-1.5 p-4 sm:space-y-2 sm:p-5">
           <p className="text-sm text-muted-foreground">Monto en el contrato</p>
           <div className="money-prominent">{onchain ? <Money units={onchain.amount} /> : "—"}</div>
         </div>
-        <div className="surface space-y-2 p-5">
+        <div className="surface space-y-1.5 p-4 sm:space-y-2 sm:p-5">
           <p className="text-sm text-muted-foreground">Plazo restante</p>
           <div className="brand-heading flex items-center gap-2 text-2xl tabular-nums" data-testid="plazo">
             <Clock className="size-5 text-muted-foreground" aria-hidden="true" />
@@ -77,7 +79,7 @@ export function StatusCard({ task, secondsLeft }: { task: TaskView; secondsLeft:
               ? secondsLeft > 0 ? formatCountdown(secondsLeft) : "vencido" : "—"}
           </div>
         </div>
-        <div className="surface space-y-2 p-5">
+        <div className="surface space-y-1.5 p-4 sm:space-y-2 sm:p-5">
           <p className="text-sm text-muted-foreground">Envíos usados</p>
           <p className="brand-heading text-2xl tabular-nums">{task.submissions_used} <span className="text-base font-semibold text-muted-foreground">de {task.max_submissions}</span></p>
         </div>

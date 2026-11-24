@@ -30,17 +30,20 @@ export default function ProbarPage() {
         </p>
       </div>
 
-      <ol className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* La acción va antes que los pasos: en celular queda en la primera pantalla. */}
+      <UsdcGate role="programador">{() => <TrialCard />}</UsdcGate>
+
+      <ol className="grid gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4" aria-label="Cómo funciona">
         {PASOS.map((p, i) => (
-          <li key={p.titulo} className="surface flex flex-col gap-2 p-5">
-            <span className="brand-heading flex size-10 items-center justify-center rounded-[0.8rem] bg-secondary text-primary">{i + 1}</span>
-            <h2 className="text-lg font-bold">{p.titulo}</h2>
-            <p className="text-sm leading-relaxed text-muted-foreground">{p.texto}</p>
+          <li key={p.titulo} className="surface flex gap-3 p-4 sm:flex-col sm:gap-2 sm:p-5">
+            <span className="brand-heading flex size-9 shrink-0 items-center justify-center rounded-[0.8rem] bg-secondary text-primary sm:size-10">{i + 1}</span>
+            <div className="space-y-1 sm:space-y-2">
+              <h2 className="text-base font-bold sm:text-lg">{p.titulo}</h2>
+              <p className="text-sm leading-relaxed text-muted-foreground">{p.texto}</p>
+            </div>
           </li>
         ))}
       </ol>
-
-      <UsdcGate role="programador">{() => <TrialCard />}</UsdcGate>
 
       <p className="text-sm text-muted-foreground">
         ¿Prefieres ver el otro lado? En <Link href="/cliente" className="font-medium underline underline-offset-4">Soy cliente</Link>{" "}

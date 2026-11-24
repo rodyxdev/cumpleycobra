@@ -140,7 +140,7 @@ export function AssistedTaskForm() {
             <Button className="h-auto min-h-12 whitespace-normal px-5 py-3" onClick={improve} disabled={!!busy || !raw.trim() || raw.length > 2000}>
               {busy === "draft" ? "Preparando tu pedido…" : "Pídele a la IA que mejore tu pedido"}
             </Button>
-            <Button variant="link" className="h-auto whitespace-normal" disabled={!demo || !!busy} onClick={() => {
+            <Button variant="link" className="h-auto min-h-10 whitespace-normal" disabled={!demo || !!busy} onClick={() => {
               if (!demo) return;
               setRaw(demo.raw_request); setOriginal(demo.raw_request);
               setSpec(structuredClone(demo.spec)); setReviews(null); setError(null);
