@@ -10,3 +10,8 @@ Del 23 al 27 de noviembre de 2026. Cuentan los commits a `main` por su calidad, 
 
 | Fecha | Misión | Commit | Qué cambió |
 | --- | --- | --- | --- |
+| 23 nov | 01 · Despegue | [`a5167b1`](https://github.com/rodyxdev/cumpleycobra/commit/a5167b1) | Regla permanente de seguimiento (Instaward y Ship It) en `CLAUDE.md`, el seguimiento del SOW con evidencia y este registro |
+| 23 nov | 01 · Despegue | [`631238e`](https://github.com/rodyxdev/cumpleycobra/commit/631238e) | «Iniciar sesión» en lugar de «Login with Pollar»; los textos de la interfaz ya no dicen «con Pollar» |
+| 23 nov | 01 · Despegue | [`816c5f9`](https://github.com/rodyxdev/cumpleycobra/commit/816c5f9) | El programador ve «Esta tarea ya se pagó» (o «el depósito volvió al cliente») en lugar de «La tarea ya no está depositada» |
+| 23 nov | 01 · Despegue | [`355ef0a`](https://github.com/rodyxdev/cumpleycobra/commit/355ef0a) | Vista de celular medida a 375 px: encabezado de 220 a 105 px, línea de estado de 387 a 258 px, botón de `/probar` en la primera pantalla y áreas de toque de 40 px o más |
+| 23 nov | 01 · Despegue | este commit | README: qué lanzamos el 27 de noviembre (lo pide la misión) |

@@ -2,6 +2,20 @@
 
 **Si cumple lo acordado, cobras. Sin discusiones.**
 
+## Lo que lanzamos el 27 de noviembre (Ship It · BAF x Stellar)
+
+El 27 de noviembre de 2026 lanzamos para todos, en la testnet de Stellar, la **verificación por ejecución** de Cumple&Cobra. Hoy ya funciona como beta.
+
+- **El código se ejecuta:**
+  - la entrega del programador corre en un contenedor aislado (gVisor, sin red ni credenciales) contra pruebas ocultas;
+  - un sitio web se revisa en un navegador real, con capturas como evidencia;
+  - si una prueba falla, la IA no puede aprobar.
+- **El pago es automático:** si la entrega cumple los criterios acordados, el contrato Soroban le paga al programador en USDC en segundos. El evento del pago lleva el hash del veredicto.
+- **Cualquiera lo puede probar en 3 minutos** en https://cumpleycobra.vercel.app/probar, sin instalar nada y sin dinero real.
+- **Con evidencia:** un video de 60 a 90 segundos con una entrega rechazada y otra aprobada y pagada, y las transacciones verificables en stellar.expert.
+
+Mainnet todavía no: antes hay que separar la llave del árbitro de staging y de producción, auditar el contrato y revisar lo legal y lo fiscal.
+
 **Demo en línea:** https://cumpleycobra.vercel.app (backend: https://cumpleycobra-api-1017372721585.us-central1.run.app)
 
 **Jueces:** el recorrido de 5 minutos está en [`docs/probar-en-linea.ejemplo.md`](docs/probar-en-linea.ejemplo.md). Úsalo con la invitación privada que les comparte el equipo.
