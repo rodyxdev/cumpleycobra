@@ -506,6 +506,19 @@ Histórico (hackathon, septiembre de 2026):
 12. No inventar APIs de librerías (Pollar, `stellar-sdk`, `google-genai`, soroban-sdk): leer la documentación o el código de la versión instalada; si algo no existe, detenerse y reportarlo.
 13. No leer archivos fuera del repositorio sin preguntarle a Rodrigo (excepción ya autorizada: el repositorio de v2, `C:\Users\rodri\Desktop\Cumple&Cobra_V2`, como referencia para portar piezas).
 14. Antes de un cambio en producción (Cloud Run, Vercel, Cloud SQL), preguntarle a Rodrigo; nunca durante una demo.
+15. Antes de hacer push a `main`, decir si dispara un despliegue automático. Hoy, todo push a `main` despliega el frontend en Vercel a producción (aunque el commit solo toque documentación); Cloud Run solo se despliega a mano.
+16. Nada de mainnet por ahora. Antes hay que separar la llave del árbitro de staging y de producción, auditar el contrato y revisar lo legal y lo fiscal.
+
+### Seguimiento del Instaward y de Ship It (regla permanente)
+
+- **Instaward:** cada avance prometido se desarrolla y se sube por separado, en una rama o un commit propio con el prefijo `instaward(avance-N): …`. No se mezclan avances distintos en un mismo commit.
+  - El registro vive en [`docs/instaward/seguimiento.md`](docs/instaward/seguimiento.md), con una tabla: avance prometido, estado (`hecho`, `parcial` o `pendiente`), fecha, commits o PR, evidencia (enlace, transacción o captura) y notas.
+  - La fuente de lo prometido es el SOW que Rodrigo envió el 8 de noviembre de 2026. No se inventan avances ni se cambian los prometidos.
+  - Nada se marca `hecho` sin evidencia verificable.
+  - Cuando llegue el formato oficial del Instaward, el registro se adapta a él sin perder lo anotado.
+- **Ship It (BAF x Stellar, del 23 al 27 de noviembre de 2026):**
+  - los commits del reto llevan el prefijo `ship-it: …` y se registran aparte en [`docs/ship-it/registro.md`](docs/ship-it/registro.md) (fecha, misión, qué cambió y enlace al commit);
+  - cuentan los commits a `main` por su calidad: nunca commits vacíos ni de relleno.
 
 ### Reporte de fase
 
