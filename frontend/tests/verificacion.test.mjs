@@ -66,3 +66,10 @@ test("parsePages acepta rutas del sitio y rechaza las inválidas", () => {
   assert.match(parsePages("/, /"), /repetidas/);
   assert.match(parsePages("/a,/b,/c,/d,/e,/f"), /Máximo 5/);
 });
+
+test("el motivo de cierre dice si la tarea se pagó o se reembolsó", async () => {
+  const { closedReason } = await import("../src/lib/format.ts");
+  assert.match(closedReason("Released"), /ya se pagó/);
+  assert.match(closedReason("Refunded"), /volvió al cliente/);
+  assert.match(closedReason(undefined), /todavía no deposita/);
+});

@@ -39,3 +39,11 @@ export const STATUS_LABEL: Record<string, string> = {
   Released: "Pagada",
   Refunded: "Reembolsada",
 };
+
+/** Por qué ya no se puede enviar una entrega, dicho según el estado del contrato. */
+export function closedReason(status: string | undefined): string {
+  if (status === "Released") return "Esta tarea ya se pagó: el contrato liberó el USDC. No hace falta enviar más.";
+  if (status === "Refunded") return "Venció el plazo y el depósito volvió al cliente. Ya no se puede enviar.";
+  if (status) return "La tarea ya no está depositada.";
+  return "El cliente todavía no deposita el monto.";
+}

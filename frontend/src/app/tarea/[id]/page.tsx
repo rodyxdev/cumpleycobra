@@ -21,6 +21,7 @@ import { UsdcTrustlineNotice } from "@/components/usdc-trustline-notice";
 import { useTask } from "@/hooks/use-task";
 import { useWallet } from "@/hooks/use-wallet";
 import { api, ApiError, type Caso, type TaskView, type Verdict } from "@/lib/api";
+import { closedReason } from "@/lib/format";
 import { loadProblem } from "@/lib/load-problem";
 import { keys, store, useStored, type FreelancerTask } from "@/lib/store";
 
@@ -207,9 +208,7 @@ function SubmitPanel({
   const funded = task.onchain?.status === "Funded";
   const enoughTime = secondsLeft !== null && secondsLeft >= MIN_SECONDS;
   const blocked = !funded
-    ? task.onchain
-      ? "La tarea ya no está depositada."
-      : "El cliente todavía no deposita el monto."
+    ? closedReason(task.onchain?.status)
     : !enoughTime
       ? `Quedan menos de ${MIN_SECONDS} s de plazo: ya no se puede enviar.`
       : null;

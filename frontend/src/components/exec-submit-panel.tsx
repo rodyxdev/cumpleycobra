@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useVerification } from "@/hooks/use-verification";
 import { api, type Caso, type TaskView, type VerificationSource } from "@/lib/api";
+import { closedReason } from "@/lib/format";
 import type { FreelancerTask } from "@/lib/store";
 import { parseRepo, zipSource } from "@/lib/verification";
 
@@ -43,7 +44,7 @@ export function ExecSubmitPanel({ task, mine, secondsLeft, onDone }: {
   const funded = task.onchain?.status === "Funded";
   const enoughTime = secondsLeft !== null && secondsLeft >= MIN_SECONDS;
   const blocked = !funded
-    ? task.onchain ? "La tarea ya no está depositada." : "El cliente todavía no deposita el monto."
+    ? closedReason(task.onchain?.status)
     : !enoughTime ? `Quedan menos de ${MIN_SECONDS / 60} minutos de plazo: ya no se puede verificar ejecutando.` : null;
   const ready = mode === "caso" ? !!caso : mode === "pegar" ? !!pasted.trim() : mode === "zip" ? !!zip : !!repo.trim();
 
