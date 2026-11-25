@@ -10,10 +10,16 @@
 // disparar el reembolso y el dinero solo puede volver al cliente.
 //
 // Base: `contracts/escrow` de CriptoUNAM-Team/Stellar-Guide, extendido.
+//
+// v2 (24 de noviembre de 2026): pago por hitos. Las funciones de la tarea
+// simple no cambian; se agregan `deposit_milestones`, `release_milestone`,
+// `client_release_milestone`, `timeout_refund_milestone` y `get_project`.
+// El contrato v1 ya desplegado no se modifica: v2 se despliega aparte.
+// Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, token, Address, BytesN,
-    Env, String,
+    Env, String, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -26,6 +32,16 @@ use soroban_sdk::{
 const DAY_IN_LEDGERS: u32 = 17_280;
 const TTL_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 const TTL_EXTEND_TO: u32 = 30 * DAY_IN_LEDGERS;
+
+// ---------------------------------------------------------------------------
+// Límites del pago por hitos
+// ---------------------------------------------------------------------------
+// Un proyecto tiene de 2 a 10 hitos (con 1 hito basta la tarea simple).
+// Cada hito vence a más tardar 28 días después del depósito: así queda por
+// debajo de los 30 días de TTL que se renuevan en cada escritura.
+const MIN_MILESTONES: u32 = 2;
+const MAX_MILESTONES: u32 = 10;
+const MAX_MILESTONE_DEADLINE_SECS: u64 = 28 * 24 * 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Tipos guardados en el contrato
@@ -58,6 +74,39 @@ pub struct Task {
     pub status: TaskStatus,
 }
 
+// Estado de un hito: el mismo camino de ida que una tarea.
+// Funded -> Released (árbitro o cliente) o Funded -> Refunded (tras SU plazo).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MilestoneStatus {
+    Funded,
+    Released,
+    Refunded,
+}
+
+// Un hito de un proyecto: su parte del dinero, su plazo y el hash de SUS
+// criterios. Cada hito se paga o se reembolsa por separado.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Milestone {
+    pub amount: i128,
+    pub deadline: u64,
+    pub rules_hash: BytesN<32>,
+    pub status: MilestoneStatus,
+}
+
+// Un proyecto por hitos. El cliente deposita la suma de todos los hitos de
+// una vez. El programador no se conoce al depositar: queda fijo en el PRIMER
+// pago, y desde ahí ningún hito le puede pagar a otra dirección.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Project {
+    pub task_id: String,
+    pub client: Address,
+    pub freelancer: Option<Address>,
+    pub milestones: Vec<Milestone>,
+}
+
 // Configuración del contrato, devuelta por `get_config`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,12 +118,15 @@ pub struct Config {
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
+// `Project(task_id)` también: una entrada por proyecto, con todos sus hitos.
+// Un mismo `task_id` no puede ser a la vez tarea y proyecto.
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Arbiter,
     Token,
     Task(String),
+    Project(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +146,13 @@ pub enum Error {
     DeadlineNotReached = 7,
     InvalidDeadline = 8,
     DeadlinePassed = 9,
+    // v2, pago por hitos (los anteriores nunca se renumeran):
+    // listas de distinto largo, menos de 2 o más de 10 hitos, o plazos que bajan.
+    InvalidMilestones = 10,
+    // El índice no corresponde a ningún hito del proyecto.
+    MilestoneNotFound = 11,
+    // Un hito intenta pagarle a una dirección distinta del programador ya fijado.
+    WrongFreelancer = 12,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +217,54 @@ pub struct TimeoutRefundEvent {
     pub amount: i128,
 }
 
+// El cliente depositó un proyecto por hitos: el total y cuántos hitos tiene.
+#[contractevent(topics = ["deposit_milestones"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositMilestonesEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub total: i128,
+    pub milestones: u32,
+}
+
+// El árbitro pagó un hito. Igual que `release`, publica `code_hash` y
+// `verdict_hash` para que el pago de cada hito sea auditable.
+#[contractevent(topics = ["release_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneReleaseEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub code_hash: BytesN<32>,
+    pub verdict_hash: BytesN<32>,
+}
+
+// El cliente aprobó manualmente un hito.
+#[contractevent(topics = ["client_release_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneClientReleaseEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+}
+
+// Venció el plazo de un hito y su dinero volvió al cliente.
+#[contractevent(topics = ["timeout_refund_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneRefundEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub client: Address,
+    pub amount: i128,
+}
+
 // ---------------------------------------------------------------------------
 // Contrato
 // ---------------------------------------------------------------------------
@@ -202,7 +309,9 @@ impl CumpleYCobraContract {
         }
         let token_addr = Self::token(&env)?;
         let key = DataKey::Task(task_id.clone());
-        if env.storage().persistent().has(&key) {
+        if env.storage().persistent().has(&key)
+            || env.storage().persistent().has(&DataKey::Project(task_id.clone()))
+        {
             return Err(Error::AlreadyExists);
         }
 
@@ -365,6 +474,225 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v2: pago por hitos
+    // -----------------------------------------------------------------------
+
+    // El cliente deposita un proyecto por hitos. Las tres listas van en el
+    // mismo orden: el hito `i` tiene `amounts[i]`, vence `deadlines_secs[i]`
+    // segundos después del depósito y sus criterios tienen `rules_hashes[i]`.
+    // Se transfiere el TOTAL de una vez: el programador sabe desde el inicio
+    // que todo el dinero del proyecto existe.
+    pub fn deposit_milestones(
+        env: Env,
+        client: Address,
+        task_id: String,
+        amounts: Vec<i128>,
+        deadlines_secs: Vec<u64>,
+        rules_hashes: Vec<BytesN<32>>,
+    ) -> Result<(), Error> {
+        // Solo el dueño de los fondos puede depositarlos.
+        client.require_auth();
+
+        // Las tres listas deben tener el mismo largo, de 2 a 10 hitos.
+        let count = amounts.len();
+        if count < MIN_MILESTONES
+            || count > MAX_MILESTONES
+            || deadlines_secs.len() != count
+            || rules_hashes.len() != count
+        {
+            return Err(Error::InvalidMilestones);
+        }
+
+        // Contrato inicializado e id nuevo: ni proyecto ni tarea con ese id.
+        let token_addr = Self::token(&env)?;
+        let key = DataKey::Project(task_id.clone());
+        if env.storage().persistent().has(&key)
+            || env.storage().persistent().has(&DataKey::Task(task_id.clone()))
+        {
+            return Err(Error::AlreadyExists);
+        }
+
+        // Cada hito: monto positivo; plazo entre 1 s y 28 días y que no baje
+        // respecto al hito anterior (el hito 2 no vence antes que el 1).
+        // Las sumas usan `checked_add`: si desbordan, es error.
+        let now = env.ledger().timestamp();
+        let mut milestones: Vec<Milestone> = Vec::new(&env);
+        let mut total: i128 = 0;
+        let mut previous_secs: u64 = 0;
+        for i in 0..count {
+            let amount = amounts.get(i).ok_or(Error::InvalidMilestones)?;
+            let secs = deadlines_secs.get(i).ok_or(Error::InvalidMilestones)?;
+            let rules_hash = rules_hashes.get(i).ok_or(Error::InvalidMilestones)?;
+            if amount <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            if secs == 0 || secs > MAX_MILESTONE_DEADLINE_SECS {
+                return Err(Error::InvalidDeadline);
+            }
+            if secs < previous_secs {
+                return Err(Error::InvalidMilestones);
+            }
+            previous_secs = secs;
+            let deadline = now.checked_add(secs).ok_or(Error::InvalidDeadline)?;
+            total = total.checked_add(amount).ok_or(Error::InvalidAmount)?;
+            milestones.push_back(Milestone {
+                amount,
+                deadline,
+                rules_hash,
+                status: MilestoneStatus::Funded,
+            });
+        }
+
+        // Efectos: el proyecto queda guardado con todos sus hitos en Funded.
+        let project = Project {
+            task_id: task_id.clone(),
+            client: client.clone(),
+            freelancer: None,
+            milestones,
+        };
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: el total pasa del cliente al contrato.
+        token::Client::new(&env, &token_addr).transfer(
+            &client,
+            &env.current_contract_address(),
+            &total,
+        );
+
+        DepositMilestonesEvent {
+            task_id,
+            client,
+            total,
+            milestones: count,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El árbitro paga UN hito tras su veredicto aprobado. Mismas reglas que
+    // `release`, aplicadas a ese hito: solo desde Funded y antes de su plazo.
+    pub fn release_milestone(
+        env: Env,
+        task_id: String,
+        index: u32,
+        freelancer: Address,
+        code_hash: BytesN<32>,
+        verdict_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        // Solo el árbitro configurado puede firmar esta llamada.
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        // El hito debe existir y seguir en Funded (esto impide pagarlo dos veces).
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+
+        // Solo antes del plazo de ESE hito; después quedan el reembolso del
+        // hito o la aprobación manual del cliente.
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+
+        // El programador queda fijo en el primer pago del proyecto.
+        Self::bind_freelancer(&mut project, &freelancer)?;
+
+        // Efectos antes de la transferencia (checks-effects-interactions).
+        milestone.status = MilestoneStatus::Released;
+        project.milestones.set(index, milestone.clone());
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: el contrato paga el monto de ese hito.
+        Self::pay(&env, &freelancer, milestone.amount)?;
+
+        MilestoneReleaseEvent {
+            task_id,
+            index,
+            freelancer,
+            amount: milestone.amount,
+            code_hash,
+            verdict_hash,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Aprobación manual de UN hito por el cliente (por ejemplo, tras un rechazo
+    // de la IA). Se permite también después del plazo de ese hito: es el propio
+    // cliente quien renuncia a su reembolso.
+    pub fn client_release_milestone(
+        env: Env,
+        task_id: String,
+        index: u32,
+        freelancer: Address,
+    ) -> Result<(), Error> {
+        // Primero se carga el proyecto para saber quién es su cliente.
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+
+        // Solo el cliente que depositó puede aprobar manualmente.
+        project.client.require_auth();
+
+        // El hito debe existir y seguir en Funded; el programador, el de siempre.
+        let mut milestone = Self::funded_milestone(&project, index)?;
+        Self::bind_freelancer(&mut project, &freelancer)?;
+
+        // Efectos antes de la transferencia.
+        milestone.status = MilestoneStatus::Released;
+        project.milestones.set(index, milestone.clone());
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: el contrato paga el monto de ese hito.
+        Self::pay(&env, &freelancer, milestone.amount)?;
+
+        MilestoneClientReleaseEvent {
+            task_id,
+            index,
+            client: project.client,
+            freelancer,
+            amount: milestone.amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Reembolso de UN hito vencido. No pide firma: cualquiera puede dispararlo,
+    // pero el dinero solo puede ir al cliente. Los hitos ya pagados no se tocan.
+    pub fn timeout_refund_milestone(env: Env, task_id: String, index: u32) -> Result<(), Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+
+        // Solo cuando el timestamp del ledger alcanzó el plazo de ese hito.
+        if env.ledger().timestamp() < milestone.deadline {
+            return Err(Error::DeadlineNotReached);
+        }
+
+        // Efectos antes de la transferencia.
+        milestone.status = MilestoneStatus::Refunded;
+        project.milestones.set(index, milestone.clone());
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: el dinero de ese hito vuelve al cliente, nunca a quien llama.
+        Self::pay(&env, &project.client, milestone.amount)?;
+
+        MilestoneRefundEvent {
+            task_id,
+            index,
+            client: project.client,
+            amount: milestone.amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Lectura de un proyecto: cliente, programador (si ya hubo un pago) y sus
+    // hitos con monto, plazo, `rules_hash` y estado.
+    pub fn get_project(env: Env, task_id: String) -> Result<Project, Error> {
+        Self::load_project(&env, &DataKey::Project(task_id))
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
 
@@ -413,6 +741,46 @@ impl CumpleYCobraContract {
         Ok(task)
     }
 
+    // Guarda un proyecto y extiende el TTL de su entrada y de la instancia.
+    fn save_project(env: &Env, key: &DataKey, project: &Project) {
+        env.storage().persistent().set(key, project);
+        env.storage()
+            .persistent()
+            .extend_ttl(key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(env);
+    }
+
+    // Carga un proyecto (NotFound si no existe).
+    fn load_project(env: &Env, key: &DataKey) -> Result<Project, Error> {
+        env.storage().persistent().get(key).ok_or(Error::NotFound)
+    }
+
+    // Devuelve el hito `index` y exige que siga en Funded.
+    fn funded_milestone(project: &Project, index: u32) -> Result<Milestone, Error> {
+        let milestone = project
+            .milestones
+            .get(index)
+            .ok_or(Error::MilestoneNotFound)?;
+        if milestone.status != MilestoneStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        Ok(milestone)
+    }
+
+    // Fija al programador en el primer pago; en los siguientes exige que sea
+    // la misma dirección. Así el dinero de un proyecto nunca se reparte entre
+    // dos programadores.
+    fn bind_freelancer(project: &mut Project, freelancer: &Address) -> Result<(), Error> {
+        match &project.freelancer {
+            None => {
+                project.freelancer = Some(freelancer.clone());
+                Ok(())
+            }
+            Some(bound) if bound == freelancer => Ok(()),
+            Some(_) => Err(Error::WrongFreelancer),
+        }
+    }
+
     // Transfiere `amount` del contrato a `to`.
     fn pay(env: &Env, to: &Address, amount: i128) -> Result<(), Error> {
         let token_addr = Self::token(env)?;
@@ -426,3 +794,6 @@ impl CumpleYCobraContract {
 }
 
 mod test;
+
+// Pruebas del pago por hitos (v2).
+mod test_hitos;

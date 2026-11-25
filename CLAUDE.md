@@ -6,7 +6,7 @@ Contexto técnico para Claude Code. La versión completa (negocio, pitch, evalua
 
 Cumple&Cobra es el acuerdo verificable para trabajo de código. El cliente escribe su pedido y la IA lo convierte en criterios medibles que él edita. El cliente invita a su programador con un enlace; el programador acepta esos criterios antes de trabajar; el cliente deposita USDC en un contrato Soroban. El programador entrega un script Python y un video demo; el backend lo evalúa con una capa determinista y Gemini contra los criterios acordados; si cumple, el backend (árbitro) firma `release` y el programador cobra en segundos. El código no se entrega al cliente hasta que el programador cobra.
 
-Nació como MVP para GOYA HACK (septiembre de 2026). Desde noviembre de 2026 sigue el plan de mejora por fases de [`docs/mejora/plan.md`](docs/mejora/plan.md): esta versión (v1) es la base y de v2 (`cumpleycobra-v2`) solo se traen piezas. Lo que no cambia nunca: Stellar, el contrato Soroban desplegado y Pollar. Una sola persona construye.
+Nació como MVP para GOYA HACK (septiembre de 2026). Desde noviembre de 2026 sigue el plan de mejora por fases de [`docs/mejora/plan.md`](docs/mejora/plan.md): esta versión (v1) es la base y de v2 (`cumpleycobra-v2`) solo se traen piezas. Lo que no cambia nunca: Stellar, el contrato Soroban desplegado y Pollar. El contrato desplegado no se modifica: las funciones nuevas van en una versión nueva desplegada aparte (decisión del 24 de noviembre de 2026, [`docs/hitos/diseno.md`](docs/hitos/diseno.md)). Una sola persona construye.
 
 **Frase del producto:** "Si cumple lo acordado, cobras. Sin discusiones."
 
