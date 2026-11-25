@@ -1,6 +1,6 @@
 # Pago por hitos: diseño (borrador para revisión)
 
-Estado: **aprobado por Rodrigo el 24 de noviembre de 2026**, con las 5 decisiones de la sección 7 tal como se proponen. La etapa 1 (contrato v2) está en curso.
+Estado: **aprobado por Rodrigo el 24 de noviembre de 2026**, con las 5 decisiones de la sección 7 tal como se proponen. **Etapa 1 hecha** (24 de noviembre): contrato v2 `CAUBTDTWJKWKXH25LHXPES3ADTDRMBHYK4VOSWEWIBIYNLUINDR2K77K` desplegado en testnet, 32 tests en verde y un proyecto real de 3 hitos que usó las cuatro funciones nuevas. Evidencia en [`contracts/cumpleycobra/README.md`](../../contracts/cumpleycobra/README.md#v2-pago-por-hitos-24-de-noviembre-de-2026). Siguen las etapas 2 a 4.
 
 ## 1. La idea
 

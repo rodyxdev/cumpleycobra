@@ -117,3 +117,41 @@ La prueba completa y reproducible está en [`scripts/fase0-testnet.sh`](../../sc
 ```bash
 bash scripts/fase0-testnet.sh
 ```
+
+## v2: pago por hitos (24 de noviembre de 2026)
+
+Mismo código y mismas funciones de v1, más el pago por hitos (diseño en [`docs/hitos/diseno.md`](../../docs/hitos/diseno.md)). **El contrato v1 desplegado no se modifica:** v2 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
+
+| | |
+| --- | --- |
+| ID del contrato v2 (testnet) | `CAUBTDTWJKWKXH25LHXPES3ADTDRMBHYK4VOSWEWIBIYNLUINDR2K77K` |
+| Despliegue | tx [`70218cec…`](https://stellar.expert/explorer/testnet/tx/70218cec8726b4c70d933feb53eb970bd07c61bb12ee0a6656433377bccb9037) (`--alias cumpleycobra-v2`) |
+| `initialize` | tx [`d85744ec…`](https://stellar.expert/explorer/testnet/tx/d85744ec411155c4637be8d707a469c87546391aa32b48bc782f1bb7a97d961a), árbitro `GAGGEH…VOKZGY`, token `CBIELTK6…CAMA` |
+| Tests | `cargo test -p cumpleycobra`: 32 en verde (18 de v1 sin cambios y 14 de hitos en `src/test_hitos.rs`) |
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `deposit_milestones(client, task_id, amounts, deadlines_secs, rules_hashes)` | Cliente | 2 a 10 hitos; listas del mismo largo; montos > 0; plazos de 1 s a 28 días que no bajan; deposita el total de una vez; el `task_id` no puede existir como tarea ni como proyecto |
+| `release_milestone(task_id, index, freelancer, code_hash, verdict_hash)` | Árbitro | Solo un hito en `Funded` y antes de su plazo; el primer pago fija al programador |
+| `client_release_milestone(task_id, index, freelancer)` | Cliente | Aprobación manual de un hito, también después de su plazo |
+| `timeout_refund_milestone(task_id, index)` | Cualquiera | Solo un hito en `Funded` y vencido; el dinero vuelve al cliente |
+| `get_project(task_id)` | Lectura | Cliente, programador y los hitos con monto, plazo, `rules_hash` y estado |
+
+**Errores nuevos:** 10 `InvalidMilestones`, 11 `MilestoneNotFound`, 12 `WrongFreelancer`. Los del 1 al 9 no cambian.
+
+**Proyecto real de 3 hitos en testnet** con [`scripts/hitos_testnet.sh`](../../scripts/hitos_testnet.sh), proyecto `hitos-1795584057`:
+
+| Paso | Quién | tx |
+| --- | --- | --- |
+| `deposit_milestones`: 0.3 + 0.3 + 0.2 USDC | `cyc-client` | [`937e9e5f…`](https://stellar.expert/explorer/testnet/tx/937e9e5fa76c729c1ed8c5091365e94c55af6194e68900298be5785d28f50869) |
+| `release_milestone`: hito 0 al programador | `cyc-arbiter` | [`7dba94e6…`](https://stellar.expert/explorer/testnet/tx/7dba94e6ed54ac3506cf278d5ec7116ba6b53233e5dafee42196ee109a88d18b) |
+| `client_release_milestone`: hito 1 | `cyc-client` | [`f77f3d03…`](https://stellar.expert/explorer/testnet/tx/f77f3d03909f5d7787314902d5a75daa191fa43330a0c79858b2601ef2a8acf6) |
+| `timeout_refund_milestone`: hito 2 vencido | `cyc-third` | [`bf5c4aa0…`](https://stellar.expert/explorer/testnet/tx/bf5c4aa051043d1e6a67841eb3b304342fde045b8b11eb7aaba969859bf94fd5) |
+
+`get_project` al final: hitos `Released`, `Released` y `Refunded`, y el programador `GDOEME…DPHPNK` fijo. Los hashes de esta corrida son SHA-256 de textos de ejemplo: el backend todavía no verifica hitos (etapa 2 del diseño).
+
+```bash
+bash scripts/hitos_testnet.sh
+```
