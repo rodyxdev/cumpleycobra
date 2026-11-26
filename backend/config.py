@@ -45,6 +45,7 @@ class Settings:
     network_passphrase: str
     frontend_origin: str
     state_file: Path
+    milestones_contract_id: str | None = None
 
     def __repr__(self) -> str:  # nunca imprimir secretos
         return (f"Settings(use_vertex={self.use_vertex}, model={self.gemini_model}, "
@@ -84,6 +85,7 @@ def load_settings() -> Settings:
         network_passphrase=os.environ["NETWORK_PASSPHRASE"],
         frontend_origin=os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000"),
         state_file=state_file,
+        milestones_contract_id=os.environ.get("MILESTONES_CONTRACT_ID") or None,
     )
 
 

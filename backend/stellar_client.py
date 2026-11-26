@@ -4,6 +4,7 @@ Funciones síncronas: main.py las llama con run_in_threadpool para no bloquear e
 event loop. La llave del árbitro nunca sale de este proceso ni se imprime.
 """
 
+import os
 import re
 import threading
 import time
@@ -27,6 +28,9 @@ from .config import Settings
 ERR_NOT_FOUND = 5
 ERR_NOT_FUNDED = 6
 ERR_DEADLINE_PASSED = 9
+ERR_INVALID_MILESTONES = 10
+ERR_MILESTONE_NOT_FOUND = 11
+ERR_WRONG_FREELANCER = 12
 
 CONTRACT_ERR_RE = re.compile(r"Error\(Contract, #(\d+)\)")
 BACKOFF_SECS = (1, 3)
@@ -116,6 +120,9 @@ class StellarClient:
         self._keypair = Keypair.from_secret(settings.arbiter_secret)
         self.arbiter_address = self._keypair.public_key
         self.contract_id = settings.contract_id
+        self.milestones_contract_id: str | None = (
+            getattr(settings, "milestones_contract_id", None) or os.environ.get("MILESTONES_CONTRACT_ID") or None
+        )
         self.usdc_sac_id = settings.usdc_sac_id
         self._usdc_asset: Asset | None = None
         self.passphrase = settings.network_passphrase
@@ -154,6 +161,33 @@ class StellarClient:
         status = task.get("status")
         task["status"] = status[0] if isinstance(status, list) else status
         return task
+
+    def _milestones_contract(self, contract_id: str | None = None) -> str:
+        """Contrato de hitos (v2/v3) desde argumento, settings o MILESTONES_CONTRACT_ID."""
+        cid = (contract_id or getattr(self, "milestones_contract_id", None)
+               or os.environ.get("MILESTONES_CONTRACT_ID") or "").strip()
+        if not cid:
+            raise StellarUnavailable("falta MILESTONES_CONTRACT_ID para operar proyectos por hitos")
+        return cid
+
+    def get_project(self, task_id: str, contract_id: str | None = None) -> dict | None:
+        """Lee un proyecto por hitos en el contrato de hitos sin firmar ni gastar. None si no existe."""
+        tx = self._build("get_project", [scval.to_string(task_id)],
+                         contract_id=self._milestones_contract(contract_id))
+        res = _with_retries(lambda: self.server.simulate_transaction(tx))
+        if res.error:
+            code = _contract_code(res.error)
+            if code == ERR_NOT_FOUND:
+                return None
+            if code is not None:
+                raise ContractError(code, res.error)
+            raise StellarUnavailable("consulta de get_project falló")
+        raw = scval.to_native(res.results[0].xdr)
+        project = _native(raw)
+        for m in project.get("milestones") or []:
+            st = m.get("status")
+            m["status"] = st[0] if isinstance(st, list) else st
+        return project
 
     def usdc_asset(self) -> Asset:
         """Activo clásico detrás del SAC, leído del propio SAC (name() = "CÓDIGO:EMISOR")."""
@@ -205,9 +239,33 @@ class StellarClient:
             scval.to_bytes(bytes.fromhex(code_hash_hex)),
             scval.to_bytes(bytes.fromhex(verdict_hash_hex)),
         ]
+        return self._send_release("release", params, on_signed)
 
+    def release_milestone(self, task_id: str, index: int, freelancer: str, code_hash_hex: str,
+                          verdict_hash_hex: str, on_signed: Callable[[str], None],
+                          contract_id: str | None = None) -> ReleaseOutcome:
+        """Libera el pago de un hito en el contrato de hitos (mismo candado y reintentos que release)."""
+        with RELEASE_LOCK:
+            return self._release_milestone(task_id, index, freelancer, code_hash_hex,
+                                           verdict_hash_hex, on_signed, contract_id=contract_id)
+
+    def _release_milestone(self, task_id: str, index: int, freelancer: str, code_hash_hex: str,
+                           verdict_hash_hex: str, on_signed: Callable[[str], None],
+                           contract_id: str | None = None) -> ReleaseOutcome:
+        cid = self._milestones_contract(contract_id)
+        params = [
+            scval.to_string(task_id),
+            scval.to_uint32(index),
+            scval.to_address(freelancer),
+            scval.to_bytes(bytes.fromhex(code_hash_hex)),
+            scval.to_bytes(bytes.fromhex(verdict_hash_hex)),
+        ]
+        return self._send_release("release_milestone", params, on_signed, contract_id=cid)
+
+    def _send_release(self, function: str, params: list, on_signed: Callable[[str], None],
+                      contract_id: str | None = None) -> ReleaseOutcome:
         def prepare():
-            tx = self._build("release", params)
+            tx = self._build(function, params, contract_id=contract_id)
             try:
                 return self.server.prepare_transaction(tx)
             except PrepareTransactionException as exc:
@@ -215,7 +273,7 @@ class StellarClient:
                 code = _contract_code(err)
                 if code is not None:
                     raise ContractError(code, err) from None
-                raise StellarUnavailable("la simulación de release falló") from None
+                raise StellarUnavailable(f"la preparación de {function} falló") from None
 
         bad_seq = 0
         i = 0
