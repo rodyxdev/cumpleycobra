@@ -37,11 +37,11 @@ Revisado contra el repositorio el 23 de noviembre de 2026, sobre `main` en `6c62
 | 2.2 | Chequeos de salud del backend y del runner | parcial | 21–22 nov | `b915b67` (`/health/verificador`) | `GET /health` y `GET /health/verificador` en https://cumpleycobra-api-1017372721585.us-central1.run.app | El runner se mide por la cola, no tiene endpoint propio. Falta el monitor externo (uptime check) |
 | 2.3 | Logs | parcial | — | — | Cloud Run envía sus logs a Cloud Logging | La VM no tiene cuenta de servicio: sus logs se quedan en `journald` y no llegan a Cloud Logging. Falta decidir cómo exportarlos sin darle credenciales |
 | 2.4 | Límites de recursos por ejecución | hecho | 21 nov | `21188e6` | `verifier/sandbox/runner.py` (`SandboxLimits`: CPU, memoria, procesos, tiempo y salida); gVisor, sin red, `--read-only`, como `nobody` | — |
-| 2.5 | Documento público de arquitectura y seguridad, con los límites conocidos del aislamiento | parcial | 21–22 nov | — | El contenido está repartido en `docs/mejora/fase-3.md` y `docs/mejora/verificador-produccion.md` | Falta un documento único y publicado |
+| 2.5 | Documento público de arquitectura y seguridad, con los límites conocidos del aislamiento | parcial | 25 nov | este commit (`instaward(avance-2.5)`) | `docs/arquitectura-y-seguridad.md` (arquitectura, flujo, aislamiento, regla final, límites conocidos y reporte de seguridad) | Falta confirmar el contacto de seguridad (sección 6) y hacer push a `main` en GitHub para publicarlo |
 | 2.E1 | Evidencia: URL de salud del backend y del runner | parcial | 22 nov | `b915b67` | Las mismas URL de 2.2 | Mismo faltante que 2.2 |
 | 2.E2 | Evidencia: commit de la migración a la base de datos | hecho | 20–21 nov | `99c1607` (`001_inicial`), `9d6e9ff` (`002_verificador`) | `backend/storage/migrations/` | — |
 | 2.E3 | Evidencia: captura de una restauración exitosa | parcial | 21 nov | `660f860` | `docs/mejora/fase-1.md`: `RESTORE_VOLUME` en estado `DONE` y los mismos conteos que el original | Hay registro de texto, pero no una captura |
-| 2.E4 | Evidencia: documento publicado | pendiente | — | — | — | Depende de 2.5 |
+| 2.E4 | Evidencia: documento publicado | parcial | 25 nov | este commit (`instaward(avance-2.5)`) | `docs/arquitectura-y-seguridad.md` en commit local de `main` | Falta hacer push a GitHub para publicarlo en URL pública y confirmar el contacto de seguridad |
 
 ## Entregable 3 (opcional): validación real y reporte público
 
