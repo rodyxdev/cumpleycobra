@@ -592,3 +592,345 @@ fn test_hitos_ttl_extendido() {
         );
     });
 }
+
+// ===========================================================================
+// Tests v3: add_milestone y top_up_milestone
+// ===========================================================================
+
+// Camino feliz v3: agregar un 4.º hito y aumentar el hito 1; saldos y eventos
+// correctos; al pagar todos los hitos, el contrato queda en 0.
+#[test]
+fn test_v3_flujo_feliz_agregar_y_aumentar_hitos() {
+    let ctx = setup(Modo::Libre);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "proyecto-v3");
+    let h3 = 4 * UNIT;
+    let p3 = 4 * DIA;
+    let r3 = hash(env, 13);
+    let aumento = 2 * UNIT;
+
+    // Agregar el 4.º hito (índice 3) y comprobar su evento antes de otra llamada.
+    ctx.c.add_milestone(&id, &h3, &p3, &r3);
+    let evento_add = AddMilestoneEvent {
+        task_id: id.clone(),
+        index: 3,
+        amount: h3,
+        deadline: START_TS + p3,
+    }
+    .to_xdr(env, &ctx.contract_id);
+    assert!(env
+        .events()
+        .all()
+        .filter_by_contract(&ctx.contract_id)
+        .events()
+        .contains(&evento_add));
+
+    assert_eq!(saldos(&ctx), (MINT - TOTAL - h3, TOTAL + h3, 0, 7));
+    let p = ctx.c.get_project(&id);
+    assert_eq!(p.milestones.len(), 4);
+    let nuevo = p.milestones.get(3).unwrap();
+    assert_eq!(nuevo.amount, h3);
+    assert_eq!(nuevo.deadline, START_TS + p3);
+    assert_eq!(nuevo.rules_hash, r3);
+    assert_eq!(nuevo.status, MilestoneStatus::Funded);
+
+    // Aumentar el hito 1 (+2 USDC) y comprobar su evento.
+    ctx.c.top_up_milestone(&id, &1, &aumento);
+    let evento_top_up = TopUpMilestoneEvent {
+        task_id: id.clone(),
+        index: 1,
+        amount: aumento,
+        new_amount: H1 + aumento,
+    }
+    .to_xdr(env, &ctx.contract_id);
+    assert!(env
+        .events()
+        .all()
+        .filter_by_contract(&ctx.contract_id)
+        .events()
+        .contains(&evento_top_up));
+
+    let total_final = TOTAL + h3 + aumento;
+    assert_eq!(saldos(&ctx), (MINT - total_final, total_final, 0, 7));
+    assert_eq!(ctx.c.get_project(&id).milestones.get(1).unwrap().amount, H1 + aumento);
+
+    // Pagar todos los hitos y comprobar que el contrato queda en 0.
+    for i in 0..4u32 {
+        release(&ctx, &id, i, &ctx.freelancer);
+    }
+    assert_eq!(saldos(&ctx), (MINT - total_final, 0, total_final, 7));
+    assert_eq!(
+        estados(&ctx, &id),
+        std::vec![
+            MilestoneStatus::Released,
+            MilestoneStatus::Released,
+            MilestoneStatus::Released,
+            MilestoneStatus::Released,
+        ]
+    );
+}
+
+// add_milestone firmado por alguien que no es el cliente falla (sin mock_all_auths).
+#[test]
+fn test_v3_add_milestone_no_cliente_falla() {
+    let ctx = setup(Modo::Estricto);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "proyecto-v3");
+    let antes = saldos(&ctx);
+    let extra = 2 * UNIT;
+    let p3 = 4 * DIA;
+    let r3 = hash(env, 13);
+
+    let firma = |quien: &Address| {
+        env.mock_auths(&[MockAuth {
+            address: quien,
+            invoke: &MockAuthInvoke {
+                contract: &ctx.contract_id,
+                fn_name: "add_milestone",
+                args: (id.clone(), extra, p3, r3.clone()).into_val(env),
+                sub_invokes: &[MockAuthInvoke {
+                    contract: &ctx.token.address,
+                    fn_name: "transfer",
+                    args: (quien, &ctx.contract_id, extra).into_val(env),
+                    sub_invokes: &[],
+                }],
+            },
+        }]);
+    };
+
+    for falso in [&ctx.third, &ctx.freelancer, &ctx.arbiter] {
+        firma(falso);
+        let res = ctx.c.try_add_milestone(&id, &extra, &p3, &r3);
+        assert!(matches!(res, Err(Err(_))));
+    }
+    assert_eq!(saldos(&ctx), antes);
+    assert_eq!(ctx.c.get_project(&id).milestones.len(), 3);
+
+    // Control: el cliente del proyecto sí puede agregar el hito.
+    firma(&ctx.client);
+    ctx.c.add_milestone(&id, &extra, &p3, &r3);
+    assert_eq!(saldos(&ctx), (MINT - TOTAL - extra, TOTAL + extra, 0, 7));
+    assert_eq!(ctx.c.get_project(&id).milestones.len(), 4);
+}
+
+// top_up_milestone firmado por alguien que no es el cliente falla (sin mock_all_auths).
+#[test]
+fn test_v3_top_up_milestone_no_cliente_falla() {
+    let ctx = setup(Modo::Estricto);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "proyecto-v3");
+    let antes = saldos(&ctx);
+    let aumento = UNIT;
+
+    let firma = |quien: &Address| {
+        env.mock_auths(&[MockAuth {
+            address: quien,
+            invoke: &MockAuthInvoke {
+                contract: &ctx.contract_id,
+                fn_name: "top_up_milestone",
+                args: (id.clone(), 1u32, aumento).into_val(env),
+                sub_invokes: &[MockAuthInvoke {
+                    contract: &ctx.token.address,
+                    fn_name: "transfer",
+                    args: (quien, &ctx.contract_id, aumento).into_val(env),
+                    sub_invokes: &[],
+                }],
+            },
+        }]);
+    };
+
+    for falso in [&ctx.third, &ctx.freelancer, &ctx.arbiter] {
+        firma(falso);
+        let res = ctx.c.try_top_up_milestone(&id, &1, &aumento);
+        assert!(matches!(res, Err(Err(_))));
+    }
+    assert_eq!(saldos(&ctx), antes);
+    assert_eq!(ctx.c.get_project(&id).milestones.get(1).unwrap().amount, H1);
+
+    // Control: el cliente del proyecto sí puede aumentar el hito.
+    firma(&ctx.client);
+    ctx.c.top_up_milestone(&id, &1, &aumento);
+    assert_eq!(saldos(&ctx), (MINT - TOTAL - aumento, TOTAL + aumento, 0, 7));
+    assert_eq!(ctx.c.get_project(&id).milestones.get(1).unwrap().amount, H1 + aumento);
+}
+
+// Validaciones de add_milestone: proyecto inexistente, monto 0/negativo, plazo
+// 0 o mayor a 28 días, plazo anterior al último hito y límite de 10 hitos.
+#[test]
+fn test_v3_add_milestone_validaciones() {
+    let ctx = setup(Modo::Libre);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "proyecto-v3");
+    let r = hash(env, 20);
+    let antes = saldos(&ctx);
+
+    // Proyecto que no existe.
+    assert_eq!(
+        ctx.c.try_add_milestone(&tid(env, "no-existe"), &UNIT, &P2, &r),
+        Err(Ok(Error::NotFound))
+    );
+    // Monto 0 o negativo.
+    assert_eq!(
+        ctx.c.try_add_milestone(&id, &0, &P2, &r),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_add_milestone(&id, &-1, &P2, &r),
+        Err(Ok(Error::InvalidAmount))
+    );
+    // Plazo 0 o mayor a 28 días.
+    assert_eq!(
+        ctx.c.try_add_milestone(&id, &UNIT, &0, &r),
+        Err(Ok(Error::InvalidDeadline))
+    );
+    assert_eq!(
+        ctx.c.try_add_milestone(&id, &UNIT, &(28 * DIA + 1), &r),
+        Err(Ok(Error::InvalidDeadline))
+    );
+    // Plazo absoluto menor al del último hito (START_TS + P2).
+    assert_eq!(
+        ctx.c.try_add_milestone(&id, &UNIT, &(P2 - 1), &r),
+        Err(Ok(Error::InvalidMilestones))
+    );
+    assert_eq!(saldos(&ctx), antes);
+
+    // Plazo igual al del último hito sí se acepta.
+    ctx.c.add_milestone(&id, &UNIT, &P2, &r);
+    assert_eq!(ctx.c.get_project(&id).milestones.len(), 4);
+
+    // En un proyecto que ya tiene 10 hitos, agregar el 11.º falla.
+    let lleno = tid(env, "proyecto-lleno");
+    let (mut m10, mut p10, mut h10) = (Vec::new(env), Vec::new(env), Vec::new(env));
+    for _ in 0..MAX_MILESTONES {
+        m10.push_back(UNIT);
+        p10.push_back(DIA);
+        h10.push_back(hash(env, 9));
+    }
+    ctx.c.deposit_milestones(&ctx.client, &lleno, &m10, &p10, &h10);
+    let antes_lleno = saldos(&ctx);
+    assert_eq!(
+        ctx.c.try_add_milestone(&lleno, &UNIT, &(2 * DIA), &r),
+        Err(Ok(Error::InvalidMilestones))
+    );
+    assert_eq!(saldos(&ctx), antes_lleno);
+    assert_eq!(ctx.c.get_project(&lleno).milestones.len(), MAX_MILESTONES);
+}
+
+// Validaciones de top_up_milestone: proyecto o índice inexistente, monto
+// inválido/desborde, hito pagado o reembolsado y plazo vencido.
+#[test]
+fn test_v3_top_up_milestone_validaciones() {
+    let ctx = setup(Modo::Libre);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "proyecto-v3");
+
+    // Proyecto inexistente e índice fuera de rango.
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&tid(env, "no-existe"), &0, &UNIT),
+        Err(Ok(Error::NotFound))
+    );
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&id, &3, &UNIT),
+        Err(Ok(Error::MilestoneNotFound))
+    );
+    // Monto 0, negativo y desborde con checked_add.
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&id, &0, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&id, &0, &-1),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&id, &0, &i128::MAX),
+        Err(Ok(Error::InvalidAmount))
+    );
+
+    // Hito pagado falla con NotFunded.
+    release(&ctx, &id, 0, &ctx.freelancer);
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&id, &0, &UNIT),
+        Err(Ok(Error::NotFunded))
+    );
+
+    // Exactamente en el plazo del hito 1 falla con DeadlinePassed.
+    env.ledger().set_timestamp(START_TS + P1);
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&id, &1, &UNIT),
+        Err(Ok(Error::DeadlinePassed))
+    );
+
+    // Tras reembolsar el hito 1, falla con NotFunded.
+    ctx.c.timeout_refund_milestone(&id, &1);
+    assert_eq!(
+        ctx.c.try_top_up_milestone(&id, &1, &UNIT),
+        Err(Ok(Error::NotFunded))
+    );
+
+    // Un segundo antes del plazo del hito 2 todavía se puede aumentar.
+    env.ledger().set_timestamp(START_TS + P2 - 1);
+    ctx.c.top_up_milestone(&id, &2, &UNIT);
+    assert_eq!(ctx.c.get_project(&id).milestones.get(2).unwrap().amount, H2 + UNIT);
+}
+
+// Invariante contable con v3: depositado = pagado + reembolsado + pendiente,
+// y TTL extendido tras add_milestone y top_up_milestone.
+#[test]
+fn test_v3_total_cuadra_y_ttl_extendido() {
+    let ctx = setup(Modo::Libre);
+    let env = &ctx.env;
+    let id = deposit(&ctx, "proyecto-mixto-v3");
+    let h3 = 4 * UNIT;
+    let a1 = 2 * UNIT;
+    let a2 = UNIT;
+
+    // Agregar 4.º hito y aumentar hitos 1 y 2.
+    ctx.c.add_milestone(&id, &h3, &(4 * DIA), &hash(env, 13));
+    env.as_contract(&ctx.contract_id, || {
+        assert_eq!(env.storage().instance().get_ttl(), TTL_EXTEND_TO);
+        assert_eq!(
+            env.storage().persistent().get_ttl(&DataKey::Project(id.clone())),
+            TTL_EXTEND_TO
+        );
+    });
+
+    ctx.c.top_up_milestone(&id, &1, &a1);
+    ctx.c.top_up_milestone(&id, &2, &a2);
+    env.as_contract(&ctx.contract_id, || {
+        assert_eq!(env.storage().instance().get_ttl(), TTL_EXTEND_TO);
+        assert_eq!(
+            env.storage().persistent().get_ttl(&DataKey::Project(id.clone())),
+            TTL_EXTEND_TO
+        );
+    });
+
+    // Hito 0 pagado por el árbitro; hito 1 aprobado a mano después de su plazo
+    // (con su aumento); hito 2 reembolsado (con su aumento); hito 3 pendiente.
+    release(&ctx, &id, 0, &ctx.freelancer);
+    env.ledger().set_timestamp(START_TS + P2);
+    ctx.c.client_release_milestone(&id, &1, &ctx.freelancer);
+    ctx.c.timeout_refund_milestone(&id, &2);
+
+    let depositado = TOTAL + h3 + a1 + a2;
+    let pagado = H0 + (H1 + a1);
+    let reembolsado = H2 + a2;
+    let pendiente = h3;
+    assert_eq!(depositado, pagado + reembolsado + pendiente);
+
+    let (cliente, contrato, programador, tercero) = saldos(&ctx);
+    assert_eq!(contrato, pendiente);
+    assert_eq!(programador, pagado);
+    assert_eq!(cliente, MINT - depositado + reembolsado);
+    assert_eq!(tercero, 7);
+    assert_eq!(cliente + contrato + programador, MINT);
+    assert_eq!(
+        estados(&ctx, &id),
+        std::vec![
+            MilestoneStatus::Released,
+            MilestoneStatus::Released,
+            MilestoneStatus::Refunded,
+            MilestoneStatus::Funded,
+        ]
+    );
+}

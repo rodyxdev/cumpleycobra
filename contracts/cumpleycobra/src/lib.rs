@@ -15,6 +15,9 @@
 // simple no cambian; se agregan `deposit_milestones`, `release_milestone`,
 // `client_release_milestone`, `timeout_refund_milestone` y `get_project`.
 // El contrato v1 ya desplegado no se modifica: v2 se despliega aparte.
+//
+// v3 (25 de noviembre de 2026): extensión del pago por hitos. Ninguna función
+// de v1 ni de v2 cambia; se agregan `add_milestone` y `top_up_milestone`.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -263,6 +266,28 @@ pub struct MilestoneRefundEvent {
     pub index: u32,
     pub client: Address,
     pub amount: i128,
+}
+
+// v3: el cliente agregó un hito nuevo a un proyecto existente.
+#[contractevent(topics = ["add_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AddMilestoneEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub amount: i128,
+    pub deadline: u64,
+}
+
+// v3: el cliente aumentó el monto de un hito existente que sigue en Funded.
+#[contractevent(topics = ["top_up_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopUpMilestoneEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub amount: i128,
+    pub new_amount: i128,
 }
 
 // ---------------------------------------------------------------------------
@@ -690,6 +715,136 @@ impl CumpleYCobraContract {
     // hitos con monto, plazo, `rules_hash` y estado.
     pub fn get_project(env: Env, task_id: String) -> Result<Project, Error> {
         Self::load_project(&env, &DataKey::Project(task_id))
+    }
+
+    // -----------------------------------------------------------------------
+    // v3: agregar y aumentar hitos de un proyecto existente
+    // -----------------------------------------------------------------------
+
+    // El cliente agrega un hito nuevo al final de un proyecto existente y
+    // deposita su monto en el contrato. Mantiene las mismas invariantes que
+    // `deposit_milestones`: máximo 10 hitos en total, monto positivo, plazo
+    // entre 1 s y 28 días, y vencimiento igual o posterior al del último hito.
+    pub fn add_milestone(
+        env: Env,
+        task_id: String,
+        amount: i128,
+        deadline_secs: u64,
+        rules_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        // Primero se carga el proyecto para comprobar que existe y saber quién
+        // es su cliente.
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+
+        // Solo el cliente del proyecto puede agregar hitos y depositar fondos.
+        project.client.require_auth();
+
+        // Contrato inicializado y límite máximo de hitos por proyecto.
+        let token_addr = Self::token(&env)?;
+        if project.milestones.len() >= MAX_MILESTONES {
+            return Err(Error::InvalidMilestones);
+        }
+
+        // Validaciones de monto y plazo: monto positivo, plazo de 1 s a 28 días
+        // con `checked_add`, y vencimiento no menor al del último hito.
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if deadline_secs == 0 || deadline_secs > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let deadline = env
+            .ledger()
+            .timestamp()
+            .checked_add(deadline_secs)
+            .ok_or(Error::InvalidDeadline)?;
+        let last = project.milestones.last().ok_or(Error::InvalidMilestones)?;
+        if deadline < last.deadline {
+            return Err(Error::InvalidMilestones);
+        }
+
+        // Efectos antes de la transferencia (checks-effects-interactions):
+        // se agrega el hito en Funded y se guarda extendiendo el TTL.
+        let index = project.milestones.len();
+        project.milestones.push_back(Milestone {
+            amount,
+            deadline,
+            rules_hash,
+            status: MilestoneStatus::Funded,
+        });
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: el USDC del nuevo hito pasa del cliente al contrato.
+        token::Client::new(&env, &token_addr).transfer(
+            &project.client,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        AddMilestoneEvent {
+            task_id,
+            index,
+            amount,
+            deadline,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El cliente aumenta el monto de un hito que todavía está en Funded y
+    // antes de su plazo, transfiriendo la diferencia al contrato.
+    pub fn top_up_milestone(
+        env: Env,
+        task_id: String,
+        index: u32,
+        amount: i128,
+    ) -> Result<(), Error> {
+        // Primero se carga el proyecto para comprobar que existe y saber quién
+        // es su cliente.
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+
+        // Solo el cliente del proyecto puede depositar más fondos en el hito.
+        project.client.require_auth();
+
+        // El hito debe existir, seguir en Funded y no haber vencido su plazo.
+        let token_addr = Self::token(&env)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+
+        // Monto positivo y suma segura con `checked_add`.
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let new_amount = milestone
+            .amount
+            .checked_add(amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        // Efectos antes de la transferencia (checks-effects-interactions):
+        // se actualiza el monto del hito y se guarda extendiendo el TTL.
+        milestone.amount = new_amount;
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: el aumento pasa del cliente al contrato.
+        token::Client::new(&env, &token_addr).transfer(
+            &project.client,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        TopUpMilestoneEvent {
+            task_id,
+            index,
+            amount,
+            new_amount,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
