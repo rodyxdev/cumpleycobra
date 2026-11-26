@@ -52,13 +52,15 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def rules_hash(spec: dict) -> str:
+def rules_hash(spec: dict, *, hito: dict | None = None) -> str:
     """Hash de la versión final acordada (el pedido original no entra).
 
     `version: 1` para las tareas de v1. Una tarea con verificación por ejecución (fase 3) usa
     `version: 2`: el mismo objeto más `verification` e `interface` (lo que la entrega debe exponer).
     Una tarea web agrega `web` (las páginas acordadas) e `interface` va en null; la clave `web` solo
     existe en las tareas web, así que ningún hash anterior cambia.
+    Pago por hitos (etapa 2, `docs/hitos/diseno.md`): cuando se pasa `hito` (o viene en `spec["hito"]`),
+    usa `version: 3` con el mismo objeto de v1 o v2 más `hito: {"proyecto", "indice", "de", "titulo"}`.
     """
     agreed = {
         "version": 1,
@@ -72,7 +74,21 @@ def rules_hash(spec: dict) -> str:
         agreed.update(version=2, verification="execution", interface=spec.get("interface"))
         if spec.get("web") is not None:
             agreed["web"] = spec["web"]
+    hito_data = hito if hito is not None else spec.get("hito")
+    if hito_data is not None:
+        agreed["version"] = 3
+        agreed["hito"] = {
+            "proyecto": hito_data["proyecto"],
+            "indice": hito_data["indice"],
+            "de": hito_data["de"],
+            "titulo": hito_data["titulo"],
+        }
     return sha256_hex(canonical_bytes(agreed))
+
+
+def milestone_rules_hash(spec: dict, *, proyecto: str, indice: int, de: int, titulo: str) -> str:
+    """Hash de un hito (`version: 3`): objeto de v1/v2 más `hito`."""
+    return rules_hash(spec, hito={"proyecto": proyecto, "indice": indice, "de": de, "titulo": titulo})
 
 
 def code_hash(code: str) -> str:
