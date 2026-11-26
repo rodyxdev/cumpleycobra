@@ -132,6 +132,8 @@ def sha256_hex(data: bytes) -> str:
   - `rules_hash` `version: 2` = el mismo objeto más `verification: "execution"` e `interface` (perfil script) o `interface: null` y `web: {"pages"}` (perfil web; la clave `web` solo existe en esas tareas).
   - `verdict_hash` `version: 2` = SHA-256 de `canonical_bytes({"version": 2, "task_id", "rules_hash", "suite_hash", "workspace_hash", "approved", "stage", "criteria": [{"index", "status"}], "video_url"})`, más `evidence: {"S1": sha256, …}` solo en el perfil web. En el evento de `release`, `code_hash` es el `workspace_hash`.
   - `suite_hash` = SHA-256 de `canonical_bytes({"version": 1, "files"})`: infraestructura fija, tests (o chequeos web), clasificación por criterio y referencia.
+- Pago por hitos (etapa 2, `docs/hitos/diseno.md`), sin cambiar ningún hash anterior:
+  - `rules_hash` `version: 3` = el mismo objeto de v1 o v2 más `hito: {"proyecto": task_id, "indice": i, "de": n, "titulo"}` (`backend/hashing.py: rules_hash(..., hito=...)` y `milestone_rules_hash`). En ejecución, `verdict_hash` `version: 2` ya incluye `rules_hash`, así que distingue cada hito sin cambiar su esquema.
 
 ## Tokens (autorización sin wallets)
 
@@ -259,13 +261,13 @@ El video es evidencia de apoyo: nunca retrasa ni bloquea un pago aprobado por el
 | --- | --- | --- |
 | `POST /tasks/draft` | `raw_request` | `description`, `criteria[]`, `language`, `allowed_deps[]`, `examples[]` |
 | `POST /tasks/draft/review` | `criteria[]` | Criterios marcados como vagos, con sugerencia |
-| `POST /tasks` | `client_address`, `raw_request`, `description` (máx. 2000), `criteria[]` (1 a 8, máx. 300 c/u), `language`, `allowed_deps[]` (máx. 10), `examples[]` (máx. 8, cada campo máx. 300), `amount` (entero, unidades), `deadline_minutes` (entero, máximo 10080 = 7 días, lejos del TTL de 30 días del contrato) | `task_id`, `rules_hash`, `client_token`, `invite_token` |
-| `GET /tasks/{task_id}` | — | Pedido + criterios + estado y monto leídos del contrato |
+| `POST /tasks` | `client_address`, `raw_request`, `description` (máx. 2000), `criteria[]` (1 a 8, máx. 300 c/u), `language`, `allowed_deps[]` (máx. 10), `examples[]` (máx. 8, cada campo máx. 300), `amount` (entero, unidades), `deadline_minutes` (entero, máximo 10080 = 7 días, lejos del TTL de 30 días del contrato). Opcionales con `MILESTONES_ENABLED`: `milestones[]` (2 a 10 hitos, cada uno con `title`, `criteria[]`, `amount` entero y `deadline_minutes` hasta 40320 = 28 días; el `amount` total es la suma) y `sequential` (bool) | `task_id`, `rules_hash`, `client_token`, `invite_token` (y `milestones[]`, `sequential`, `milestones_contract_id` si tiene hitos) |
+| `GET /tasks/{task_id}` | — | Pedido + criterios + estado y monto leídos del contrato (en tareas por hitos lee `get_project` de `MILESTONES_CONTRACT_ID` y agrega `milestones[]`, `sequential` y `milestones_contract_id`) |
 | `POST /tasks/{task_id}/accept` | `freelancer_address`, `invite_token` | `freelancer_token` (exige trustline de USDC: si falta, `409 NO_USDC_TRUSTLINE`) |
-| `POST /evaluate` | `task_id`, `freelancer_address`, `code`, `video_url` + header `X-Freelancer-Token` | Veredicto |
-| `POST /tasks/{task_id}/consent` | `code_hash` (opcional; por defecto el último envío) + header `X-Freelancer-Token` | Permite al cliente ver esa entrega rechazada (solo ese `code_hash`, no las futuras); si no es una entrega rechazada, `409 NO_REJECTED_DELIVERY` |
-| `GET /tasks/{task_id}/delivery` | header `X-Client-Token` | Código + video; solo si `Released` o con consentimiento |
-| `GET /tasks/{task_id}/verdicts` | header `X-Client-Token` | Veredictos para la vista del cliente: `approved`, `stage`, `reason`, `comparison`, `security_flags`, `transaction_hash`, `video_url`, `consented` (nunca `trace`, `logic` ni código) |
+| `POST /evaluate` | `task_id`, `freelancer_address`, `code`, `video_url`, `milestone` (opcional, índice entero `>= 0` en tareas por hitos) + header `X-Freelancer-Token` | Veredicto (agrega `milestone` en tareas por hitos; 3 envíos, caché y pago con `release_milestone` independientes por hito) |
+| `POST /tasks/{task_id}/consent` | `code_hash` (opcional; por defecto el último envío), `milestone` (opcional en tareas por hitos) + header `X-Freelancer-Token` | Permite al cliente ver esa entrega rechazada (solo ese `code_hash`, no las futuras); si no es una entrega rechazada, `409 NO_REJECTED_DELIVERY` |
+| `GET /tasks/{task_id}/delivery` | header `X-Client-Token` (`?milestone=N` en tareas por hitos) | Código + video; solo si `Released` o con consentimiento (en tareas por hitos, independiente por hito) |
+| `GET /tasks/{task_id}/verdicts` | header `X-Client-Token` (`?milestone=N` en tareas por hitos) | Veredictos para la vista del cliente: `approved`, `stage`, `reason`, `comparison`, `security_flags`, `transaction_hash`, `video_url`, `consented` (nunca `trace`, `logic` ni código) |
 | `GET /demo` | — | Plantilla fija y casos A–D (fuente única: `backend/plantilla.py` y `backend/casos/`) |
 | `GET /fx/usd-mxn` | — | `rate`, `as_of`, `source`, `fallback`: tipo de cambio de referencia de Frankfurter; si falla, valor fijo de respaldo con `fallback: true` |
 | `GET /health` | — | `{"ok": true}` |
@@ -319,10 +321,12 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
   - `INVALID_REQUEST` 400 (validación, `float` en montos, JSON inválido)
   - `INVALID_TOKEN` 403
   - `TASK_NOT_FOUND` 404
+  - `MILESTONE_NOT_FOUND` 404 (índice de hito fuera de rango en tareas por hitos)
   - `NO_DELIVERY` 404 (no hay código entregado)
   - `TASK_TAKEN` 409
   - `TASK_NOT_FUNDED` 409
   - `TASK_MISMATCH` 409 (monto, cliente o `rules_hash` on-chain distintos a lo guardado)
+  - `PREVIOUS_MILESTONE_NOT_RELEASED` 409 (tarea por hitos con `sequential: true`: el hito anterior aún no está `Released`)
   - `CRITERIA_NOT_ACCEPTED` 409
   - `DEADLINE_TOO_CLOSE` 409 (quedan menos de 120 s de plazo on-chain, o no alcanza para reintentar)
   - `NO_USDC_TRUSTLINE` 409 (el programador no tiene trustline de USDC)
@@ -343,11 +347,11 @@ Respuesta de `POST /evaluate` (los cuatro primeros campos nunca cambian de nombr
 | --- | --- | --- |
 | `POST /tasks` con `verification: "execution"` | — | Perfil script: `interface` (funciones o clases). Perfil web: `language: "web"` y `web: {"pages": [...]}` (1 a 5 rutas). Encola la suite y devuelve `suite_status`. Errores propios: `403 VERIFIER_NOT_AVAILABLE` (cuenta fuera de `VERIFIER_ALLOWED_CLIENTS`), `503 VERIFIER_BUSY` (cupo de suites activas), `429 RATE_LIMITED` (ventana por IP o cuota diaria de suites) |
 | `GET /verifier/acceso?address=G…` | — | `{available}`: si esa cuenta puede crear tareas por ejecución (el frontend muestra la opción solo si sí) |
-| `GET /tasks/{id}/suite` | — | Plan público: estado, tipo y plan por criterio (`test`/`lectura` en script; `navegador`/`visual`/`lectura` y los chequeos en web), `suite_hash`, `error` legible si se rechazó y `retries_left`. Recupera una suite sin trabajo activo (la reencola o la rechaza). Nunca el código de los tests |
-| `POST /tasks/{id}/suite/reintentar` | `X-Client-Token` | Prepara otra vez una suite rechazada, sin crear otra tarea ni cambiar el `rules_hash` (máximo 2). Errores: `SUITE_NOT_REJECTED`, `TOO_MANY_SUITE_RETRIES`, más los límites de crear |
+| `GET /tasks/{id}/suite` | — | Plan público (`?milestone=N` en tareas por hitos): estado, tipo y plan por criterio (`test`/`lectura` en script; `navegador`/`visual`/`lectura` y los chequeos en web), `suite_hash`, `error` legible si se rechazó y `retries_left`. Recupera una suite sin trabajo activo (la reencola o la rechaza). Nunca el código de los tests |
+| `POST /tasks/{id}/suite/reintentar` | `X-Client-Token` | Prepara otra vez una suite rechazada (`?milestone=N` en tareas por hitos), sin crear otra tarea ni cambiar el `rules_hash` (máximo 2). Errores: `SUITE_NOT_REJECTED`, `TOO_MANY_SUITE_RETRIES`, más los límites de crear |
 | `GET /health/verificador` | — | Conteos de la cola y `oldest_queued_secs`; `503` si un trabajo lleva más de `VERIFIER_STUCK_SECS` (15 min) en cola. Para un monitor externo |
-| `POST /tasks/{id}/verificaciones` | `X-Freelancer-Token` | Encola una entrega: `source` = `code` (solo script), `zip` (base64, máx. 2 MB) o `github_public` (`repo` + `sha`). `202` con `verification_id`. Errores: `SUITE_NOT_READY`, `VERIFICATION_IN_PROGRESS`, `DEADLINE_TOO_CLOSE` (menos de 300 s), más los de `/evaluate` |
-| `GET /verificaciones/{id}` | `X-Freelancer-Token` o `X-Client-Token` | Avance real por etapa y, al terminar, el veredicto (mismos campos que `/evaluate` más `verification`, con `screenshots` y URL firmada nueva en cada consulta) |
+| `POST /tasks/{id}/verificaciones` | `X-Freelancer-Token` | Encola una entrega: `source` = `code` (solo script), `zip` (base64, máx. 2 MB) o `github_public` (`repo` + `sha`), más `milestone` opcional en tareas por hitos. `202` con `verification_id` (y `milestone` si aplica). Errores: `SUITE_NOT_READY`, `VERIFICATION_IN_PROGRESS`, `DEADLINE_TOO_CLOSE` (menos de 300 s), más los de `/evaluate` |
+| `GET /verificaciones/{id}` | `X-Freelancer-Token` o `X-Client-Token` | Avance real por etapa y, al terminar, el veredicto (mismos campos que `/evaluate` más `verification`, con `screenshots` y URL firmada nueva en cada consulta; incluye `milestone` en tareas por hitos) |
 | `GET /evidencia/{clave}?exp=&sig=` | URL firmada (HMAC, 15 min) | Una captura JPEG del perfil web |
 | `POST /verifier/claim`, `/verifier/jobs/{id}/…` | `Authorization: Bearer <VERIFIER_QUEUE_TOKEN>` + `lease_id` | Rutas del trabajador: reclamar, avance, generar y validar la suite, bajar el ZIP, entregar evidencia (la API juzga y paga) o reportar una falla (no cuenta envío) |
 
@@ -460,6 +464,7 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `EVIDENCE_BUCKET` (Cloud Storage) o `EVIDENCE_DIR` (local, por defecto `.data/evidencia`) | backend (fase 3) |
 | `VERIFIER_API_URL`, `VERIFIER_QUEUE_TOKEN`, `SANDBOX_RUNTIME`, `RUNNER_IMAGE`, `WEB_RUNNER_IMAGE`, `BUILD_NETWORK`, `BUILD_PROXY`/`BUILD_PROXY_CONTAINER`, `VERIFIER_IDLE_SHUTDOWN_SECS` (los escribe `startup.sh` en la VM) | trabajador (fase 3) |
 | `NEXT_PUBLIC_VERIFIER_ENABLED` | frontend (fase 3) |
+| `MILESTONES_ENABLED` (`false` por defecto), `MILESTONES_CONTRACT_ID` (ID del contrato v2/v3 de hitos en testnet) | backend (hitos, etapa 2) |
 
 `.env` y `state.json` nunca se suben al repositorio; mantener un `.env.example`.
 
