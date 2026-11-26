@@ -155,3 +155,28 @@ Mismo código y mismas funciones de v1, más el pago por hitos (diseño en [`doc
 ```bash
 bash scripts/hitos_testnet.sh
 ```
+
+## v3: agregar y aumentar hitos (25 de noviembre de 2026)
+
+Mismo código y mismas funciones de v1 y v2 sin cambios, más dos funciones para ampliar un proyecto por hitos ya depositado (diseño en [`docs/hitos/diseno.md`](../../docs/hitos/diseno.md)). **Los contratos v1 y v2 desplegados no se modifican:** v3 se despliega como otra instancia aparte.
+
+| | |
+| --- | --- |
+| ID del contrato v3 (testnet) | pendiente de despliegue |
+| WASM hash (`stellar contract build`) | `c623639b5c80662d21e76556edd81820a20fed103c2e095317947e12dea8db70` (16 663 bytes optimizado) |
+| Tests | `cargo test -p cumpleycobra`: 38 en verde (18 de v1 sin cambios, 14 de v2 y 6 de v3 en `src/test_hitos.rs`) |
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `add_milestone(task_id, amount, deadline_secs, rules_hash)` | Cliente del proyecto | Proyecto existente (`NotFound`), total ≤ 10 hitos (`InvalidMilestones`), `amount > 0` (`InvalidAmount`), plazo entre 1 s y 28 días con `checked_add` (`InvalidDeadline`), vencimiento absoluto ≥ plazo del último hito (`InvalidMilestones`). Guarda el hito en `Funded` (checks-effects-interactions + TTL), transfiere `amount` al contrato y publica `add_milestone` |
+| `top_up_milestone(task_id, index, amount)` | Cliente del proyecto | Hito existente (`MilestoneNotFound`), en `Funded` (`NotFunded`), antes de su plazo (`DeadlinePassed`), `amount > 0` y `checked_add` sobre el monto (`InvalidAmount`). Guarda el nuevo monto (checks-effects-interactions + TTL), transfiere `amount` al contrato y publica `top_up_milestone` |
+
+**Errores:** los códigos del 1 al 12 no cambian ni se agrega ninguno nuevo.
+
+**Script de prueba en testnet** (cuando v3 esté desplegado): [`scripts/hitos_v3_testnet.sh`](../../scripts/hitos_v3_testnet.sh) deposita 2 hitos (`0.2 + 0.2` USDC, 120 s), agrega un 3.º (`0.1` USDC, 120 s), aumenta el hito 0 (`+0.1` USDC), libera los 3 hitos con el árbitro y consulta `get_project`:
+
+```bash
+bash scripts/hitos_v3_testnet.sh <ID_DEL_CONTRATO_V3>
+```

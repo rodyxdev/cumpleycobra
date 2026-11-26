@@ -61,6 +61,8 @@ pub struct Project {
 | `client_release_milestone(task_id, index, freelancer)` | Cliente del proyecto | Aprobación manual de un hito (por ejemplo, tras un rechazo de la IA). Misma regla del programador fijo. Permitida también después del plazo de ese hito |
 | `timeout_refund_milestone(task_id, index)` | Nadie (sin firma) | Solo un hito en `Funded` cuyo plazo ya pasó. El dinero de **ese** hito vuelve siempre al cliente. Los hitos ya pagados no se tocan |
 | `get_project(task_id)` | Lectura | Cliente, programador, hitos con monto, plazo, `rules_hash` y estado |
+| `add_milestone(task_id, amount, deadline_secs, rules_hash)` (v3) | Cliente del proyecto | Agrega un hito en `Funded` al final del proyecto y transfiere `amount` al contrato. Exige proyecto existente (`NotFound`), total ≤ 10 hitos (`InvalidMilestones`), `amount > 0` (`InvalidAmount`), plazo entre 1 s y 28 días con `checked_add` (`InvalidDeadline`) y vencimiento absoluto ≥ plazo del último hito (`InvalidMilestones`). Evento `add_milestone` |
+| `top_up_milestone(task_id, index, amount)` (v3) | Cliente del proyecto | Aumenta el monto de un hito existente (`MilestoneNotFound`) que siga en `Funded` (`NotFunded`) y antes de su plazo (`DeadlinePassed`). Exige `amount > 0` y `checked_add` sobre el monto (`InvalidAmount`); transfiere `amount` al contrato. Evento `top_up_milestone` |
 
 Las cuatro primeras mueven dinero: no son «solo leer» ni «solo guardar un valor».
 
@@ -103,6 +105,11 @@ Los de hoy se reutilizan: `InvalidAmount`, `AlreadyExists`, `NotFound`, `NotFund
 - [ ] Un `task_id` repetido falla con `AlreadyExists`, entre proyectos y también entre proyecto y tarea.
 - [ ] Índice fuera de rango falla con `MilestoneNotFound`.
 - [ ] Los 11 tests de hoy siguen pasando sin cambios.
+- [ ] (v3) Camino feliz: agregar un 4.º hito (`add_milestone`) y aumentar el hito 1 (`top_up_milestone`), saldos y eventos correctos, y al pagar todo el contrato queda en 0.
+- [ ] (v3) `add_milestone` y `top_up_milestone` firmados por alguien que no es el cliente fallan (modo estricto, sin `mock_all_auths`).
+- [ ] (v3) `add_milestone`: agregar el hito 11 falla (`InvalidMilestones`), plazo absoluto menor al del último hito falla (`InvalidMilestones`), monto 0/negativo falla (`InvalidAmount`) y plazo 0 o mayor a 28 días falla (`InvalidDeadline`).
+- [ ] (v3) `top_up_milestone`: hito pagado o reembolsado falla con `NotFunded`, exactamente en su plazo falla con `DeadlinePassed`, índice fuera de rango falla con `MilestoneNotFound` y monto 0/negativo o desborde falla con `InvalidAmount`.
+- [ ] (v3) El total siempre cuadra (`depositado = pagado + reembolsado + pendiente`) y se extiende el TTL tras ambas operaciones.
 
 ## 3. Backend
 
