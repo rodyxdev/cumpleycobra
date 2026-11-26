@@ -158,13 +158,17 @@ bash scripts/hitos_testnet.sh
 
 ## v3: agregar y aumentar hitos (25 de noviembre de 2026)
 
-Mismo código y mismas funciones de v1 y v2 sin cambios, más dos funciones para ampliar un proyecto por hitos ya depositado (diseño en [`docs/hitos/diseno.md`](../../docs/hitos/diseno.md)). **Los contratos v1 y v2 desplegados no se modifican:** v3 se despliega como otra instancia aparte.
+Mismo código y mismas funciones de v1 y v2 sin cambios, más dos funciones para ampliar un proyecto por hitos ya depositado (diseño en [`docs/hitos/diseno.md`](../../docs/hitos/diseno.md)). **Los contratos v1 y v2 desplegados no se modifican:** v3 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
 
 | | |
 | --- | --- |
-| ID del contrato v3 (testnet) | pendiente de despliegue |
-| WASM hash (`stellar contract build`) | `c623639b5c80662d21e76556edd81820a20fed103c2e095317947e12dea8db70` (16 663 bytes optimizado) |
+| ID del contrato v3 (testnet) | `CCBZZMNYLDIDL55G7LFGVPRA2QPVTPOGYKWDNO3GKQ2CHRIR5O5JFJTC` |
+| WASM hash (`stellar contract build`) | `c623639b5c80662d21e76556edd81820a20fed103c2e095317947e12dea8db70` (16 663 bytes optimizado; subida tx [`8bc08783…`](https://stellar.expert/explorer/testnet/tx/8bc08783bd191465f683bdfba7f4d164a2fb1688b93f9d7f87bc196ac192ea15)) |
+| Despliegue | tx [`df4c596d…`](https://stellar.expert/explorer/testnet/tx/df4c596db8c558d1997d24e12ea69c94cb8fccf1d0e81d6955d1e8396414da23) (`--alias cumpleycobra-v3`) |
+| `initialize` | tx [`37ac8df4…`](https://stellar.expert/explorer/testnet/tx/37ac8df43e762140894e873834a65e74b09183619f4af8b0e90389d550984f4a), árbitro `GAGGEH…VOKZGY`, token `CBIELTK6…CAMA` |
 | Tests | `cargo test -p cumpleycobra`: 38 en verde (18 de v1 sin cambios, 14 de v2 y 6 de v3 en `src/test_hitos.rs`) |
+
+Explorador: https://stellar.expert/explorer/testnet/contract/CCBZZMNYLDIDL55G7LFGVPRA2QPVTPOGYKWDNO3GKQ2CHRIR5O5JFJTC
 
 **Funciones nuevas:**
 
@@ -175,8 +179,19 @@ Mismo código y mismas funciones de v1 y v2 sin cambios, más dos funciones para
 
 **Errores:** los códigos del 1 al 12 no cambian ni se agrega ninguno nuevo.
 
-**Script de prueba en testnet** (cuando v3 esté desplegado): [`scripts/hitos_v3_testnet.sh`](../../scripts/hitos_v3_testnet.sh) deposita 2 hitos (`0.2 + 0.2` USDC, 120 s), agrega un 3.º (`0.1` USDC, 120 s), aumenta el hito 0 (`+0.1` USDC), libera los 3 hitos con el árbitro y consulta `get_project`:
+**Proyecto real en testnet** con [`scripts/hitos_v3_testnet.sh`](../../scripts/hitos_v3_testnet.sh), proyecto `hitos-v3-1795672283`:
+
+| Paso | Quién | tx |
+| --- | --- | --- |
+| `deposit_milestones`: 2 hitos de 0.2 + 0.2 USDC (120 s) | `cyc-client` | [`af63c030…`](https://stellar.expert/explorer/testnet/tx/af63c030efaed7222543f93cf105c6d93237c7c314f15b07ecde9b2bec0e9f89) |
+| `add_milestone`: 3.º hito (índice 2) de 0.1 USDC (120 s) | `cyc-client` | [`99c24b57…`](https://stellar.expert/explorer/testnet/tx/99c24b57fd288231c31f8a728ccc1283386fa76b89e5aa67590defe55932c712) |
+| `top_up_milestone`: hito 0 +0.1 USDC (pasa a 0.3 USDC) | `cyc-client` | [`34bcc592…`](https://stellar.expert/explorer/testnet/tx/34bcc592979a29854ce50028c2c79356fef9611a769a4461a7e9ab0c9b48b7af) |
+| `release_milestone`: hito 0 (0.3 USDC) al programador | `cyc-arbiter` | [`4a89d7eb…`](https://stellar.expert/explorer/testnet/tx/4a89d7eb0a92f742d74eb8e479cb32794ad904e21d2f084bfcc7dfa8fc95abb5) |
+| `release_milestone`: hito 1 (0.2 USDC) al programador | `cyc-arbiter` | [`9a6920d7…`](https://stellar.expert/explorer/testnet/tx/9a6920d7aed5a1712b61bc3544153428904080e35cd9e7258f023de97d67459e) |
+| `release_milestone`: hito 2 (0.1 USDC) al programador | `cyc-arbiter` | [`32e54025…`](https://stellar.expert/explorer/testnet/tx/32e540258a27a4432b9421b57f8f4efec57eaa620f14d9cbd1d8ef6f17da5013) |
+
+`get_project` al final: 3 hitos en `Released` (`3000000`, `2000000`, `1000000`), programador `GDOEME…DPHPNK` fijo y saldo del contrato en `0` USDC. Los hashes de esta corrida son SHA-256 de textos de ejemplo: el backend todavía no verifica hitos (etapa 2 del diseño).
 
 ```bash
-bash scripts/hitos_v3_testnet.sh <ID_DEL_CONTRATO_V3>
+bash scripts/hitos_v3_testnet.sh
 ```

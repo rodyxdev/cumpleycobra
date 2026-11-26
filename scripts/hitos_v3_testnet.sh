@@ -11,10 +11,10 @@
 # Los hashes de criterios, código y veredicto son SHA-256 de textos de ejemplo: en esta etapa el
 # backend todavía no verifica hitos (etapa 2).
 #
-# Uso: bash scripts/hitos_v3_testnet.sh ID_DEL_CONTRATO_V3
+# Uso: bash scripts/hitos_v3_testnet.sh [ID_DEL_CONTRATO_V3]
 set -euo pipefail
 
-V3="${1:?Uso: bash scripts/hitos_v3_testnet.sh ID_DEL_CONTRATO_V3}"
+V3="${1:-CCBZZMNYLDIDL55G7LFGVPRA2QPVTPOGYKWDNO3GKQ2CHRIR5O5JFJTC}"
 NET=(--network testnet)
 CLIENT=$(stellar keys public-key cyc-client)
 FREELANCER=$(stellar keys public-key cyc-freelancer)
