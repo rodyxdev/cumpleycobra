@@ -42,6 +42,7 @@ from .juez_web import WebEvidenceChecker, judge_web
 from .regla import decide, decide_web
 from .seguridad import security_scan
 from .senales import collect_signals, load_sources, output_signals
+from .. import hitos
 from ..hashing import verdict_hash_v2
 from ..limites import client_ip, rate_limiter
 from ..llm import LLMError, Usage
@@ -168,18 +169,24 @@ def admit_suite(ip: str) -> None:
     rate_limiter.consume_daily("suite")
 
 
-def start_suite(task: dict) -> None:
+def start_suite(task: dict, milestone: int | None = None) -> None:
     """Suite nueva (o reiniciada) y su trabajo en la cola. Quien llama guarda el estado."""
-    spec = task["spec"]
-    task["suite"] = web_mod.new_suite_state(spec) if spec.get("web") else suite_mod.new_suite_state(spec)
-    task["suite"]["started_at"] = time.time()
-    task["suite_job"] = queue().enqueue("suite", task["task_id"], {"spec": execution_spec(spec)})["id"]
+    target = hitos.target_for(task, milestone)
+    spec = target["spec"]
+    target["suite"] = web_mod.new_suite_state(spec) if spec.get("web") else suite_mod.new_suite_state(spec)
+    target["suite"]["started_at"] = time.time()
+    payload = {"spec": execution_spec(spec)}
+    if milestone is not None:
+        payload["milestone"] = milestone
+    target["suite_job"] = queue().enqueue("suite", task["task_id"], payload)["id"]
 
 
-def _suite_jobs(task: dict) -> list[dict]:
+def _suite_jobs(task: dict, milestone: int | None = None) -> list[dict]:
     """Trabajos de la suite vigente (los de antes de un reintento del cliente no cuentan)."""
-    since = task["suite"].get("started_at", 0)
-    return [j for j in queue().for_task(task["task_id"]) if j["kind"] == "suite" and j["created_at"] >= since - 1]
+    target = hitos.target_for(task, milestone)
+    since = target["suite"].get("started_at", 0)
+    return [j for j in queue().for_task(task["task_id"])
+            if j["kind"] == "suite" and j["payload"].get("milestone") == milestone and j["created_at"] >= since - 1]
 
 
 def _suite_gave_up(suite: dict, detail: str) -> None:
@@ -188,28 +195,33 @@ def _suite_gave_up(suite: dict, detail: str) -> None:
     suite["error_public"] = "El verificador no estuvo disponible; no es un problema de tu acuerdo. Puedes pedir otro intento"
 
 
-async def reconcile_suite(task: dict) -> None:
+async def reconcile_suite(task: dict, milestone: int | None = None) -> None:
     """Recupera una suite sin trabajo activo (p. ej. la VM Spot se detuvo tres veces y el plazo del
     trabajo venció sin pasar por /fail): la reencola o, agotados los intentos, la marca rechazada
     para que el cliente pueda pedir otro intento. Sin esto la tarea se queda «preparando» para siempre."""
-    suite = task.get("suite")
+    target = hitos.target_for(task, milestone)
+    suite = target.get("suite")
     if not arranque.suite_waiting(suite) or time.time() - suite.get("started_at", 0) < SUITE_GRACE_SECS:
         return
-    if any(j["status"] in ("queued", "running") for j in _suite_jobs(task)):
+    if any(j["status"] in ("queued", "running") for j in _suite_jobs(task, milestone)):
         return
     m = api()
     async with m.store().lock(task["task_id"]):
-        if not arranque.suite_waiting(task["suite"]):
+        target = hitos.target_for(task, milestone)
+        if not arranque.suite_waiting(target["suite"]):
             return
-        jobs = _suite_jobs(task)
+        jobs = _suite_jobs(task, milestone)
         if any(j["status"] in ("queued", "running") for j in jobs):
             return
         if len(jobs) < SUITE_JOB_ATTEMPTS:
-            task["suite_job"] = queue().enqueue("suite", task["task_id"], {"spec": execution_spec(task["spec"])})["id"]
+            payload = {"spec": execution_spec(target["spec"])}
+            if milestone is not None:
+                payload["milestone"] = milestone
+            target["suite_job"] = queue().enqueue("suite", task["task_id"], payload)["id"]
             log.warning("suite de %s sin trabajo activo: se reencola (%d de %d)", task["task_id"], len(jobs) + 1,
                         SUITE_JOB_ATTEMPTS)
         else:
-            _suite_gave_up(task["suite"], "el trabajo de la suite venció sin respuesta del verificador")
+            _suite_gave_up(target["suite"], "el trabajo de la suite venció sin respuesta del verificador")
             log.warning("suite de %s sin trabajo activo y sin intentos: rechazada", task["task_id"])
         m.store().save()
 
@@ -225,10 +237,11 @@ async def claim(authorization: str | None = Header(default=None)):
     payload = job["payload"]
     if job["kind"] == "verify":
         task = api().get_task_or_404(job["task_id"])
-        # Los tests (o los chequeos web) se leen al reclamar: siempre la suite vigente de la tarea.
-        payload = {**payload, "tests": dict(task["suite"]["files"])}
-        if task["suite"].get("profile") == "web":
-            payload["checks"] = web_mod.accepted_checks(task["suite"])
+        target = hitos.target_for(task, payload.get("milestone"))
+        # Los tests (o los chequeos web) se leen al reclamar: siempre la suite vigente de la tarea o hito.
+        payload = {**payload, "tests": dict(target["suite"]["files"])}
+        if target["suite"].get("profile") == "web":
+            payload["checks"] = web_mod.accepted_checks(target["suite"])
     return {"id": job["id"], "kind": job["kind"], "lease_id": job["lease_id"], "payload": payload}
 
 
@@ -242,14 +255,14 @@ async def progress(job_id: str, body: ProgressIn, authorization: str | None = He
     return {"ok": True}
 
 
-def _validate_step(task: dict) -> dict | None:
+def _validate_step(target: dict) -> dict | None:
     """Lo que el verificador debe validar ahora (o None si no hay nada pendiente con archivos)."""
-    suite = task["suite"]
+    suite = target["suite"]
     if suite.get("profile") == "web":
         checks = web_mod.to_validate(suite)
         if not checks:
             return None
-        return {"next": "validate", "profile": "web", "round": suite["round"], "pages": task["spec"]["web"]["pages"],
+        return {"next": "validate", "profile": "web", "round": suite["round"], "pages": target["spec"]["web"]["pages"],
                 "checks": checks, "reference_site": suite.get("reference_site")}
     to_check = {c["index"] for c in suite_mod.pending(suite)} & {suite_mod.criterion_index(f) for f in suite["files"]}
     if not to_check:
@@ -258,15 +271,15 @@ def _validate_step(task: dict) -> dict | None:
             "reference": suite.get("reference")}
 
 
-async def _advance_suite(job_id: str, lease_id: str, task: dict) -> dict:
+async def _advance_suite(job_id: str, lease_id: str, target: dict) -> dict:
     """Genera rondas hasta tener algo que validar o terminar. Quien llama tiene el candado de la tarea."""
     m = api()
-    suite = task["suite"]
+    suite = target["suite"]
     mod = perfil.suite_module(suite)
     while True:
         queue().progress(job_id, lease_id, {"stage": "suite", "detail": f"generando la ronda {suite['round'] + 1}"})
         try:
-            await mod.generate_round(task["spec"], suite, m.app.state.gemini)
+            await mod.generate_round(target["spec"], suite, m.app.state.gemini)
         except LLMError as exc:
             suite["status"] = "rechazada"
             suite["error"] = str(exc)[:300]
@@ -274,7 +287,7 @@ async def _advance_suite(job_id: str, lease_id: str, task: dict) -> dict:
             m.store().save()
             queue().finish(job_id, lease_id, "failed", {"error": suite["error"]})
             return {"next": "done"}
-        step = _validate_step(task)
+        step = _validate_step(target)
         if step:
             m.store().save()
             return step
@@ -294,13 +307,15 @@ async def suite_generate(job_id: str, body: LeaseIn, authorization: str | None =
     job = leased(job_id, body.lease_id)
     m = api()
     task = m.get_task_or_404(job["task_id"])
+    milestone = job["payload"].get("milestone")
     async with m.store().lock(task["task_id"]):
-        step = _validate_step(task) if task["suite"]["status"] == "validando" else None
+        target = hitos.target_for(task, milestone)
+        step = _validate_step(target) if target["suite"]["status"] == "validando" else None
         if step:
             # Un trabajo anterior generó esta ronda y el verificador falló al validarla: se reanuda
             # la validación sin volver a pedirle tests al modelo.
             return step
-        return await _advance_suite(job_id, body.lease_id, task)
+        return await _advance_suite(job_id, body.lease_id, target)
 
 
 @router.post("/verifier/jobs/{job_id}/suite/validation")
@@ -309,8 +324,10 @@ async def suite_validation(job_id: str, body: ValidationIn, authorization: str |
     job = leased(job_id, body.lease_id)
     m = api()
     task = m.get_task_or_404(job["task_id"])
+    milestone = job["payload"].get("milestone")
     async with m.store().lock(task["task_id"]):
-        suite = task["suite"]
+        target = hitos.target_for(task, milestone)
+        suite = target["suite"]
         if suite.get("profile") == "web":
             if body.web_empty is None:
                 raise m.err(400, "INVALID_REQUEST", "Falta web_empty para validar la suite web")
@@ -323,8 +340,8 @@ async def suite_validation(job_id: str, body: ValidationIn, authorization: str |
                                                body.reference.model_dump() if body.reference else None)
         m.store().save()
         if again:
-            return await _advance_suite(job_id, body.lease_id, task)
-    queue().finish(job_id, body.lease_id, "done", perfil.public_plan(task["suite"]))
+            return await _advance_suite(job_id, body.lease_id, target)
+    queue().finish(job_id, body.lease_id, "done", perfil.public_plan(target["suite"]))
     return {"next": "done"}
 
 
@@ -348,14 +365,16 @@ async def fail(job_id: str, body: FailIn, authorization: str | None = Header(def
         # Falla de infraestructura, no de la suite: se reintenta con otro trabajo (hasta 3 en total).
         m = api()
         task = m.get_task_or_404(job["task_id"])
+        milestone = job["payload"].get("milestone")
         async with m.store().lock(task["task_id"]):
-            if job["id"] != task.get("suite_job") or not arranque.suite_waiting(task["suite"]):
+            target = hitos.target_for(task, milestone)
+            if job["id"] != target.get("suite_job") or not arranque.suite_waiting(target["suite"]):
                 return {"ok": True}  # trabajo de una suite anterior (el cliente pidió otro intento)
-            tries = len(_suite_jobs(task))
+            tries = len(_suite_jobs(task, milestone))
             if tries < SUITE_JOB_ATTEMPTS:
-                task["suite_job"] = queue().enqueue("suite", task["task_id"], job["payload"])["id"]
+                target["suite_job"] = queue().enqueue("suite", task["task_id"], job["payload"])["id"]
             else:
-                _suite_gave_up(task["suite"], f"el verificador no pudo ejecutar la suite: {body.message[:200]}")
+                _suite_gave_up(target["suite"], f"el verificador no pudo ejecutar la suite: {body.message[:200]}")
             m.store().save()
     return {"ok": True}
 
@@ -598,23 +617,30 @@ async def _judge_web_and_pay(task: dict, job: dict, ev: dict, workspace_hash: st
 # --- públicas ----------------------------------------------------------------------------
 
 @router.get("/tasks/{task_id}/suite")
-async def task_suite(task_id: str):
+async def task_suite(task_id: str, milestone: int | None = None):
     guard_enabled()
-    task = api().get_task_or_404(task_id)
+    m = api()
+    task = m.get_task_or_404(task_id)
     if task.get("verification") != "execution":
-        raise api().err(404, "NOT_FOUND", "Esta tarea no usa verificación por ejecución")
-    await reconcile_suite(task)
-    if arranque.suite_waiting(task["suite"]):
-        arranque.wake(api().app)
-    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": retries_left(task)}
+        raise m.err(404, "NOT_FOUND", "Esta tarea no usa verificación por ejecución")
+    idx = m.resolve_milestone_index(task, milestone)
+    target = hitos.target_for(task, idx)
+    await reconcile_suite(task, idx)
+    if arranque.suite_waiting(target["suite"]):
+        arranque.wake(m.app)
+    out = {"task_id": task_id, **perfil.public_plan(target["suite"]), "retries_left": retries_left(target)}
+    if idx is not None:
+        out["milestone"] = idx
+    return out
 
 
-def retries_left(task: dict) -> int:
-    return max(0, MAX_SUITE_RETRIES - task.get("suite_retries", 0))
+def retries_left(target: dict) -> int:
+    return max(0, MAX_SUITE_RETRIES - target.get("suite_retries", 0))
 
 
 @router.post("/tasks/{task_id}/suite/reintentar", status_code=202)
-async def retry_suite(task_id: str, request: Request, x_client_token: str | None = Header(default=None)):
+async def retry_suite(task_id: str, request: Request, milestone: int | None = None,
+                      x_client_token: str | None = Header(default=None)):
     """El cliente pide preparar otra vez una suite rechazada, sin crear otra tarea.
 
     El `rules_hash` no depende de la suite, así que sirve también si ya depositó. Solo con la suite
@@ -627,18 +653,24 @@ async def retry_suite(task_id: str, request: Request, x_client_token: str | None
         raise m.err(404, "NOT_FOUND", "Esta tarea no usa verificación por ejecución")
     if not m.token_ok(task["client_token"], x_client_token):
         raise m.err(403, "INVALID_TOKEN", "Token de cliente inválido para esta tarea")
+    idx = m.resolve_milestone_index(task, milestone)
     async with m.store().lock(task_id):
-        if task["suite"]["status"] != "rechazada":
+        target = hitos.target_for(task, idx)
+        if target["suite"]["status"] != "rechazada":
             raise m.err(409, "SUITE_NOT_REJECTED", "Solo se puede pedir otro intento de una suite rechazada")
-        if retries_left(task) <= 0:
+        if retries_left(target) <= 0:
             raise m.err(429, "TOO_MANY_SUITE_RETRIES",
                         f"Ya se usaron los {MAX_SUITE_RETRIES} intentos extra; crea otra tarea con los criterios ajustados")
         admit_suite(client_ip(request))
-        start_suite(task)
-        task["suite_retries"] = task.get("suite_retries", 0) + 1
+        start_suite(task, idx)
+        target["suite_retries"] = target.get("suite_retries", 0) + 1
         m.store().save()
     arranque.wake(m.app)
-    return {"task_id": task_id, **perfil.public_plan(task["suite"]), "retries_left": retries_left(task)}
+    target = hitos.target_for(task, idx)
+    out = {"task_id": task_id, **perfil.public_plan(target["suite"]), "retries_left": retries_left(target)}
+    if idx is not None:
+        out["milestone"] = idx
+    return out
 
 
 class CodeSource(Strict):

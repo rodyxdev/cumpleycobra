@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from starlette.concurrency import run_in_threadpool
 from stellar_sdk import StrKey
 
-from . import drafting, ejecucion, gemini, identidad, reputacion
+from . import drafting, ejecucion, gemini, hitos, identidad, reputacion
 from .ejecucion import suite as exec_suite
 from .ejecucion import arranque as exec_arranque
 from .ejecucion import evidencia as exec_evidencia
@@ -86,18 +86,21 @@ class CreateTaskIn(Strict):
     client_address: StrictStr
     raw_request: StrictStr = Field(default="", max_length=2000)
     description: drafting.Description
-    criteria: list[drafting.Criterion] = Field(min_length=1, max_length=8)
+    criteria: list[drafting.Criterion] = Field(default=[], max_length=8)
     language: StrictStr
     allowed_deps: list[StrictStr] = Field(default=[], max_length=drafting.MAX_ALLOWED_DEPS)
     examples: list[drafting.Example] = Field(default=[], max_length=drafting.MAX_EXAMPLES)
-    amount: StrictInt = Field(gt=0)
-    # 7 días: muy lejos del TTL de 30 días que el contrato extiende en cada escritura.
-    deadline_minutes: StrictInt = Field(gt=0, le=MAX_DEADLINE_MINUTES)
+    amount: StrictInt | None = Field(default=None, gt=0)
+    # 7 días en tareas simples (hasta 28 días por hito en proyectos por hitos).
+    deadline_minutes: StrictInt | None = Field(default=None, gt=0, le=hitos.MAX_MILESTONE_DEADLINE_MINUTES)
     # Fase 3 (detrás de VERIFIER_ENABLED): verificar ejecutando el código contra una suite oculta.
     verification: Literal["static", "execution"] = "static"
     interface: Interface | None = None
     # Perfil web (sitio HTML/CSS/JS): páginas a revisar en el navegador; va sin `interface`.
     web: WebSpec | None = None
+    # Etapa 2 (detrás de MILESTONES_ENABLED): proyecto por hitos (2 a 10).
+    milestones: list[hitos.MilestoneIn] | None = None
+    sequential: bool = False
 
 
 class AcceptIn(Strict):
@@ -244,6 +247,31 @@ async def read_chain(task_id: str) -> tuple[dict | None, int]:
     return onchain, now
 
 
+async def read_project_chain(task_id: str) -> tuple[dict | None, int]:
+    """Proyecto por hitos on-chain (`get_project`) y timestamp del ledger. 502 si el RPC no responde."""
+    try:
+        onchain = await run_in_threadpool(chain().get_project, task_id)
+        now = await run_in_threadpool(chain().ledger_time)
+    except (StellarUnavailable, ContractError) as exc:
+        raise err(502, "CHAIN_UNAVAILABLE", f"No se pudo leer el contrato de hitos ({exc})") from exc
+    return onchain, now
+
+
+def resolve_milestone_index(task: dict, milestone: int | None) -> int | None:
+    """Valida el parámetro `milestone` frente a si la tarea es por hitos o simple."""
+    if not hitos.is_milestone_task(task):
+        if milestone is not None:
+            raise err(400, "INVALID_REQUEST", "Esta tarea no es por hitos")
+        return None
+    if not hitos.enabled():
+        raise err(400, "INVALID_REQUEST", "El pago por hitos no está habilitado")
+    if milestone is None:
+        raise err(400, "INVALID_REQUEST", "Esta tarea es por hitos: indica el índice en 'milestone'")
+    if milestone < 0 or milestone >= len(task["milestones"]):
+        raise err(404, "MILESTONE_NOT_FOUND", "No existe ese hito en la tarea")
+    return milestone
+
+
 class ClockUnavailable(Exception):
     """No se pudo leer el reloj del ledger: es un error de red, no falta de plazo."""
 
@@ -278,13 +306,25 @@ async def create_task(body: CreateTaskIn, request: Request):
         raise err(400, "INVALID_REQUEST", "Una tarea web usa language: 'web'")
     if not web_task and body.language != "python":
         raise err(400, "INVALID_REQUEST", "Por ahora el único lenguaje soportado es 'python' (o 'web' con páginas)")
+
+    has_milestones = body.milestones is not None
+    if has_milestones:
+        if not hitos.enabled():
+            raise err(400, "INVALID_REQUEST", "El pago por hitos no está habilitado")
+    else:
+        if body.sequential:
+            raise err(400, "INVALID_REQUEST", "'sequential' solo aplica a tareas por hitos")
+        if body.amount is None:
+            raise err(400, "INVALID_REQUEST", "Falta el campo 'amount'")
+        if body.deadline_minutes is None or body.deadline_minutes > MAX_DEADLINE_MINUTES:
+            raise err(400, "INVALID_REQUEST", f"'deadline_minutes' debe estar entre 1 y {MAX_DEADLINE_MINUTES}")
+
     criteria = [c.strip() for c in body.criteria if c.strip()]
-    if not criteria:
+    if not has_milestones and not criteria:
         raise err(400, "INVALID_REQUEST", "Debe haber al menos un criterio")
 
-    spec = {
+    base_spec = {
         "description": body.description,
-        "criteria": criteria,
         "language": body.language,
         "allowed_deps": sorted(set(body.allowed_deps)),
         "examples": [e.model_dump() for e in body.examples],
@@ -299,22 +339,41 @@ async def create_task(body: CreateTaskIn, request: Request):
         if web_task:
             if body.interface is not None:
                 raise err(400, "INVALID_REQUEST", "Una tarea web lleva 'web' (páginas) y no 'interface'")
-            spec["verification"] = "execution"
-            spec["interface"] = None
-            spec["web"] = body.web.model_dump(mode="json")
+            base_spec["verification"] = "execution"
+            base_spec["interface"] = None
+            base_spec["web"] = body.web.model_dump(mode="json")
         else:
             if body.interface is None:
                 raise err(400, "INVALID_REQUEST", "Una tarea con verificación por ejecución necesita 'interface'")
             if any(sym.kind == "asgi_app" for sym in body.interface.symbols):
                 raise err(400, "INVALID_REQUEST", "Por ahora la verificación por ejecución solo acepta funciones y clases")
-            spec["verification"] = "execution"
-            spec["interface"] = body.interface.model_dump(mode="json")
+            base_spec["verification"] = "execution"
+            base_spec["interface"] = body.interface.model_dump(mode="json")
     elif body.interface is not None or web_task:
         raise err(400, "INVALID_REQUEST", "'interface' y 'web' solo aplican con verification: 'execution'")
+
+    task_id = secrets.token_urlsafe(12)
+    milestones_list: list[dict] | None = None
+    if has_milestones:
+        try:
+            milestones_list, total_amount, max_dm, combined = hitos.build_milestones(
+                body.milestones, task_id=task_id, base_spec=base_spec
+            )
+        except ValueError as exc:
+            raise err(400, "INVALID_REQUEST", str(exc)) from None
+        if body.amount is not None and body.amount != total_amount:
+            raise err(400, "INVALID_REQUEST", "El monto total debe coincidir con la suma de los hitos")
+        amount = total_amount
+        deadline_minutes = body.deadline_minutes if body.deadline_minutes is not None else max_dm
+        spec = {**base_spec, "criteria": criteria or combined}
+    else:
+        amount = body.amount
+        deadline_minutes = body.deadline_minutes
+        spec = {**base_spec, "criteria": criteria}
+
     if execution:
         # La suite cuesta modelo y VM antes del depósito: límites propios (VERIFIER_BUSY o 429).
         exec_rutas.admit_suite(client_ip(request))
-    task_id = secrets.token_urlsafe(12)
     task = {
         "task_id": task_id,
         "created_at": int(time.time()),
@@ -322,8 +381,8 @@ async def create_task(body: CreateTaskIn, request: Request):
         "raw_request": body.raw_request,
         "spec": spec,
         "rules_hash": rules_hash(spec),
-        "amount": body.amount,
-        "deadline_minutes": body.deadline_minutes,
+        "amount": amount,
+        "deadline_minutes": deadline_minutes,
         "client_token": secrets.token_urlsafe(32),
         "invite_token": secrets.token_urlsafe(32),
         "freelancer_address": None,
@@ -334,13 +393,27 @@ async def create_task(body: CreateTaskIn, request: Request):
         "codes": {},
         "release": None,
     }
+    if milestones_list is not None:
+        task["milestones"] = milestones_list
+        task["sequential"] = bool(body.sequential)
+        task["milestones_contract_id"] = hitos.contract_id()
     if execution:
         task["verification"] = "execution"
-        task["suite"] = exec_web.new_suite_state(spec) if web_task else exec_suite.new_suite_state(spec)
+        if milestones_list is not None:
+            for m_doc in milestones_list:
+                m_doc["suite"] = exec_web.new_suite_state(m_doc["spec"]) if web_task else exec_suite.new_suite_state(m_doc["spec"])
+                m_doc["suite_retries"] = 0
+                m_doc["verifications"] = []
+        else:
+            task["suite"] = exec_web.new_suite_state(spec) if web_task else exec_suite.new_suite_state(spec)
     store().tasks[task_id] = task
     store().save()
     if execution:
-        exec_rutas.start_suite(task)
+        if milestones_list is not None:
+            for m_doc in milestones_list:
+                exec_rutas.start_suite(task, milestone=m_doc["index"])
+        else:
+            exec_rutas.start_suite(task)
         store().save()
         exec_arranque.wake(app)
     out = {
@@ -350,7 +423,22 @@ async def create_task(body: CreateTaskIn, request: Request):
         "invite_token": task["invite_token"],
     }
     if execution:
-        out["suite_status"] = task["suite"]["status"]
+        out["suite_status"] = (
+            milestones_list[0]["suite"]["status"] if milestones_list is not None else task["suite"]["status"]
+        )
+    if milestones_list is not None:
+        out["amount"] = amount
+        out["milestones"] = [
+            {
+                "index": m_doc["index"],
+                "title": m_doc["title"],
+                "amount": m_doc["amount"],
+                "deadline_minutes": m_doc["deadline_minutes"],
+                "rules_hash": m_doc["rules_hash"],
+                **({"suite_status": m_doc["suite"]["status"]} if execution else {}),
+            }
+            for m_doc in milestones_list
+        ]
     return out
 
 
@@ -375,18 +463,29 @@ async def review_draft(body: drafting.ReviewRequestIn):
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
     task = get_task_or_404(task_id)
-    onchain, left, chain_error = None, None, None
+    is_ms = hitos.is_milestone_task(task)
+    onchain, left, now, chain_error = None, None, None, None
     try:
-        onchain, now = await read_chain(task_id)
-        if onchain:
-            left = onchain["deadline"] - now
+        if is_ms:
+            onchain, now = await read_project_chain(task_id)
+        else:
+            onchain, now = await read_chain(task_id)
+            if onchain:
+                left = onchain["deadline"] - now
     except ApiError as exc:
         chain_error = exc.message
-    if exec_arranque.suite_waiting(task.get("suite")) and ejecucion.enabled():
-        await exec_rutas.reconcile_suite(task)  # suite sin trabajo activo: reencolar o rechazar
-    if exec_arranque.suite_waiting(task.get("suite")):
-        exec_arranque.wake(app)  # la suite espera al verificador: que la VM esté encendida
-    return {
+    if is_ms:
+        for m_doc in task["milestones"]:
+            if exec_arranque.suite_waiting(m_doc.get("suite")) and ejecucion.enabled():
+                await exec_rutas.reconcile_suite(task, m_doc["index"])
+            if exec_arranque.suite_waiting(m_doc.get("suite")):
+                exec_arranque.wake(app)
+    else:
+        if exec_arranque.suite_waiting(task.get("suite")) and ejecucion.enabled():
+            await exec_rutas.reconcile_suite(task)  # suite sin trabajo activo: reencolar o rechazar
+        if exec_arranque.suite_waiting(task.get("suite")):
+            exec_arranque.wake(app)  # la suite espera al verificador: que la VM esté encendida
+    out = {
         "task_id": task_id,
         "raw_request": task["raw_request"],
         **task["spec"],
@@ -409,6 +508,36 @@ async def get_task(task_id: str):
         "suite": ({**exec_public_plan(task["suite"]), "retries_left": exec_rutas.retries_left(task)}
                   if task.get("suite") else exec_public_plan(None)),
     }
+    if is_ms:
+        onchain_ms = (onchain or {}).get("milestones") or []
+        out["sequential"] = bool(task.get("sequential"))
+        out["milestones_contract_id"] = task.get("milestones_contract_id")
+        out["milestones"] = [
+            {
+                "index": m_doc["index"],
+                "title": m_doc["title"],
+                "criteria": list(m_doc["spec"]["criteria"]),
+                "amount": m_doc["amount"],
+                "deadline_minutes": m_doc["deadline_minutes"],
+                "rules_hash": m_doc["rules_hash"],
+                "submissions_used": len(m_doc["submissions"]),
+                "max_submissions": MAX_SUBMISSIONS,
+                "onchain": onchain_ms[m_doc["index"]] if m_doc["index"] < len(onchain_ms) else None,
+                "seconds_left": (
+                    onchain_ms[m_doc["index"]]["deadline"] - now
+                    if now is not None and m_doc["index"] < len(onchain_ms) else None
+                ),
+                "latest_code_hash": m_doc.get("latest_code_hash"),
+                "consented_code_hash": m_doc.get("consented_code_hash"),
+                "latest_rejected": bool(
+                    m_doc.get("latest_code_hash") and not m_doc["codes"][m_doc["latest_code_hash"]].get("approved")
+                ),
+                "suite": ({**exec_public_plan(m_doc["suite"]), "retries_left": exec_rutas.retries_left(m_doc)}
+                          if m_doc.get("suite") else exec_public_plan(None)),
+            }
+            for m_doc in task["milestones"]
+        ]
+    return out
 
 
 @app.post("/tasks/{task_id}/accept")
@@ -441,7 +570,12 @@ async def accept(task_id: str, body: AcceptIn):
 def suite_not_ready(task: dict) -> None:
     """Una tarea por ejecución solo se acepta con la suite oculta lista: el programador acepta
     los criterios y también el plan de tests que lo va a juzgar."""
-    if task.get("verification") == "execution" and task["suite"]["status"] != "lista":
+    if task.get("verification") != "execution":
+        return
+    if hitos.is_milestone_task(task):
+        if any(m["suite"]["status"] != "lista" for m in task["milestones"]):
+            raise err(409, "SUITE_NOT_READY", "La suite oculta de algún hito todavía no está lista")
+    elif task["suite"]["status"] != "lista":
         raise err(409, "SUITE_NOT_READY", "La suite oculta de esta tarea todavía no está lista")
 
 
