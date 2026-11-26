@@ -30,7 +30,7 @@ from typing import Annotated, Literal, Union
 
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from . import MAX_PASTE_BYTES, MAX_ZIP_BYTES, VERIFY_MIN_SECONDS, enabled, queue_token
 from . import arranque, evidencia, perfil
@@ -422,12 +422,14 @@ async def result(job_id: str, body: ResultIn, authorization: str | None = Header
 async def judge_and_pay(task: dict, job: dict, ev: dict) -> dict:
     """Juez, regla final, veredicto v2 y pago. Mismas reglas de plazo y reintento que `/evaluate`."""
     m = api()
-    spec, suite = task["spec"], task["suite"]
+    idx = job["payload"].get("milestone")
+    target = hitos.target_for(task, idx)
+    spec, suite = target["spec"], target["suite"]
     workspace_hash = str(ev["workspace_hash"])
     ch = workspace_hash.removeprefix("sha256:")
     video_url = job["payload"].get("video_url")
 
-    cached = task["cache"].get(ch)
+    cached = target["cache"].get(ch)
     if cached is not None:
         return {**cached, "stage": "cache"}
     if suite.get("profile") == "web":
@@ -466,7 +468,7 @@ async def judge_and_pay(task: dict, job: dict, ev: dict) -> dict:
                       judge=verdict_judge, judge_error=judge_error, checker=checker)
     comparison = decision.comparison()
     reason = decision.reason()
-    vh = verdict_hash_v2(task_id=task["task_id"], rules_hash=task["rules_hash"], suite_hash=suite["suite_hash"],
+    vh = verdict_hash_v2(task_id=task["task_id"], rules_hash=target["rules_hash"], suite_hash=suite["suite_hash"],
                          workspace_hash=workspace_hash, approved=decision.approved, stage=decision.stage,
                          criteria=decision.hash_criteria(), video_url=video_url)
     res = {
@@ -490,23 +492,27 @@ async def judge_and_pay(task: dict, job: dict, ev: dict) -> dict:
                          "sut_logs_tail": (tests.get("sut") or {}).get("logs_tail", "")[-2000:],
                          "hygiene_warnings": hygiene.get("warnings", [])},
     }
+    if idx is not None:
+        res["milestone"] = idx
     return await _record_and_pay(task, job, res, files, decision)
 
 
 async def _record_and_pay(task: dict, job: dict, res: dict, files: dict[str, str], decision) -> dict:
     """Guarda la entrega (protegida hasta el pago), paga si se aprobó y cuenta el envío."""
     m = api()
+    idx = job["payload"].get("milestone")
+    target = hitos.target_for(task, idx)
     ch, video_url = res["code_hash"], res["video_url"]
     source = job["payload"]["source"]
-    task["codes"][ch] = {"code": _as_code(files, source), "files": files, "source": {k: v for k, v in source.items()
-                         if k != "code"}, "video_url": video_url, "code_hash": ch, "approved": decision.approved}
-    task["latest_code_hash"] = ch
+    target["codes"][ch] = {"code": _as_code(files, source), "files": files, "source": {k: v for k, v in source.items()
+                           if k != "code"}, "video_url": video_url, "code_hash": ch, "approved": decision.approved}
+    target["latest_code_hash"] = ch
 
     counted = True
     if decision.approved:
-        onchain, _now = await m.read_chain(task["task_id"])
+        onchain, _now = await m.read_target_chain(task, idx)
         if not onchain or onchain["status"] != "Funded":
-            await m.settle_not_funded(task, res)
+            await m.settle_not_funded(task, res, milestone=idx)
         else:
             left = await m.seconds_left(onchain["deadline"])
             if left is None:
@@ -516,13 +522,13 @@ async def _record_and_pay(task: dict, job: dict, res: dict, files: dict[str, str
                 counted = False
             else:
                 res["payment_retryable"] = True
-                task["cache"][ch] = res
+                target["cache"][ch] = res
                 m.store().save()
-                await m.try_payment(task, res)
+                await m.try_payment(task, res, milestone=idx)
     if counted:
-        task["submissions"].append({"code_hash": ch, "stage": decision.stage, "approved": decision.approved,
-                                    "at": int(time.time()), "verification": job["id"]})
-    task["cache"][ch] = res
+        target["submissions"].append({"code_hash": ch, "stage": decision.stage, "approved": decision.approved,
+                                      "at": int(time.time()), "verification": job["id"]})
+    target["cache"][ch] = res
     m.store().save()
     return res
 
@@ -559,7 +565,9 @@ async def _store_screenshots(task_id: str, job_id: str, raw: list) -> tuple[list
 
 async def _judge_web_and_pay(task: dict, job: dict, ev: dict, workspace_hash: str, ch: str, video_url) -> dict:
     m = api()
-    spec, suite = task["spec"], task["suite"]
+    idx = job["payload"].get("milestone")
+    target = hitos.target_for(task, idx)
+    spec, suite = target["spec"], target["suite"]
     files: dict[str, str] = {str(k): str(v) for k, v in (ev.get("files") or {}).items()}
     hygiene, site, web = ev.get("hygiene"), ev.get("site"), ev.get("web")
     shots, images = await _store_screenshots(task["task_id"], job["id"], ev.get("screenshots") or [])
@@ -583,7 +591,7 @@ async def _judge_web_and_pay(task: dict, job: dict, ev: dict, workspace_hash: st
                           judge=verdict_judge, judge_error=judge_error, checker=checker)
     comparison = decision.comparison()
     reason = decision.reason()
-    vh = verdict_hash_v2(task_id=task["task_id"], rules_hash=task["rules_hash"], suite_hash=suite["suite_hash"],
+    vh = verdict_hash_v2(task_id=task["task_id"], rules_hash=target["rules_hash"], suite_hash=suite["suite_hash"],
                          workspace_hash=workspace_hash, approved=decision.approved, stage=decision.stage,
                          criteria=decision.hash_criteria(), video_url=video_url,
                          evidence={s["id"]: s["sha256"] for s in shots})
@@ -611,6 +619,8 @@ async def _judge_web_and_pay(task: dict, job: dict, ev: dict, workspace_hash: st
                          "judge_summary": verdict_judge.summary if verdict_judge else None,
                          "hygiene_warnings": (hygiene or {}).get("warnings", [])},
     }
+    if idx is not None:
+        res["milestone"] = idx
     return await _record_and_pay(task, job, res, files, decision)
 
 
@@ -696,10 +706,12 @@ class VerifyIn(Strict):
     freelancer_address: StrictStr
     source: SourceIn
     video_url: StrictStr | None = None
+    milestone: StrictInt | None = Field(default=None, ge=0)
 
 
-def _in_flight(task_id: str) -> bool:
-    return any(j["kind"] == "verify" and j["status"] in ("queued", "running") for j in queue().for_task(task_id))
+def _in_flight(task_id: str, milestone: int | None = None) -> bool:
+    return any(j["kind"] == "verify" and j["payload"].get("milestone") == milestone
+               and j["status"] in ("queued", "running") for j in queue().for_task(task_id))
 
 
 @router.post("/tasks/{task_id}/verificaciones", status_code=202)
@@ -715,34 +727,41 @@ async def enqueue_verification(task_id: str, body: VerifyIn, x_freelancer_token:
         if (not m.token_ok(task["freelancer_token"], x_freelancer_token)
                 or body.freelancer_address != task["freelancer_address"]):
             raise m.err(403, "INVALID_TOKEN", "Token de programador inválido para esta tarea")
-        if task["suite"]["status"] != "lista":
+        idx = m.resolve_milestone_index(task, body.milestone)
+        target = hitos.target_for(task, idx)
+        if target["suite"]["status"] != "lista":
             raise m.err(409, "SUITE_NOT_READY", "La suite oculta todavía no está lista")
         try:
             video_url = m.normalize_video(body.video_url)
         except ValueError as exc:
             raise m.err(400, "INVALID_REQUEST", str(exc)) from exc
-        if _in_flight(task_id):
+        if _in_flight(task_id, idx):
             raise m.err(409, "VERIFICATION_IN_PROGRESS", "Ya hay una verificación en curso para esta tarea")
-        if len(task["submissions"]) >= m.MAX_SUBMISSIONS:
+        if len(target["submissions"]) >= m.MAX_SUBMISSIONS:
             raise m.err(429, "TOO_MANY_SUBMISSIONS", f"Ya se usaron los {m.MAX_SUBMISSIONS} envíos de esta tarea")
-        onchain, now = await m.read_chain(task_id)
+        onchain, now = await m.read_target_chain(task, idx)
         if not onchain or onchain["status"] != "Funded":
             raise m.err(409, "TASK_NOT_FUNDED", "La tarea no está depositada en el contrato")
-        if (onchain["amount"] != task["amount"] or onchain["client"] != task["client_address"]
-                or onchain["rules_hash"] != task["rules_hash"]):
+        if (onchain["amount"] != target["amount"] or onchain["client"] != task["client_address"]
+                or onchain["rules_hash"] != target["rules_hash"]):
             raise m.err(409, "TASK_MISMATCH", "El monto, el cliente o los criterios on-chain no coinciden")
+        if idx is not None and onchain.get("freelancer") and onchain["freelancer"] != task["freelancer_address"]:
+            raise m.err(409, "TASK_MISMATCH", "El proyecto on-chain está fijado a otro programador")
+        if idx is not None and task.get("sequential") and idx > 0 and onchain.get("previous_status") != "Released":
+            raise m.err(409, "PREVIOUS_MILESTONE_NOT_RELEASED",
+                        "Debes cobrar el hito anterior antes de evaluar este hito")
         if onchain["deadline"] - now < VERIFY_MIN_SECONDS:
             raise m.err(409, "DEADLINE_TOO_CLOSE",
                         f"Quedan menos de {VERIFY_MIN_SECONDS} s de plazo; ya no se puede verificar por ejecución")
 
         src = body.source
-        if isinstance(src, CodeSource) and task["suite"].get("profile") == "web":
+        if isinstance(src, CodeSource) and target["suite"].get("profile") == "web":
             raise m.err(400, "INVALID_REQUEST", "Un sitio web se entrega como ZIP o como repositorio público")
         zip_data = None
         if isinstance(src, CodeSource):
             if len(src.code.encode("utf-8")) > MAX_PASTE_BYTES:
                 raise m.err(400, "INVALID_REQUEST", f"El código pegado supera {MAX_PASTE_BYTES} bytes; usa un ZIP o un repositorio")
-            modules = {s["module"] for s in task["spec"]["interface"]["symbols"]}
+            modules = {s["module"] for s in target["spec"]["interface"]["symbols"]}
             if len(modules) != 1:
                 raise m.err(400, "INVALID_REQUEST", "La interfaz usa varios módulos: entrega un ZIP o un repositorio")
             source = {"kind": "code", "module": modules.pop(), "code": src.code}
@@ -761,12 +780,17 @@ async def enqueue_verification(task_id: str, body: VerifyIn, x_freelancer_token:
         rate_limiter.consume_daily("verificacion")
         if zip_data is not None:
             source = {"kind": "zip", "source_id": queue().put_source(task_id, zip_data)}
-        job = queue().enqueue("verify", task_id, {"spec": execution_spec(task["spec"]), "source": source,
-                                                  "video_url": video_url})
-        task.setdefault("verifications", []).append({"job_id": job["id"], "at": int(time.time())})
+        payload = {"spec": execution_spec(target["spec"]), "source": source, "video_url": video_url}
+        if idx is not None:
+            payload["milestone"] = idx
+        job = queue().enqueue("verify", task_id, payload)
+        target.setdefault("verifications", []).append({"job_id": job["id"], "at": int(time.time())})
         m.store().save()
         arranque.wake(m.app)
-        return {"verification_id": job["id"], "status": job["status"], "submissions_used": len(task["submissions"])}
+        out = {"verification_id": job["id"], "status": job["status"], "submissions_used": len(target["submissions"])}
+        if idx is not None:
+            out["milestone"] = idx
+        return out
 
 
 STAGE_LABELS = {
@@ -791,6 +815,8 @@ async def verification_status(job_id: str, x_freelancer_token: str | None = Head
         raise m.err(403, "INVALID_TOKEN", "Token inválido para esta verificación")
     if job["status"] == "queued":
         arranque.wake(m.app)  # sigue en cola: la VM pudo apagarse o Google la detuvo (Spot)
+    idx = job["payload"].get("milestone")
+    target = hitos.target_for(task, idx)
     out = {
         "verification_id": job_id,
         "task_id": job["task_id"],
@@ -798,8 +824,10 @@ async def verification_status(job_id: str, x_freelancer_token: str | None = Head
         "created_at": job["created_at"],
         "updated_at": job["updated_at"],
         "progress": [{**p, "label": STAGE_LABELS.get(p["stage"], p["stage"])} for p in job["progress"]],
-        "submissions_used": len(task["submissions"]),
+        "submissions_used": len(target["submissions"]),
     }
+    if idx is not None:
+        out["milestone"] = idx
     res = (job.get("result") or {})
     if job["status"] == "done" and "result" in res:
         r = dict(res["result"])

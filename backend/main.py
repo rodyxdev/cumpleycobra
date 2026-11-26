@@ -113,6 +113,7 @@ class EvaluateIn(Strict):
     freelancer_address: StrictStr
     code: StrictStr
     video_url: StrictStr | None = None
+    milestone: StrictInt | None = Field(default=None, ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +256,29 @@ async def read_project_chain(task_id: str) -> tuple[dict | None, int]:
     except (StellarUnavailable, ContractError) as exc:
         raise err(502, "CHAIN_UNAVAILABLE", f"No se pudo leer el contrato de hitos ({exc})") from exc
     return onchain, now
+
+
+async def read_target_chain(task: dict, milestone: int | None) -> tuple[dict | None, int]:
+    """Estado on-chain de la tarea (v1) o de un hito concreto (v2/v3), en el mismo formato."""
+    if milestone is None:
+        return await read_chain(task["task_id"])
+    project, now = await read_project_chain(task["task_id"])
+    if not project:
+        return None, now
+    ms = project.get("milestones") or []
+    if milestone >= len(ms):
+        return None, now
+    m = ms[milestone]
+    return {
+        "task_id": project["task_id"],
+        "client": project["client"],
+        "freelancer": project.get("freelancer"),
+        "amount": m["amount"],
+        "deadline": m["deadline"],
+        "rules_hash": m["rules_hash"],
+        "status": m["status"],
+        "previous_status": ms[milestone - 1]["status"] if milestone > 0 else None,
+    }, now
 
 
 def resolve_milestone_index(task: dict, milestone: int | None) -> int | None:
@@ -640,18 +664,24 @@ async def trial(address: str = ""):
 
 
 @app.get("/tasks/{task_id}/verdicts")
-async def verdicts(task_id: str, x_client_token: str | None = Header(default=None)):
+async def verdicts(task_id: str, milestone: int | None = None,
+                   x_client_token: str | None = Header(default=None)):
     """Veredictos para la vista del cliente: reason, comparison y security_flags (nunca trace, logic ni código)."""
     task = get_task_or_404(task_id)
     if not token_ok(task["client_token"], x_client_token):
         raise err(403, "INVALID_TOKEN", "Token de cliente inválido")
-    return {
+    idx = resolve_milestone_index(task, milestone)
+    target = hitos.target_for(task, idx)
+    out = {
         "task_id": task_id,
-        "submissions_used": len(task["submissions"]),
+        "submissions_used": len(target["submissions"]),
         "verdicts": [
-            {**_client_verdict(task, r), **_web_screenshots(r)} for r in task["cache"].values()
+            {**_client_verdict(target, r), **_web_screenshots(r)} for r in target["cache"].values()
         ],
     }
+    if idx is not None:
+        out["milestone"] = idx
+    return out
 
 
 def _web_screenshots(r: dict) -> dict:
@@ -660,40 +690,47 @@ def _web_screenshots(r: dict) -> dict:
     return {"screenshots": exec_evidencia.public_screenshots(shots)} if shots else {}
 
 
-def _client_verdict(task: dict, r: dict) -> dict:
+def _client_verdict(target: dict, r: dict) -> dict:
     return {"code_hash": r["code_hash"], "approved": r["approved"], "stage": r["stage"],
             "reason": r["reason"], "comparison": r["comparison"],
             # El mismo aviso de seguridad que ve el programador (y el que entra al verdict_hash).
             "security_flags": r.get("security_flags", []),
             "transaction_hash": r["transaction_hash"],
-            "video_url": task["codes"].get(r["code_hash"], {}).get("video_url"),
-            "consented": task.get("consented_code_hash") == r["code_hash"]}
+            "video_url": target["codes"].get(r["code_hash"], {}).get("video_url"),
+            "consented": target.get("consented_code_hash") == r["code_hash"]}
 
 
 @app.get("/tasks/{task_id}/delivery")
-async def delivery(task_id: str, x_client_token: str | None = Header(default=None)):
+async def delivery(task_id: str, milestone: int | None = None,
+                   x_client_token: str | None = Header(default=None)):
     task = get_task_or_404(task_id)
     if not token_ok(task["client_token"], x_client_token):
         raise err(403, "INVALID_TOKEN", "Token de cliente inválido")
-    onchain, _ = await read_chain(task_id)
+    idx = resolve_milestone_index(task, milestone)
+    target = hitos.target_for(task, idx)
+    onchain, _ = await read_target_chain(task, idx)
     released = onchain and onchain["status"] == "Released"
     if released:
-        paid_hash = (task.get("release") or {}).get("code_hash")
-        approved = [c for c in task["codes"].values() if c.get("approved")]
-        chosen = task["codes"].get(paid_hash) or (approved[-1] if approved else (list(task["codes"].values()) or [None])[-1])
+        paid_hash = (target.get("release") or {}).get("code_hash")
+        approved = [c for c in target["codes"].values() if c.get("approved")]
+        chosen = target["codes"].get(paid_hash) or (approved[-1] if approved else (list(target["codes"].values()) or [None])[-1])
     else:
-        consented = task.get("consented_code_hash")
-        chosen = task["codes"].get(consented)
+        consented = target.get("consented_code_hash")
+        chosen = target["codes"].get(consented)
         if not chosen or chosen.get("approved"):
             raise err(409, "TASK_NOT_RELEASED", "El código se entrega al cobrar o con consentimiento del programador para una entrega rechazada")
     if chosen is None:
         raise err(404, "NO_DELIVERY", "No hay código entregado")
-    return {"task_id": task_id, "code": chosen["code"], "video_url": chosen.get("video_url"),
-            "code_hash": chosen["code_hash"]}
+    out = {"task_id": task_id, "code": chosen["code"], "video_url": chosen.get("video_url"),
+           "code_hash": chosen["code_hash"]}
+    if idx is not None:
+        out["milestone"] = idx
+    return out
 
 
 class ConsentIn(Strict):
-    code_hash: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+    code_hash: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    milestone: StrictInt | None = Field(default=None, ge=0)
 
 
 @app.post("/tasks/{task_id}/consent")
@@ -703,13 +740,18 @@ async def consent(task_id: str, body: ConsentIn | None = None,
     async with store().lock(task_id):
         if not token_ok(task.get("freelancer_token"), x_freelancer_token):
             raise err(403, "INVALID_TOKEN", "Token de programador inválido")
-        ch = body.code_hash if body else task.get("latest_code_hash")
-        code = task["codes"].get(ch)
+        idx = resolve_milestone_index(task, body.milestone if body else None)
+        target = hitos.target_for(task, idx)
+        ch = (body.code_hash if body and body.code_hash is not None else target.get("latest_code_hash"))
+        code = target["codes"].get(ch)
         if not code or code.get("approved"):
             raise err(409, "NO_REJECTED_DELIVERY", "Solo se puede autorizar la revisión de una entrega rechazada")
-        task["consented_code_hash"] = ch
+        target["consented_code_hash"] = ch
         store().save()
-        return {"code_hash": ch, "consented": True}
+        out = {"code_hash": ch, "consented": True}
+        if idx is not None:
+            out["milestone"] = idx
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -924,7 +966,6 @@ def comparison_placeholder(spec: dict, why: str) -> list[str]:
 @app.post("/evaluate")
 async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(default=None)):
     task = get_task_or_404(body.task_id)
-    spec = task["spec"]
     if task.get("verification") == "execution":
         raise err(409, "EXECUTION_TASK", "Esta tarea se verifica ejecutando el código: usa POST /tasks/{id}/verificaciones")
     async with store().lock(body.task_id):
@@ -934,6 +975,9 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
         if (not token_ok(task["freelancer_token"], x_freelancer_token)
                 or body.freelancer_address != task["freelancer_address"]):
             raise err(403, "INVALID_TOKEN", "Token de programador inválido para esta tarea")
+        idx = resolve_milestone_index(task, body.milestone)
+        target = hitos.target_for(task, idx)
+        spec = target["spec"]
 
         try:
             video_url = normalize_video(body.video_url)
@@ -941,31 +985,36 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
             raise err(400, "INVALID_REQUEST", str(exc)) from exc
 
         ch = code_hash(body.code)
-        cached = task["cache"].get(ch)
+        cached = target["cache"].get(ch)
         if cached is not None:
             if cached["approved"] and cached["transaction_hash"] is None and cached.get("payment_retryable"):
                 # Veredicto aprobado cuyo pago falló por red: se reintenta sin contar envío.
-                onchain, now = await read_chain(body.task_id)
+                onchain, now = await read_target_chain(task, idx)
                 if onchain and onchain["status"] == "Funded":
                     if onchain["deadline"] - now >= RELEASE_BUDGET_SECS:
-                        await try_payment(task, cached)
+                        await try_payment(task, cached, milestone=idx)
                     else:
                         cached["reason"] = REASON_NO_TIME_TO_RELEASE
                         cached["payment_retryable"] = False
                 else:
-                    await settle_not_funded(task, cached)
+                    await settle_not_funded(task, cached, milestone=idx)
                 store().save()
-            return {**public(cached), "stage": "cache", "submissions_used": len(task["submissions"])}
+            return {**public(cached), "stage": "cache", "submissions_used": len(target["submissions"])}
 
-        if len(task["submissions"]) >= MAX_SUBMISSIONS:
+        if len(target["submissions"]) >= MAX_SUBMISSIONS:
             raise err(429, "TOO_MANY_SUBMISSIONS", f"Ya se usaron los {MAX_SUBMISSIONS} envíos de esta tarea")
 
-        onchain, now = await read_chain(body.task_id)
+        onchain, now = await read_target_chain(task, idx)
         if not onchain or onchain["status"] != "Funded":
             raise err(409, "TASK_NOT_FUNDED", "La tarea no está depositada en el contrato")
-        if (onchain["amount"] != task["amount"] or onchain["client"] != task["client_address"]
-                or onchain["rules_hash"] != task["rules_hash"]):
+        if (onchain["amount"] != target["amount"] or onchain["client"] != task["client_address"]
+                or onchain["rules_hash"] != target["rules_hash"]):
             raise err(409, "TASK_MISMATCH", "El monto, el cliente o los criterios on-chain no coinciden")
+        if idx is not None and onchain.get("freelancer") and onchain["freelancer"] != task["freelancer_address"]:
+            raise err(409, "TASK_MISMATCH", "El proyecto on-chain está fijado a otro programador")
+        if idx is not None and task.get("sequential") and idx > 0 and onchain.get("previous_status") != "Released":
+            raise err(409, "PREVIOUS_MILESTONE_NOT_RELEASED",
+                      "Debes cobrar el hito anterior antes de evaluar este hito")
         deadline = onchain["deadline"]
         if deadline - now < MIN_SECONDS_TO_EVALUATE:
             raise err(409, "DEADLINE_TOO_CLOSE",
@@ -1032,9 +1081,11 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
             "video_url": video_url,  # el mismo valor normalizado que entra al verdict_hash
             "payment_retryable": False,
         }
-        task["codes"][ch] = {"code": body.code, "video_url": video_url, "code_hash": ch,
-                             "approved": approved}
-        task["latest_code_hash"] = ch
+        if idx is not None:
+            result["milestone"] = idx
+        target["codes"][ch] = {"code": body.code, "video_url": video_url, "code_hash": ch,
+                               "approved": approved}
+        target["latest_code_hash"] = ch
 
         counted = True
         if approved:
@@ -1048,16 +1099,16 @@ async def evaluate(body: EvaluateIn, x_freelancer_token: str | None = Header(def
                 # El veredicto queda en caché (y en disco) antes de firmar: si el proceso cae durante
                 # el release, reenviar el mismo código reintenta el pago en vez de volver a evaluar.
                 result["payment_retryable"] = True
-                task["cache"][ch] = result
+                target["cache"][ch] = result
                 store().save()
-                await try_payment(task, result)
+                await try_payment(task, result, milestone=idx)
 
         if counted:
-            task["submissions"].append({"code_hash": ch, "stage": stage, "approved": approved,
-                                        "at": int(time.time())})
-        task["cache"][ch] = result
+            target["submissions"].append({"code_hash": ch, "stage": stage, "approved": approved,
+                                          "at": int(time.time())})
+        target["cache"][ch] = result
         store().save()
-        return {**public(result), "submissions_used": len(task["submissions"])}
+        return {**public(result), "submissions_used": len(target["submissions"])}
 
 
 def public(result: dict) -> dict:
@@ -1065,11 +1116,12 @@ def public(result: dict) -> dict:
     return {k: v for k, v in result.items() if k not in hidden}
 
 
-async def try_payment(task: dict, result: dict) -> None:
-    """Paso 9: release al programador amarrado. Actualiza `result` en su lugar."""
+async def try_payment(task: dict, result: dict, milestone: int | None = None) -> None:
+    """Paso 9: release (o release_milestone) al programador amarrado. Actualiza `result` en su lugar."""
     task_id = task["task_id"]
     freelancer = task["freelancer_address"]
-    rel = task.get("release")
+    target = hitos.target_for(task, milestone)
+    rel = target.get("release")
     if rel and rel.get("status") == "success" and rel.get("code_hash") == result["code_hash"]:
         result["transaction_hash"] = rel["transaction_hash"]
         result["payment_retryable"] = False
@@ -1077,22 +1129,26 @@ async def try_payment(task: dict, result: dict) -> None:
 
     def on_signed(tx_hash: str) -> None:
         def save() -> None:
-            task["release"] = {"status": "pending", "transaction_hash": tx_hash,
-                               "freelancer": freelancer, "code_hash": result["code_hash"],
-                               "verdict_hash": result["verdict_hash"]}
+            target["release"] = {"status": "pending", "transaction_hash": tx_hash,
+                                 "freelancer": freelancer, "code_hash": result["code_hash"],
+                                 "verdict_hash": result["verdict_hash"]}
             store().save()
         anyio.from_thread.run_sync(save)
 
     try:
-        outcome = await run_in_threadpool(chain().release, task_id, freelancer,
-                                          result["code_hash"], result["verdict_hash"], on_signed)
+        if milestone is None:
+            outcome = await run_in_threadpool(chain().release, task_id, freelancer,
+                                              result["code_hash"], result["verdict_hash"], on_signed)
+        else:
+            outcome = await run_in_threadpool(chain().release_milestone, task_id, milestone, freelancer,
+                                              result["code_hash"], result["verdict_hash"], on_signed)
     except ContractError as exc:
         if exc.code == ERR_DEADLINE_PASSED:
             result["reason"] = REASON_DEADLINE_PASSED
             result["payment_retryable"] = False
             return
         if exc.code == ERR_NOT_FUNDED:
-            await settle_not_funded(task, result)
+            await settle_not_funded(task, result, milestone=milestone)
             return
         if await trustline_missing(freelancer):
             no_trustline(result)
@@ -1108,25 +1164,34 @@ async def try_payment(task: dict, result: dict) -> None:
         return
 
     if outcome.status == "success":
-        task["release"]["status"] = "success"
+        target["release"]["status"] = "success"
         result["transaction_hash"] = outcome.transaction_hash
         result["reason"] = result["verdict_reason"]
         result["payment_retryable"] = False
     else:
-        await settle_not_funded(task, result)
+        await settle_not_funded(task, result, milestone=milestone)
 
 
-async def settle_not_funded(task: dict, result: dict) -> None:
+async def settle_not_funded(task: dict, result: dict, milestone: int | None = None) -> None:
     """#6 o release sin confirmar: solo es éxito si el release guardado es de esta entrega y quedó SUCCESS.
 
-    Que la tarea esté Released para el programador no basta: pudo pagarla otra entrega o el cliente
+    Que la tarea o hito esté Released para el programador no basta: pudo pagarlo otra entrega o el cliente
     con client_release, y entonces este veredicto no tiene transacción propia.
     """
+    target = hitos.target_for(task, milestone)
     try:
-        onchain = await run_in_threadpool(chain().get_task, task["task_id"])
+        if milestone is None:
+            onchain = await run_in_threadpool(chain().get_task, task["task_id"])
+        else:
+            project = await run_in_threadpool(chain().get_project, task["task_id"])
+            ms = (project or {}).get("milestones") or []
+            if project and milestone < len(ms):
+                onchain = {**ms[milestone], "freelancer": project.get("freelancer")}
+            else:
+                onchain = None
     except (StellarUnavailable, ContractError):
         onchain = None
-    rel = task.get("release")
+    rel = target.get("release")
     if onchain and onchain["status"] == "Released":
         own = (rel and rel.get("code_hash") == result["code_hash"]
                and onchain.get("freelancer") == task["freelancer_address"])
