@@ -55,7 +55,10 @@
 // v8 (27 de noviembre de 2026): pago por tiempo. El cliente deposita para un
 // programador y una duración, y el dinero se libera de forma lineal segundo a
 // segundo (como un sueldo o un retainer): `deposit_stream`, `withdraw_stream`
-// y `cancel_stream`.
+// y `cancel_stream`. Garantía del programador: el programador registrado
+// deposita una garantía que recupera si la tarea se paga (`post_bond`,
+// `reclaim_bond`) y que pasa al cliente si la tarea termina reembolsada y el
+// árbitro lo decide (`slash_bond`).
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -200,6 +203,15 @@ pub struct Stream {
     pub status: StreamStatus,
 }
 
+// v8: garantía que el programador deposita sobre una tarea.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bond {
+    pub task_id: String,
+    pub freelancer: Address,
+    pub amount: i128,
+}
+
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
@@ -223,6 +235,8 @@ pub enum DataKey {
     Paused,
     // v8: un pago por tiempo (persistente).
     Stream(String),
+    // v8: garantía del programador de una tarea (persistente).
+    Bond(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -793,6 +807,37 @@ pub struct CancelStreamEvent {
     pub stream_id: String,
     pub freelancer_amount: i128,
     pub refund_amount: i128,
+}
+
+// v8: el programador depositó una garantía sobre la tarea.
+#[contractevent(topics = ["post_bond"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PostBondEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+    pub amount: i128,
+}
+
+// v8: la garantía volvió al programador.
+#[contractevent(topics = ["reclaim_bond"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReclaimBondEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+    pub amount: i128,
+}
+
+// v8: la garantía pasó al cliente.
+#[contractevent(topics = ["slash_bond"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlashBondEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+    pub client: Address,
+    pub amount: i128,
 }
 
 #[contract]
@@ -3128,6 +3173,122 @@ impl CumpleYCobraContract {
     // Lectura de un pago por tiempo.
     pub fn get_stream(env: Env, stream_id: String) -> Result<Stream, Error> {
         Self::load_stream(&env, &DataKey::Stream(stream_id))
+    }
+
+    // -----------------------------------------------------------------------
+    // v8: garantía del programador
+    // -----------------------------------------------------------------------
+
+    // El programador registrado deposita una garantía sobre una tarea en
+    // Funded, antes del plazo: le muestra al cliente que va en serio. Una sola
+    // garantía por tarea.
+    pub fn post_bond(env: Env, task_id: String, amount: i128) -> Result<(), Error> {
+        Self::not_paused(&env)?;
+        let task = Self::funded_task(&env, &DataKey::Task(task_id.clone()))?;
+        let freelancer = Self::assigned(&task)?;
+        freelancer.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        let key = DataKey::Bond(task_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let bond = Bond {
+            task_id: task_id.clone(),
+            freelancer: freelancer.clone(),
+            amount,
+        };
+        env.storage().persistent().set(&key, &bond);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::collect(&env, &freelancer, amount)?;
+
+        PostBondEvent {
+            task_id,
+            freelancer,
+            amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El programador recupera su garantía cuando la tarea ya se pagó
+    // (`Released`). Si la tarea terminó reembolsada, solo la recupera cuando
+    // pasaron 14 días del plazo sin que el árbitro la diera al cliente.
+    pub fn reclaim_bond(env: Env, task_id: String) -> Result<i128, Error> {
+        let key = DataKey::Bond(task_id.clone());
+        let bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        bond.freelancer.require_auth();
+
+        let task: Task = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Task(task_id.clone()))
+            .ok_or(Error::NotFound)?;
+        match task.status {
+            TaskStatus::Funded => return Err(Error::NotFunded),
+            TaskStatus::Released => {}
+            TaskStatus::Refunded => {
+                let limit = task
+                    .deadline
+                    .checked_add(DISPUTE_GRACE_SECS)
+                    .ok_or(Error::InvalidDeadline)?;
+                if env.ledger().timestamp() < limit {
+                    return Err(Error::DeadlineNotReached);
+                }
+            }
+        }
+        env.storage().persistent().remove(&key);
+        Self::pay(&env, &bond.freelancer, bond.amount)?;
+
+        ReclaimBondEvent {
+            task_id,
+            freelancer: bond.freelancer,
+            amount: bond.amount,
+        }
+        .publish(&env);
+        Ok(bond.amount)
+    }
+
+    // El árbitro da la garantía al cliente cuando la tarea terminó
+    // reembolsada (el programador no entregó lo acordado). Nunca sobre una
+    // tarea pagada: si el programador cumplió, su garantía es suya.
+    pub fn slash_bond(env: Env, task_id: String) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Bond(task_id.clone());
+        let bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        let task: Task = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Task(task_id.clone()))
+            .ok_or(Error::NotFound)?;
+        if task.status != TaskStatus::Refunded {
+            return Err(Error::NotFunded);
+        }
+        env.storage().persistent().remove(&key);
+        Self::pay(&env, &task.client, bond.amount)?;
+
+        SlashBondEvent {
+            task_id,
+            freelancer: bond.freelancer,
+            client: task.client,
+            amount: bond.amount,
+        }
+        .publish(&env);
+        Ok(bond.amount)
+    }
+
+    // Lectura de la garantía de una tarea, o `None` si no hay.
+    pub fn get_bond(env: Env, task_id: String) -> Option<Bond> {
+        env.storage().persistent().get(&DataKey::Bond(task_id))
     }
 
     // -----------------------------------------------------------------------

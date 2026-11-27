@@ -163,3 +163,126 @@ fn v8_stream_estricto_cada_parte_firma_lo_suyo() {
     est.c.cancel_stream(&id);
     assert_eq!(est.token.balance(&est.client), MINT - UNIT);
 }
+
+// ---------------------------------------------------------------------------
+// Lote 2: garantía del programador
+// ---------------------------------------------------------------------------
+
+// Tarea de 4 UNIT con programador registrado; el programador recibe 3 UNIT
+// para poder depositar garantías.
+fn tarea_con_programador(ctx: &Ctx, nombre: &str, plazo: u64) -> String {
+    let id = super::test_v4::deposit_simple(ctx, nombre, 4 * UNIT, plazo);
+    ctx.c.assign_freelancer(&id, &ctx.freelancer);
+    id
+}
+
+fn fondear_programador(ctx: &Ctx) {
+    ctx.token.transfer(&ctx.client, &ctx.freelancer, &(3 * UNIT));
+}
+
+#[test]
+fn v8_bond_vuelve_al_programador_si_la_tarea_se_paga() {
+    let ctx = setup(Modo::Libre);
+    fondear_programador(&ctx);
+    let sin = super::test_v4::deposit_simple(&ctx, "bond-0", UNIT, DIA);
+    assert_eq!(ctx.c.try_post_bond(&sin, &UNIT), Err(Ok(Error::WrongFreelancer)));
+
+    let id = tarea_con_programador(&ctx, "bond-1", DIA);
+    assert_eq!(ctx.c.try_post_bond(&id, &0), Err(Ok(Error::InvalidAmount)));
+    ctx.c.post_bond(&id, &UNIT);
+    assert_eq!(ctx.c.get_bond(&id).unwrap().amount, UNIT);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 2 * UNIT);
+    assert_eq!(ctx.c.try_post_bond(&id, &UNIT), Err(Ok(Error::AlreadyExists)));
+
+    // Con la tarea abierta no se recupera ni se pierde.
+    assert_eq!(ctx.c.try_reclaim_bond(&id), Err(Ok(Error::NotFunded)));
+    assert_eq!(ctx.c.try_slash_bond(&id), Err(Ok(Error::NotFunded)));
+
+    ctx.c.client_release(&id, &ctx.freelancer);
+    // Pagada: el árbitro ya no puede quitarle la garantía.
+    assert_eq!(ctx.c.try_slash_bond(&id), Err(Ok(Error::NotFunded)));
+    assert_eq!(ctx.c.reclaim_bond(&id), UNIT);
+    assert_eq!(ctx.c.get_bond(&id), None);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 3 * UNIT + 4 * UNIT);
+    assert_eq!(ctx.c.try_reclaim_bond(&id), Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn v8_bond_pasa_al_cliente_si_la_tarea_termina_reembolsada() {
+    let ctx = setup(Modo::Libre);
+    fondear_programador(&ctx);
+    let id = tarea_con_programador(&ctx, "bond-2", 100);
+    ctx.c.post_bond(&id, &(2 * UNIT));
+    ctx.env.ledger().set_timestamp(START_TS + 100);
+    assert_eq!(ctx.c.try_post_bond(&id, &UNIT), Err(Ok(Error::DeadlinePassed)));
+    ctx.c.timeout_refund(&id);
+    // Reembolsada: el programador no la recupera antes de 14 días…
+    assert_eq!(ctx.c.try_reclaim_bond(&id), Err(Ok(Error::DeadlineNotReached)));
+    // …y el árbitro la da al cliente.
+    assert_eq!(ctx.c.slash_bond(&id), 2 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 3 * UNIT + 2 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.c.get_stats().held, 0);
+}
+
+#[test]
+fn v8_bond_sin_decision_del_arbitro_vuelve_al_programador_a_los_14_dias() {
+    let ctx = setup(Modo::Libre);
+    fondear_programador(&ctx);
+    let id = tarea_con_programador(&ctx, "bond-3", 100);
+    ctx.c.post_bond(&id, &UNIT);
+    ctx.env.ledger().set_timestamp(START_TS + 100);
+    ctx.c.timeout_refund(&id);
+    ctx.env.ledger().set_timestamp(START_TS + 100 + 14 * DIA);
+    assert_eq!(ctx.c.reclaim_bond(&id), UNIT);
+    assert_eq!(ctx.c.try_slash_bond(&id), Err(Ok(Error::NotFound)));
+}
+
+#[test]
+fn v8_bond_estricto_cada_parte_firma_lo_suyo() {
+    let est = setup(Modo::Estricto);
+    // Fondos y tarea con firmas explícitas.
+    let token_id = est.token.address.clone();
+    est.env.mock_auths(&[MockAuth {
+        address: &est.client,
+        invoke: &MockAuthInvoke {
+            contract: &token_id,
+            fn_name: "transfer",
+            args: (&est.client, &est.freelancer, 3 * UNIT).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    est.token.transfer(&est.client, &est.freelancer, &(3 * UNIT));
+    let id = super::test_v4::deposit_simple(&est, "bond-estricto", 4 * UNIT, 100);
+    firmas(&est, &[&est.arbiter], "assign_freelancer", (&id, &est.freelancer).into_val(&est.env));
+    est.c.assign_freelancer(&id, &est.freelancer);
+
+    // El cliente no puede depositar la garantía por el programador.
+    firmas(&est, &[&est.client], "post_bond", (&id, UNIT).into_val(&est.env));
+    assert!(est.c.try_post_bond(&id, &UNIT).is_err());
+    est.env.mock_auths(&[MockAuth {
+        address: &est.freelancer,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "post_bond",
+            args: (&id, UNIT).into_val(&est.env),
+            sub_invokes: &[MockAuthInvoke {
+                contract: &token_id,
+                fn_name: "transfer",
+                args: (&est.freelancer, &est.contract_id, UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+    est.c.post_bond(&id, &UNIT);
+
+    est.env.ledger().set_timestamp(START_TS + 100);
+    est.c.timeout_refund(&id);
+    let args: Vec<Val> = (&id,).into_val(&est.env);
+    // Solo el árbitro la da al cliente.
+    firmas(&est, &[&est.client], "slash_bond", args.clone());
+    assert!(est.c.try_slash_bond(&id).is_err());
+    firmas(&est, &[&est.arbiter], "slash_bond", args);
+    est.c.slash_bond(&id);
+    assert_eq!(est.token.balance(&est.client), MINT - 3 * UNIT + UNIT);
+}
