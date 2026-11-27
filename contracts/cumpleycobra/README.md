@@ -358,3 +358,59 @@ Explorador: https://stellar.expert/explorer/testnet/contract/CD5ZI4KIEUT4QI46SJH
 bash scripts/v6_testnet.sh
 ```
 
+## v7: acuerdos y disputas en hitos, y operaciones por lote (27 de noviembre de 2026)
+
+13 funciones nuevas en 3 lotes. Los proyectos por hitos reciben los mismos acuerdos que la tarea simple de v6, con la misma regla: **todo cambio entre las partes lo firman las dos**, y la parte nueva también. Además, quien abre una disputa puede retirarla (lo que cierra el límite conocido de v6) y hay operaciones por lote. **Los contratos v1 a v6 desplegados no se modifican:** v7 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
+
+| | |
+| --- | --- |
+| ID del contrato v7 (testnet) | `CCTEXF2IQTD6KXNC64TKM3GEDU56KQ6QRCO4B2UYQBWIZ6AGRU3JAHDM` |
+| WASM hash (`stellar contract build --optimize`) | `5f4184cfc498a858dcd3bdf88da108bfadda0dcf9085cfdca00fb9895b49be88` (50 574 bytes; subida tx [`2f76d3b2…`](https://stellar.expert/explorer/testnet/tx/2f76d3b2a6b5c97cc0e21d96d4bca94dece5f3dfbcde5a15c8f21d5256764e34)) |
+| Despliegue | tx [`78b4207e…`](https://stellar.expert/explorer/testnet/tx/78b4207eba881f10f31082b2f43779fcd0b47b5a4d5eb573e96b61977fd640bc) (`--alias cumpleycobra-v7`) |
+| `initialize` | tx [`59eaa2c7…`](https://stellar.expert/explorer/testnet/tx/59eaa2c7c47b1c019a4cc62c08873c9755eda3b89871bda773c2742de3ac60c2), árbitro `GAGGEH…VOKZGY`, token `CBIELTK6…CAMA` |
+| Tests | `cargo test -p cumpleycobra`: 97 en verde (13 de v7 en `src/test_v7.rs`), 0 advertencias |
+
+Explorador: https://stellar.expert/explorer/testnet/contract/CCTEXF2IQTD6KXNC64TKM3GEDU56KQ6QRCO4B2UYQBWIZ6AGRU3JAHDM
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `amend_milestone_rules(task_id, index, new_rules_hash)` | Cliente + programador fijado | Hito en `Funded`; `NoChange` si es el mismo hash |
+| `release_milestone_partial(task_id, index, amount, code_hash, verdict_hash) -> i128` | Árbitro | Antes del plazo del hito; `0 < amount < monto del hito`; paga al programador fijado |
+| `mutual_cancel_project(task_id) -> u32` | Cliente + programador fijado | Todos los hitos en `Funded` vuelven al cliente en una transferencia |
+| `reassign_project_freelancer(task_id, new_freelancer)` | Cliente + programador actual + programador nuevo | Debe quedar algún hito con dinero |
+| `transfer_project_client(task_id, new_client)` | Cliente actual + cliente nuevo (+ programador fijado, si hay) | Los reembolsos pasan al cliente nuevo |
+| `open_milestone_dispute(task_id, index, by)` | `by` (cliente o programador fijado) | Antes del plazo del hito; congela solo el reembolso de ese hito hasta 14 días después de su plazo (`refund_all_expired_milestones` lo salta) |
+| `resolve_milestone_dispute(task_id, index, freelancer_amount)` | Árbitro | Reparte el hito, también tras el plazo |
+| `get_milestone_dispute(task_id, index) -> Option<Address>` | Lectura | Quién abrió la disputa del hito |
+| `cancel_dispute(task_id)` | Quien abrió la disputa | La retira; también limpia la disputa de una tarea ya cerrada por otra vía |
+| `cancel_milestone_dispute(task_id, index)` | Quien abrió la disputa | La retira |
+| `release_batch(task_ids, code_hashes, verdict_hashes) -> i128` | Árbitro | 2 a 10 tareas, cada una con las reglas de `release` y solo al programador registrado; si una falla, se revierte todo |
+| `refund_batch(task_ids) -> u32` | Cualquiera | 1 a 20 tareas; reembolsa a su cliente las vencidas y omite las que no proceden; `DeadlineNotReached` si ninguna |
+| `get_projects(task_ids) -> Vec<Option<Project>>` | Lectura | 1 a 20 proyectos |
+
+**Error nuevo:** 21 `LengthMismatch`. Los códigos del 1 al 20 no cambian.
+
+**Corrida real en testnet** con [`scripts/v7_testnet.sh`](../../scripts/v7_testnet.sh) (corrida `1795757039`; al final `get_stats` dio `deposited` = `paid_out` = 0.08 USDC y `held` 0, igual al saldo real del contrato):
+
+| Función | Quién firmó | Qué pasó | tx |
+| --- | --- | --- | --- |
+| `amend_milestone_rules` | `cyc-client` + `cyc-freelancer` | Criterios nuevos para el hito 0 | [`dfd49342…`](https://stellar.expert/explorer/testnet/tx/dfd49342d38bffdc2a0da776fbe54e230d003cfd0272c4a40de04f7049b3c0d1) |
+| `release_milestone_partial` | `cyc-arbiter` | Paga 0.01 del hito 0; queda 0.01 | [`bb71ca71…`](https://stellar.expert/explorer/testnet/tx/bb71ca719931b740540c10e41ff5319820f2c29fad73f387a52596a06731ec81) |
+| `open_milestone_dispute` | `cyc-client` | Disputa sobre el hito 1 | [`4dbf7f64…`](https://stellar.expert/explorer/testnet/tx/4dbf7f64cf0a3a75ef62a0a1b76902b5f8383e8620bfd2771482dda5b47a0e14) |
+| `get_milestone_dispute` | Lectura (enviada como tx) | Devuelve la dirección del cliente | [`acc5dcea…`](https://stellar.expert/explorer/testnet/tx/acc5dcea89f95484b2fe10d208bd22ff16793dae6524e9af68dcbd0e430a85b2) |
+| `cancel_milestone_dispute` | `cyc-client` | El cliente retira su disputa del hito 1 | [`908df3c4…`](https://stellar.expert/explorer/testnet/tx/908df3c4e4d73093fd8d6c68622e21b11f3ccb6d0a402833750777ae3d9f62a9) |
+| `resolve_milestone_dispute` | `cyc-arbiter` | Tras una disputa del programador sobre el hito 0: 0.005 a cada parte | [`3a54e067…`](https://stellar.expert/explorer/testnet/tx/3a54e06717ec18c651c5b43334d354e60b3bec251ff58f78cd166f9c7720e757) |
+| `reassign_project_freelancer` | `cyc-client` + `cyc-freelancer` + `cyc-third` | El proyecto pasa a `cyc-third` | [`ee1c3ab8…`](https://stellar.expert/explorer/testnet/tx/ee1c3ab8ba85b44ad288eeecd5459855335b4f2718f22e1f927ae1cf5d8ad086) |
+| `transfer_project_client` | `cyc-client` + cliente nuevo + `cyc-third` | El proyecto cambia de cliente | [`3ce35cb0…`](https://stellar.expert/explorer/testnet/tx/3ce35cb0f3755924f256000c380936e1f5c2fad2f767a225cdd66d2309e4f7aa) |
+| `mutual_cancel_project` | Cliente nuevo + `cyc-third` | El hito 1 (0.02) vuelve al cliente nuevo | [`3c9568f6…`](https://stellar.expert/explorer/testnet/tx/3c9568f6c6c4812599ce7f37b25047144807620e8d199e0d5d4e4dba2a4924ac) |
+| `release_batch` | `cyc-arbiter` | Paga dos tareas (0.01 + 0.01) en una transacción | [`52e3f480…`](https://stellar.expert/explorer/testnet/tx/52e3f4806e6a07fe1044b78b55999f5ec79444e4d6f1f001506d038813aa9e33) |
+| `cancel_dispute` | `cyc-client` | El cliente retira la disputa de una tarea simple | [`62765866…`](https://stellar.expert/explorer/testnet/tx/62765866aba529a42fcd9798cf47678fc8de78c57c33cf9063820ca2eb28c3bd) |
+| `refund_batch` | `cyc-third` (sin permisos) | Reembolsa 2 tareas vencidas y omite un id inexistente | [`2b7fedc1…`](https://stellar.expert/explorer/testnet/tx/2b7fedc1d307d07717071c1f975cdbcfc77995842ef3d978d0fa3102f7f6fd46) |
+| `get_projects` | Lectura (enviada como tx) | El proyecto con su cliente y programador nuevos, y `null` para el inexistente | [`94ccaca8…`](https://stellar.expert/explorer/testnet/tx/94ccaca820807469c9e5abafbb5b06770478d98af1a0c9a13b847445ffb1a01f) |
+
+```bash
+bash scripts/v7_testnet.sh
+```
+
