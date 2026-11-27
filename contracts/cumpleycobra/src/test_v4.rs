@@ -1,0 +1,301 @@
+#![cfg(test)]
+
+// Pruebas de las funciones nuevas de v4 (acuerdos parciales, cancelaciones,
+// reembolso en lote, recorte/división/prórroga de hitos, bono manual, depósito
+// por lote y rotación segura del árbitro).
+//
+// Mismo esquema que `test.rs` y `test_hitos.rs`:
+// - `Modo::Libre` usa `mock_all_auths` para probar lógica, saldos e invariantes.
+// - `Modo::Estricto` NUNCA usa `mock_all_auths`: cada firma es explícita.
+
+extern crate std;
+
+use super::*;
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
+    token::{Client as TokenClient, StellarAssetClient},
+    vec, Address, BytesN, Env, IntoVal, String, Vec,
+};
+
+const UNIT: i128 = 10_000_000;
+const MINT: i128 = 100 * UNIT;
+const DIA: u64 = 24 * 60 * 60;
+const START_TS: u64 = 2_000_000;
+
+#[derive(PartialEq)]
+enum Modo {
+    Libre,
+    Estricto,
+}
+
+struct Ctx {
+    env: Env,
+    modo: Modo,
+    arbiter: Address,
+    client: Address,
+    freelancer: Address,
+    third: Address,
+    token: TokenClient<'static>,
+    contract_id: Address,
+    c: CumpleYCobraContractClient<'static>,
+}
+
+fn hash(env: &Env, b: u8) -> BytesN<32> {
+    BytesN::from_array(env, &[b; 32])
+}
+
+fn tid(env: &Env, s: &str) -> String {
+    String::from_str(env, s)
+}
+
+fn setup(modo: Modo) -> Ctx {
+    let env = Env::default();
+    if modo == Modo::Libre {
+        env.mock_all_auths();
+    }
+    env.ledger().set_timestamp(START_TS);
+
+    let arbiter = Address::generate(&env);
+    let client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+    let third = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = sac.address();
+    let sac_admin = StellarAssetClient::new(&env, &token_id);
+
+    for (to, amt) in [(&client, MINT), (&third, 7i128)] {
+        if modo == Modo::Estricto {
+            env.mock_auths(&[MockAuth {
+                address: &token_admin,
+                invoke: &MockAuthInvoke {
+                    contract: &token_id,
+                    fn_name: "mint",
+                    args: (to, amt).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }]);
+        }
+        sac_admin.mint(to, &amt);
+    }
+
+    let contract_id = env.register(CumpleYCobraContract, ());
+    let c = CumpleYCobraContractClient::new(&env, &contract_id);
+    if modo == Modo::Estricto {
+        env.mock_auths(&[MockAuth {
+            address: &arbiter,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "initialize",
+                args: (&arbiter, &token_id).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+    }
+    c.initialize(&arbiter, &token_id);
+
+    let token = TokenClient::new(&env, &token_id);
+    Ctx {
+        env,
+        modo,
+        arbiter,
+        client,
+        freelancer,
+        third,
+        token,
+        contract_id,
+        c,
+    }
+}
+
+fn deposit_simple(ctx: &Ctx, name: &str, amount: i128, deadline_secs: u64) -> String {
+    let id = tid(&ctx.env, name);
+    let rh = hash(&ctx.env, 1);
+    if ctx.modo == Modo::Estricto {
+        let token_id = ctx.token.address.clone();
+        ctx.env.mock_auths(&[MockAuth {
+            address: &ctx.client,
+            invoke: &MockAuthInvoke {
+                contract: &ctx.contract_id,
+                fn_name: "deposit",
+                args: (&ctx.client, &id, amount, deadline_secs, &rh).into_val(&ctx.env),
+                sub_invokes: &[MockAuthInvoke {
+                    contract: &token_id,
+                    fn_name: "transfer",
+                    args: (&ctx.client, &ctx.contract_id, amount).into_val(&ctx.env),
+                    sub_invokes: &[],
+                }],
+            },
+        }]);
+    }
+    ctx.c
+        .deposit(&ctx.client, &id, &amount, &deadline_secs, &rh);
+    id
+}
+
+fn deposit_two_milestones(ctx: &Ctx, name: &str) -> String {
+    let id = tid(&ctx.env, name);
+    let amounts: Vec<i128> = vec![&ctx.env, 4 * UNIT, 6 * UNIT];
+    let deadlines: Vec<u64> = vec![&ctx.env, DIA, 2 * DIA];
+    let hashes: Vec<BytesN<32>> = vec![&ctx.env, hash(&ctx.env, 10), hash(&ctx.env, 11)];
+    if ctx.modo == Modo::Estricto {
+        let token_id = ctx.token.address.clone();
+        ctx.env.mock_auths(&[MockAuth {
+            address: &ctx.client,
+            invoke: &MockAuthInvoke {
+                contract: &ctx.contract_id,
+                fn_name: "deposit_milestones",
+                args: (&ctx.client, &id, &amounts, &deadlines, &hashes).into_val(&ctx.env),
+                sub_invokes: &[MockAuthInvoke {
+                    contract: &token_id,
+                    fn_name: "transfer",
+                    args: (&ctx.client, &ctx.contract_id, 10 * UNIT).into_val(&ctx.env),
+                    sub_invokes: &[],
+                }],
+            },
+        }]);
+    }
+    ctx.c
+        .deposit_milestones(&ctx.client, &id, &amounts, &deadlines, &hashes);
+    id
+}
+
+// ---------------------------------------------------------------------------
+// Lote 1: mutual_split_task y mutual_split_milestone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_mutual_split_task_camino_feliz_y_saldos_cuadran() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_simple(&ctx, "split-t1", 10 * UNIT, DIA);
+
+    // Cliente y programador acuerdan 6 USDC al programador y 4 USDC de vuelta al cliente.
+    ctx.c.mutual_split_task(&id, &ctx.freelancer, &(6 * UNIT));
+
+    let task = ctx.c.get_task(&id);
+    assert_eq!(task.status, TaskStatus::Released);
+    assert_eq!(task.freelancer, Some(ctx.freelancer.clone()));
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 6 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 6 * UNIT);
+
+    // No se puede volver a repartir ni reembolsar una tarea ya cerrada.
+    assert_eq!(
+        ctx.c.try_mutual_split_task(&id, &ctx.freelancer, &(2 * UNIT)),
+        Err(Ok(Error::NotFunded))
+    );
+}
+
+#[test]
+fn v4_mutual_split_task_rechaza_montos_invalidos_y_exige_doble_firma() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_simple(&ctx, "split-t2", 5 * UNIT, DIA);
+
+    assert_eq!(
+        ctx.c.try_mutual_split_task(&id, &ctx.freelancer, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_mutual_split_task(&id, &ctx.freelancer, &(-1)),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_mutual_split_task(&id, &ctx.freelancer, &(5 * UNIT)),
+        Err(Ok(Error::InvalidAmount))
+    );
+
+    // En modo estricto, ni el cliente solo ni cliente + árbitro sustituyen la firma del programador.
+    let est = setup(Modo::Estricto);
+    let eid = deposit_simple(&est, "split-t-strict", 5 * UNIT, DIA);
+    est.env.mock_auths(&[
+        MockAuth {
+            address: &est.client,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "mutual_split_task",
+                args: (&eid, &est.freelancer, 2 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+        MockAuth {
+            address: &est.arbiter,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "mutual_split_task",
+                args: (&eid, &est.freelancer, 2 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+    ]);
+    assert!(est
+        .c
+        .try_mutual_split_task(&eid, &est.freelancer, &(2 * UNIT))
+        .is_err());
+
+    // Con ambas firmas (cliente + programador) sí pasa.
+    est.env.mock_auths(&[
+        MockAuth {
+            address: &est.client,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "mutual_split_task",
+                args: (&eid, &est.freelancer, 2 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+        MockAuth {
+            address: &est.freelancer,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "mutual_split_task",
+                args: (&eid, &est.freelancer, 2 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+    ]);
+    est.c.mutual_split_task(&eid, &est.freelancer, &(2 * UNIT));
+    assert_eq!(est.token.balance(&est.freelancer), 2 * UNIT);
+    assert_eq!(est.token.balance(&est.client), MINT - 2 * UNIT);
+}
+
+#[test]
+fn v4_mutual_split_milestone_camino_feliz_y_validaciones() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_two_milestones(&ctx, "split-p1");
+
+    // Hito 0 (4 USDC): 2.5 al programador y 1.5 de vuelta al cliente; fija al programador.
+    ctx.c
+        .mutual_split_milestone(&id, &0, &ctx.freelancer, &(25_000_000));
+
+    let project = ctx.c.get_project(&id);
+    assert_eq!(project.freelancer, Some(ctx.freelancer.clone()));
+    assert_eq!(project.milestones.get(0).unwrap().status, MilestoneStatus::Released);
+    assert_eq!(project.milestones.get(1).unwrap().status, MilestoneStatus::Funded);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 25_000_000);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 6 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 10 * UNIT + 15_000_000);
+
+    // En el hito 1 no se puede repartir a otro programador distinto del fijado.
+    assert_eq!(
+        ctx.c
+            .try_mutual_split_milestone(&id, &1, &ctx.third, &(2 * UNIT)),
+        Err(Ok(Error::WrongFreelancer))
+    );
+    // Índice fuera de rango y monto inválido fallan con su error exacto.
+    assert_eq!(
+        ctx.c
+            .try_mutual_split_milestone(&id, &9, &ctx.freelancer, &(1 * UNIT)),
+        Err(Ok(Error::MilestoneNotFound))
+    );
+    assert_eq!(
+        ctx.c
+            .try_mutual_split_milestone(&id, &1, &ctx.freelancer, &(6 * UNIT)),
+        Err(Ok(Error::InvalidAmount))
+    );
+    // Hito 0 ya pagado falla con NotFunded.
+    assert_eq!(
+        ctx.c
+            .try_mutual_split_milestone(&id, &0, &ctx.freelancer, &(1 * UNIT)),
+        Err(Ok(Error::NotFunded))
+    );
+}

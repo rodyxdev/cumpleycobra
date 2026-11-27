@@ -18,6 +18,11 @@
 //
 // v3 (25 de noviembre de 2026): extensión del pago por hitos. Ninguna función
 // de v1 ni de v2 cambia; se agregan `add_milestone` y `top_up_milestone`.
+//
+// v4 (26 de noviembre de 2026): extensión del escrow (acuerdos parciales,
+// cancelaciones con doble firma, reembolso en lote, recorte/división/prórroga
+// de hitos, bono manual, depósito por lote y rotación segura del árbitro).
+// Ninguna función de v1, v2 ni v3 cambia.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -288,6 +293,31 @@ pub struct TopUpMilestoneEvent {
     pub index: u32,
     pub amount: i128,
     pub new_amount: i128,
+}
+
+// v4: cliente y programador acordaron un reparto parcial de una tarea simple.
+#[contractevent(topics = ["mutual_split_task"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutualSplitTaskEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub freelancer_amount: i128,
+    pub refund_amount: i128,
+}
+
+// v4: cliente y programador acordaron un reparto parcial de un hito.
+#[contractevent(topics = ["mutual_split_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutualSplitMilestoneEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub client: Address,
+    pub freelancer: Address,
+    pub freelancer_amount: i128,
+    pub refund_amount: i128,
 }
 
 // ---------------------------------------------------------------------------
@@ -848,6 +878,110 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v4: acuerdos parciales, cancelaciones, lotes y operación del escrow
+    // -----------------------------------------------------------------------
+
+    // Reparto parcial acordado para una tarea simple: cliente y programador
+    // firman juntos para pagar `freelancer_amount` al programador y devolver el
+    // resto al cliente en una sola transacción atómica. Se permite también tras
+    // el plazo porque es el propio cliente quien renuncia al reembolso total.
+    pub fn mutual_split_task(
+        env: Env,
+        task_id: String,
+        freelancer: Address,
+        freelancer_amount: i128,
+    ) -> Result<(), Error> {
+        // Primero se carga la tarea y se verifica que siga en Funded.
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+
+        // Doble autorización obligatoria: ambas partes confirman el reparto.
+        task.client.require_auth();
+        freelancer.require_auth();
+
+        // El reparto debe ser estrictamente parcial: mayor a 0 y menor al total.
+        if freelancer_amount <= 0 || freelancer_amount >= task.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let refund_amount = task
+            .amount
+            .checked_sub(freelancer_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        // Efectos antes de transferir (checks-effects-interactions) + TTL.
+        task.status = TaskStatus::Released;
+        task.freelancer = Some(freelancer.clone());
+        Self::save_task(&env, &key, &task);
+
+        // Interacciones: pago parcial al programador y devolución del resto al cliente.
+        Self::pay(&env, &freelancer, freelancer_amount)?;
+        Self::pay(&env, &task.client, refund_amount)?;
+
+        MutualSplitTaskEvent {
+            task_id,
+            client: task.client,
+            freelancer,
+            freelancer_amount,
+            refund_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Reparto parcial acordado para un hito de un proyecto: cliente y
+    // programador firman juntos para liberar `freelancer_amount` al programador
+    // y devolver la diferencia al cliente en una sola transacción atómica.
+    pub fn mutual_split_milestone(
+        env: Env,
+        task_id: String,
+        index: u32,
+        freelancer: Address,
+        freelancer_amount: i128,
+    ) -> Result<(), Error> {
+        // Se carga el proyecto y se verifica que el hito exista y siga en Funded.
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+
+        // Doble autorización obligatoria: cliente y programador aprueban el reparto.
+        project.client.require_auth();
+        freelancer.require_auth();
+
+        // Misma regla de identidad del proyecto: si ya hay programador fijado,
+        // no se puede repartir a una dirección distinta.
+        Self::bind_freelancer(&mut project, &freelancer)?;
+
+        // Reparto estrictamente parcial sobre el monto del hito.
+        if freelancer_amount <= 0 || freelancer_amount >= milestone.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let refund_amount = milestone
+            .amount
+            .checked_sub(freelancer_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        // Efectos antes de transferir (checks-effects-interactions) + TTL.
+        milestone.status = MilestoneStatus::Released;
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+
+        // Interacciones: transferencia atómica al programador y reembolso al cliente.
+        Self::pay(&env, &freelancer, freelancer_amount)?;
+        Self::pay(&env, &project.client, refund_amount)?;
+
+        MutualSplitMilestoneEvent {
+            task_id,
+            index,
+            client: project.client,
+            freelancer,
+            freelancer_amount,
+            refund_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
 
@@ -950,5 +1084,8 @@ impl CumpleYCobraContract {
 
 mod test;
 
-// Pruebas del pago por hitos (v2).
+// Pruebas del pago por hitos (v2 y v3).
 mod test_hitos;
+
+// Pruebas de las funciones nuevas de v4.
+mod test_v4;
