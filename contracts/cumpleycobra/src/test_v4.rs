@@ -904,3 +904,147 @@ fn v4_rotate_arbiter_doble_firma_y_efecto_en_release() {
     est.c.release(&id, &est.freelancer, &ch, &vh);
     assert_eq!(est.token.balance(&est.freelancer), 2 * UNIT);
 }
+
+// ---------------------------------------------------------------------------
+// Pruebas estrictas de autorización e invariante contable combinado de v4
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_estricto_rechaza_firmas_incompletas_en_hitos_y_lote() {
+    let est = setup(Modo::Estricto);
+    let pid = deposit_two_milestones(&est, "strict-all");
+
+    // `mutual_split_milestone`: solo cliente (sin programador) falla.
+    est.env.mock_auths(&[MockAuth {
+        address: &est.client,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "mutual_split_milestone",
+            args: (&pid, 0u32, &est.freelancer, 2 * UNIT).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est
+        .c
+        .try_mutual_split_milestone(&pid, &0, &est.freelancer, &(2 * UNIT))
+        .is_err());
+
+    // `cancel_unassigned_project`: solo árbitro (sin cliente) falla.
+    est.env.mock_auths(&[MockAuth {
+        address: &est.arbiter,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "cancel_unassigned_project",
+            args: (&pid,).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est.c.try_cancel_unassigned_project(&pid).is_err());
+
+    // `extend_milestone_deadline`: firmado por un tercero falla.
+    est.env.mock_auths(&[MockAuth {
+        address: &est.third,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "extend_milestone_deadline",
+            args: (&pid, 0u32, 60u64).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est.c.try_extend_milestone_deadline(&pid, &0, &60).is_err());
+
+    // `split_milestone`: una vez fijado el programador, el cliente solo ya no puede dividir un hito.
+    est.env.mock_auths(&[MockAuth {
+        address: &est.client,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "client_release_milestone",
+            args: (&pid, 0u32, &est.freelancer).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    est.c.client_release_milestone(&pid, &0, &est.freelancer);
+
+    let h1 = hash(&est.env, 70);
+    let h2 = hash(&est.env, 71);
+    est.env.mock_auths(&[MockAuth {
+        address: &est.client,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "split_milestone",
+            args: (&pid, 1u32, 2 * UNIT, DIA + 60, &h1, &h2).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est
+        .c
+        .try_split_milestone(&pid, &1, &(2 * UNIT), &(DIA + 60), &h1, &h2)
+        .is_err());
+
+    // `batch_deposit`: firmado por un tercero que no es el cliente falla.
+    let ids: Vec<String> = vec![&est.env, tid(&est.env, "b-1"), tid(&est.env, "b-2")];
+    let amts: Vec<i128> = vec![&est.env, UNIT, UNIT];
+    let dls: Vec<u64> = vec![&est.env, DIA, DIA];
+    let hs: Vec<BytesN<32>> = vec![&est.env, hash(&est.env, 72), hash(&est.env, 73)];
+    est.env.mock_auths(&[MockAuth {
+        address: &est.third,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "batch_deposit",
+            args: (&est.client, &ids, &amts, &dls, &hs).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est
+        .c
+        .try_batch_deposit(&est.client, &ids, &amts, &dls, &hs)
+        .is_err());
+}
+
+#[test]
+fn v4_invariante_contable_combinado_todas_las_operaciones_de_hitos() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_two_milestones(&ctx, "inv-v4");
+    // Depósito inicial: 4 + 6 = 10 USDC.
+    let check_sum = |c: &Ctx| {
+        let total = c.token.balance(&c.client)
+            + c.token.balance(&c.freelancer)
+            + c.token.balance(&c.contract_id);
+        assert_eq!(total, MINT);
+    };
+    check_sum(&ctx);
+
+    // 1) Recorta hito 0 en 1 USDC (4 -> 3; 1 vuelve al cliente).
+    ctx.c.reduce_milestone(&id, &0, &(1 * UNIT));
+    check_sum(&ctx);
+
+    // 2) Divide hito 1 (6 USDC) en 2 USDC (1.5 días) + 4 USDC (2 días).
+    ctx.c.split_milestone(
+        &id,
+        &1,
+        &(2 * UNIT),
+        &(DIA + DIA / 2),
+        &hash(&ctx.env, 80),
+        &hash(&ctx.env, 81),
+    );
+    check_sum(&ctx);
+
+    // 3) Extiende el plazo del hito 0 (+6 horas, sigue <= 1.5 días).
+    ctx.c.extend_milestone_deadline(&id, &0, &(DIA / 4));
+    check_sum(&ctx);
+
+    // 4) Acuerdo parcial del hito 0 (3 USDC): 2 al programador, 1 al cliente.
+    ctx.c
+        .mutual_split_milestone(&id, &0, &ctx.freelancer, &(2 * UNIT));
+    check_sum(&ctx);
+
+    // 5) Vencen los hitos 1 y 2 (2 + 4 = 6 USDC): reembolso en lote al cliente.
+    ctx.env.ledger().set_timestamp(START_TS + 2 * DIA);
+    assert_eq!(ctx.c.refund_all_expired_milestones(&id), 2);
+    check_sum(&ctx);
+
+    // Contrato en 0; programador cobró exactamente 2 USDC; cliente recuperó 8 USDC.
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 2 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 2 * UNIT);
+}
