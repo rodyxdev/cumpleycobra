@@ -16,7 +16,7 @@ def test_documento_para_jueces_con_enlaces_e_instrucciones():
     tasks = [{"task_id": "AbC123xYz", "invite": "https://app.vercel.app/tarea/AbC123xYz?invitacion=tok", "expires_at": "2026-10-03 12:00 UTC"}]
     md = render_markdown("https://app.vercel.app", tasks, "1", 7, "2026-09-26 12:00 UTC")
     assert "[`AbC123xYz`](https://app.vercel.app/tarea/AbC123xYz?invitacion=tok)" in md
-    for step in ("Inicia sesión con Pollar", "Activa USDC", "Acepto los criterios", "Caso C", "Caso A", "Ver transacción"):
+    for step in ("Inicia sesión", "Activa USDC", "Acepto los criterios", "Caso C", "Caso A", "Ver transacción"):
         assert step in md
     assert "simulación" not in md.lower()
 
