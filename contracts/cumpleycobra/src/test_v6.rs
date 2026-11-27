@@ -214,3 +214,143 @@ fn v6_transfer_client_cambia_quien_recibe_el_reembolso() {
     est.c.transfer_client(&eid, &empresa);
     assert_eq!(est.c.get_task(&eid).client, empresa);
 }
+
+// ---------------------------------------------------------------------------
+// Lote 2: propina, TTL, estadísticas y depósito con programador registrado
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v6_tip_va_del_cliente_al_programador_solo_tras_el_pago() {
+    let ctx = setup(Modo::Libre);
+    let id = tarea_asignada(&ctx, "propina-1", 2 * UNIT);
+    // Antes de pagar no hay propina (para eso existe el bono).
+    assert_eq!(ctx.c.try_tip(&id, &UNIT), Err(Ok(Error::NotFunded)));
+    ctx.c.client_release(&id, &ctx.freelancer);
+    assert_eq!(ctx.c.try_tip(&id, &0), Err(Ok(Error::InvalidAmount)));
+
+    let antes = ctx.c.get_stats();
+    ctx.c.tip(&id, &UNIT);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 3 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 3 * UNIT);
+    // La propina no pasa por el contrato: los totales no cambian.
+    assert_eq!(ctx.c.get_stats(), antes);
+    assert_eq!(
+        ctx.c.try_tip(&String::from_str(&ctx.env, "nada"), &UNIT),
+        Err(Ok(Error::NotFound))
+    );
+
+    // Estricto: solo el cliente de la tarea.
+    let est = setup(Modo::Estricto);
+    let eid = tarea_asignada_estricta(&est, "propina-estricto", 2 * UNIT);
+    firmas(&est, &[&est.client], "client_release", (&eid, &est.freelancer).into_val(&est.env));
+    est.c.client_release(&eid, &est.freelancer);
+    firmas(&est, &[&est.third], "tip", (&eid, 5i128).into_val(&est.env));
+    assert!(est.c.try_tip(&eid, &5).is_err());
+}
+
+#[test]
+fn v6_bump_ttl_sin_permisos_y_solo_si_existe() {
+    let ctx = setup(Modo::Estricto); // sin ninguna firma
+    let id = deposit_simple(&ctx, "ttl-1", UNIT, DIA);
+    ctx.c.bump_ttl(&id);
+    assert_eq!(
+        ctx.c.try_bump_ttl(&String::from_str(&ctx.env, "nada")),
+        Err(Ok(Error::NotFound))
+    );
+    // Proyecto por hitos.
+    let libre = setup(Modo::Libre);
+    let pid = super::test_v4::deposit_two_milestones(&libre, "ttl-proyecto");
+    libre.c.bump_ttl(&pid);
+}
+
+#[test]
+fn v6_get_stats_cuadra_con_el_saldo_real_tras_todas_las_operaciones() {
+    let ctx = setup(Modo::Libre);
+    let (h1, h2) = (hash(&ctx.env, 1), hash(&ctx.env, 2));
+    assert_eq!(ctx.c.get_stats(), Stats { deposited: 0, paid_out: 0, held: 0 });
+
+    let a = tarea_asignada(&ctx, "stats-a", 5 * UNIT);
+    ctx.c.top_up_task(&a, &UNIT);
+    ctx.c.release_partial(&a, &(2 * UNIT), &h1, &h2);
+    let b = deposit_simple(&ctx, "stats-b", 3 * UNIT, DIA);
+    ctx.c.client_release_with_bonus(&b, &ctx.third, &UNIT); // el bono no pasa por el contrato
+    let p = super::test_v4::deposit_two_milestones(&ctx, "stats-p");
+    ctx.c.client_release_milestone(&p, &0, &ctx.freelancer);
+    ctx.c.top_up_milestone(&p, &1, &UNIT);
+
+    let st = ctx.c.get_stats();
+    // Entró: 5 + 1 + 3 + 10 + 1 = 20. Salió: 2 + 3 + 4 = 9.
+    assert_eq!(st, Stats { deposited: 20 * UNIT, paid_out: 9 * UNIT, held: 11 * UNIT });
+    assert_eq!(st.held, ctx.token.balance(&ctx.contract_id));
+
+    ctx.c.mutual_cancel(&a);
+    ctx.env.ledger().set_timestamp(START_TS + 3 * DIA);
+    ctx.c.timeout_refund_milestone(&p, &1);
+    let fin = ctx.c.get_stats();
+    assert_eq!(fin.held, 0);
+    assert_eq!(fin.held, ctx.token.balance(&ctx.contract_id));
+    assert_eq!(fin.deposited, fin.paid_out);
+}
+
+#[test]
+fn v6_deposit_assigned_deposita_y_registra_en_una_sola_transaccion() {
+    let ctx = setup(Modo::Libre);
+    let id = String::from_str(&ctx.env, "dep-asig-1");
+    ctx.c
+        .deposit_assigned(&ctx.client, &id, &(2 * UNIT), &DIA, &hash(&ctx.env, 3), &ctx.freelancer);
+    let t = ctx.c.get_task(&id);
+    assert_eq!(t.freelancer, Some(ctx.freelancer.clone()));
+    assert_eq!((t.amount, t.status), (2 * UNIT, TaskStatus::Funded));
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 2 * UNIT);
+    // Ya registrado: el cliente no puede pagarse a sí mismo.
+    assert_eq!(
+        ctx.c.try_client_release(&id, &ctx.client),
+        Err(Ok(Error::WrongFreelancer))
+    );
+    // Repetido, o el cliente como su propio programador.
+    assert_eq!(
+        ctx.c.try_deposit_assigned(&ctx.client, &id, &UNIT, &DIA, &hash(&ctx.env, 3), &ctx.freelancer),
+        Err(Ok(Error::AlreadyExists))
+    );
+    let otro = String::from_str(&ctx.env, "dep-asig-2");
+    assert_eq!(
+        ctx.c.try_deposit_assigned(&ctx.client, &otro, &UNIT, &DIA, &hash(&ctx.env, 3), &ctx.client),
+        Err(Ok(Error::NoChange))
+    );
+}
+
+#[test]
+fn v6_deposit_assigned_estricto_exige_cliente_y_programador() {
+    let est = setup(Modo::Estricto);
+    let id = String::from_str(&est.env, "dep-asig-estricto");
+    let rh = hash(&est.env, 3);
+    let args: Vec<Val> = (&est.client, &id, 2 * UNIT, DIA, &rh, &est.freelancer).into_val(&est.env);
+    let token_id = est.token.address.clone();
+    let transferencia = [MockAuthInvoke {
+        contract: &token_id,
+        fn_name: "transfer",
+        args: (&est.client, &est.contract_id, 2 * UNIT).into_val(&est.env),
+        sub_invokes: &[],
+    }];
+    let del_cliente = MockAuthInvoke {
+        contract: &est.contract_id,
+        fn_name: "deposit_assigned",
+        args: args.clone(),
+        sub_invokes: &transferencia,
+    };
+    let del_programador = MockAuthInvoke {
+        contract: &est.contract_id,
+        fn_name: "deposit_assigned",
+        args,
+        sub_invokes: &[],
+    };
+    // Solo el cliente: falta que el programador acepte.
+    est.env.mock_auths(&[MockAuth { address: &est.client, invoke: &del_cliente }]);
+    assert!(est.c.try_deposit_assigned(&est.client, &id, &(2 * UNIT), &DIA, &rh, &est.freelancer).is_err());
+    est.env.mock_auths(&[
+        MockAuth { address: &est.client, invoke: &del_cliente },
+        MockAuth { address: &est.freelancer, invoke: &del_programador },
+    ]);
+    est.c.deposit_assigned(&est.client, &id, &(2 * UNIT), &DIA, &rh, &est.freelancer);
+    assert_eq!(est.c.get_task(&id).freelancer, Some(est.freelancer.clone()));
+}

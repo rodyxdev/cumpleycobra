@@ -38,7 +38,10 @@
 // firma de ambos (y la de quien entra, cuando cambia una de las partes):
 // `amend_rules`, `mutual_cancel`, `reassign_freelancer` y `transfer_client`.
 // Más `release_partial` (el árbitro paga una parte cuando se cumplen algunos
-// criterios). Sin usar estas funciones, todo se comporta igual que en v5.
+// criterios), `tip` (propina tras el pago), `bump_ttl` (mantener viva una
+// tarea), `get_stats` (totales del contrato) y `deposit_assigned` (depositar
+// con el programador ya registrado). Sin usar estas funciones, todo se
+// comporta igual que en v5.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -144,6 +147,16 @@ pub struct Config {
     pub token: Address,
 }
 
+// v6: totales del contrato, devueltos por `get_stats`. `held` es lo que el
+// contrato debe tener en USDC: lo que entró menos lo que salió.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Stats {
+    pub deposited: i128,
+    pub paid_out: i128,
+    pub held: i128,
+}
+
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
@@ -156,6 +169,9 @@ pub enum DataKey {
     Token,
     Task(String),
     Project(String),
+    // v6: total que entró al contrato y total que salió (instancia).
+    TotalIn,
+    TotalOut,
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +568,17 @@ pub struct TransferClientEvent {
     pub new_client: Address,
 }
 
+// v6: el cliente le dio una propina al programador de una tarea ya pagada.
+#[contractevent(topics = ["tip"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TipEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+}
+
 #[contract]
 pub struct CumpleYCobraContract;
 
@@ -591,7 +618,7 @@ impl CumpleYCobraContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        let token_addr = Self::token(&env)?;
+        Self::token(&env)?; // el contrato debe estar inicializado
         let key = DataKey::Task(task_id.clone());
         if env.storage().persistent().has(&key)
             || env.storage().persistent().has(&DataKey::Project(task_id.clone()))
@@ -623,11 +650,7 @@ impl CumpleYCobraContract {
         Self::save_task(&env, &key, &task);
 
         // Interacción: el USDC pasa del cliente al contrato.
-        token::Client::new(&env, &token_addr).transfer(
-            &client,
-            &env.current_contract_address(),
-            &amount,
-        );
+        Self::collect(&env, &client, *&amount)?;
 
         DepositEvent {
             task_id,
@@ -795,7 +818,7 @@ impl CumpleYCobraContract {
         }
 
         // Contrato inicializado e id nuevo: ni proyecto ni tarea con ese id.
-        let token_addr = Self::token(&env)?;
+        Self::token(&env)?; // el contrato debe estar inicializado
         let key = DataKey::Project(task_id.clone());
         if env.storage().persistent().has(&key)
             || env.storage().persistent().has(&DataKey::Task(task_id.clone()))
@@ -844,11 +867,7 @@ impl CumpleYCobraContract {
         Self::save_project(&env, &key, &project);
 
         // Interacción: el total pasa del cliente al contrato.
-        token::Client::new(&env, &token_addr).transfer(
-            &client,
-            &env.current_contract_address(),
-            &total,
-        );
+        Self::collect(&env, &client, *&total)?;
 
         DepositMilestonesEvent {
             task_id,
@@ -1007,7 +1026,7 @@ impl CumpleYCobraContract {
         project.client.require_auth();
 
         // Contrato inicializado y límite máximo de hitos por proyecto.
-        let token_addr = Self::token(&env)?;
+        Self::token(&env)?; // el contrato debe estar inicializado
         if project.milestones.len() >= MAX_MILESTONES {
             return Err(Error::InvalidMilestones);
         }
@@ -1042,11 +1061,7 @@ impl CumpleYCobraContract {
         Self::save_project(&env, &key, &project);
 
         // Interacción: el USDC del nuevo hito pasa del cliente al contrato.
-        token::Client::new(&env, &token_addr).transfer(
-            &project.client,
-            &env.current_contract_address(),
-            &amount,
-        );
+        Self::collect(&env, &project.client, *&amount)?;
 
         AddMilestoneEvent {
             task_id,
@@ -1075,7 +1090,7 @@ impl CumpleYCobraContract {
         project.client.require_auth();
 
         // El hito debe existir, seguir en Funded y no haber vencido su plazo.
-        let token_addr = Self::token(&env)?;
+        Self::token(&env)?; // el contrato debe estar inicializado
         let mut milestone = Self::funded_milestone(&project, index)?;
         if env.ledger().timestamp() >= milestone.deadline {
             return Err(Error::DeadlinePassed);
@@ -1097,11 +1112,7 @@ impl CumpleYCobraContract {
         Self::save_project(&env, &key, &project);
 
         // Interacción: el aumento pasa del cliente al contrato.
-        token::Client::new(&env, &token_addr).transfer(
-            &project.client,
-            &env.current_contract_address(),
-            &amount,
-        );
+        Self::collect(&env, &project.client, *&amount)?;
 
         TopUpMilestoneEvent {
             task_id,
@@ -1448,7 +1459,7 @@ impl CumpleYCobraContract {
 
         // Interacciones atómicas: el contrato libera `task.amount` y el cliente envía `bonus`.
         let token_client = token::Client::new(&env, &token_addr);
-        token_client.transfer(&env.current_contract_address(), &freelancer, &task.amount);
+        Self::pay(&env, &freelancer, task.amount)?;
         token_client.transfer(&task.client, &freelancer, &bonus);
 
         ClientReleaseBonusEvent {
@@ -1488,7 +1499,7 @@ impl CumpleYCobraContract {
             return Err(Error::InvalidMilestones);
         }
 
-        let token_addr = Self::token(&env)?;
+        Self::token(&env)?; // el contrato debe estar inicializado
         let now = env.ledger().timestamp();
         let mut total: i128 = 0;
 
@@ -1549,11 +1560,7 @@ impl CumpleYCobraContract {
         }
 
         // Interacción: una sola transferencia por el total del lote al contrato.
-        token::Client::new(&env, &token_addr).transfer(
-            &client,
-            &env.current_contract_address(),
-            &total,
-        );
+        Self::collect(&env, &client, *&total)?;
 
         BatchDepositEvent {
             client,
@@ -1880,12 +1887,8 @@ impl CumpleYCobraContract {
         Self::save_task(&env, &key, &task);
 
         // Interacción: el cliente transfiere el extra al contrato.
-        let token_addr = Self::token(&env)?;
-        token::Client::new(&env, &token_addr).transfer(
-            &task.client,
-            &env.current_contract_address(),
-            &amount,
-        );
+        Self::token(&env)?; // el contrato debe estar inicializado
+        Self::collect(&env, &task.client, *&amount)?;
 
         TopUpTaskEvent {
             task_id,
@@ -2101,9 +2104,125 @@ impl CumpleYCobraContract {
         Ok(())
     }
 
+    // El cliente le da una propina al programador de una tarea ya pagada. El
+    // dinero va directo del cliente al programador (no pasa por el contrato),
+    // pero queda un evento on-chain amarrado a la tarea.
+    pub fn tip(env: Env, task_id: String, amount: i128) -> Result<(), Error> {
+        let task: Task = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Task(task_id.clone()))
+            .ok_or(Error::NotFound)?;
+        task.client.require_auth();
+
+        // Solo sobre una tarea pagada: antes de eso existe el bono.
+        if task.status != TaskStatus::Released {
+            return Err(Error::NotFunded);
+        }
+        let freelancer = Self::assigned(&task)?;
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let token_addr = Self::token(&env)?;
+        token::Client::new(&env, &token_addr).transfer(&task.client, &freelancer, &amount);
+
+        TipEvent {
+            task_id,
+            client: task.client,
+            freelancer,
+            amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Cualquiera puede extender la vida en el ledger de una tarea o de un
+    // proyecto (y de la instancia), para que no se archive mientras espera.
+    // No cambia nada más ni mueve dinero.
+    pub fn bump_ttl(env: Env, task_id: String) -> Result<(), Error> {
+        let task_key = DataKey::Task(task_id.clone());
+        let project_key = DataKey::Project(task_id);
+        let key = if env.storage().persistent().has(&task_key) {
+            task_key
+        } else if env.storage().persistent().has(&project_key) {
+            project_key
+        } else {
+            return Err(Error::NotFound);
+        };
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Ok(())
+    }
+
+    // Totales del contrato: cuánto USDC entró, cuánto salió y cuánto debe
+    // tener guardado. Cualquiera puede compararlo con el saldo real del token.
+    pub fn get_stats(env: Env) -> Stats {
+        let deposited = Self::total(&env, &DataKey::TotalIn);
+        let paid_out = Self::total(&env, &DataKey::TotalOut);
+        Stats {
+            deposited,
+            paid_out,
+            held: deposited - paid_out,
+        }
+    }
+
+    // Depósito con el programador ya registrado desde el inicio, en una sola
+    // transacción: firman el cliente (el dinero) y el programador (acepta).
+    // Equivale a `deposit` seguido de la asignación, sin pasar por el árbitro.
+    pub fn deposit_assigned(
+        env: Env,
+        client: Address,
+        task_id: String,
+        amount: i128,
+        deadline_secs: u64,
+        rules_hash: BytesN<32>,
+        freelancer: Address,
+    ) -> Result<(), Error> {
+        freelancer.require_auth();
+        if freelancer == client {
+            return Err(Error::NoChange);
+        }
+        Self::deposit(env.clone(), client, task_id.clone(), amount, deadline_secs, rules_hash)?;
+
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        task.freelancer = Some(freelancer.clone());
+        Self::save_task(&env, &key, &task);
+
+        AssignFreelancerEvent { task_id, freelancer }.publish(&env);
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v6: lee uno de los totales de la instancia (0 si nunca se escribió).
+    fn total(env: &Env, key: &DataKey) -> i128 {
+        env.storage().instance().get(key).unwrap_or(0)
+    }
+
+    // v6: suma `amount` a uno de los totales.
+    fn add_total(env: &Env, key: &DataKey, amount: i128) -> Result<(), Error> {
+        let next = Self::total(env, key)
+            .checked_add(amount)
+            .ok_or(Error::InvalidAmount)?;
+        env.storage().instance().set(key, &next);
+        Ok(())
+    }
+
+    // v6: toda entrada de USDC al contrato pasa por aquí y queda en `TotalIn`.
+    fn collect(env: &Env, from: &Address, amount: i128) -> Result<(), Error> {
+        let token_addr = Self::token(env)?;
+        token::Client::new(env, &token_addr).transfer(
+            from,
+            &env.current_contract_address(),
+            &amount,
+        );
+        Self::add_total(env, &DataKey::TotalIn, amount)
+    }
 
     // v6: el programador registrado de una tarea (`WrongFreelancer` si no hay).
     fn assigned(task: &Task) -> Result<Address, Error> {
@@ -2212,7 +2331,8 @@ impl CumpleYCobraContract {
             to,
             &amount,
         );
-        Ok(())
+        // v6: toda salida de USDC del contrato queda en `TotalOut`.
+        Self::add_total(env, &DataKey::TotalOut, amount)
     }
 }
 
