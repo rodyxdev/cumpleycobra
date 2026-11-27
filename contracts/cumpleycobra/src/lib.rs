@@ -30,6 +30,8 @@
 // ningún pago del cliente puede ir a otra dirección (`WrongFreelancer`) ni la
 // tarea se puede cancelar como «sin asignar» (`AlreadyAssigned`). Sin
 // asignación, todas las funciones anteriores se comportan exactamente igual.
+// Se agregan además `extend_deadline`, `top_up_task`, `freelancer_refund` y la
+// lectura por lote `get_tasks`.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -57,6 +59,10 @@ const TTL_EXTEND_TO: u32 = 30 * DAY_IN_LEDGERS;
 const MIN_MILESTONES: u32 = 2;
 const MAX_MILESTONES: u32 = 10;
 const MAX_MILESTONE_DEADLINE_SECS: u64 = 28 * 24 * 60 * 60;
+
+// v5: una lectura por lote devuelve como máximo 20 tareas, para que la
+// simulación no pase el límite de lecturas de una transacción de Soroban.
+const MAX_BATCH_READ: u32 = 20;
 
 // ---------------------------------------------------------------------------
 // Tipos guardados en el contrato
@@ -173,6 +179,8 @@ pub enum Error {
     AlreadyAssigned = 13,
     // v4: la dirección propuesta para rotar el árbitro es igual al árbitro actual.
     SameArbiter = 14,
+    // v5: la lectura por lote pide 0 tareas o más de 20.
+    TooManyItems = 15,
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +456,37 @@ pub struct AssignProjectFreelancerEvent {
     #[topic]
     pub task_id: String,
     pub freelancer: Address,
+}
+
+// v5: el cliente le dio más tiempo al programador.
+#[contractevent(topics = ["extend_deadline"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExtendDeadlineEvent {
+    #[topic]
+    pub task_id: String,
+    pub old_deadline: u64,
+    pub new_deadline: u64,
+}
+
+// v5: el cliente agregó dinero a una tarea depositada.
+#[contractevent(topics = ["top_up_task"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopUpTaskEvent {
+    #[topic]
+    pub task_id: String,
+    pub added: i128,
+    pub new_amount: i128,
+}
+
+// v5: el programador asignado renunció y el depósito volvió al cliente.
+#[contractevent(topics = ["freelancer_refund"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FreelancerRefundEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+    pub client: Address,
+    pub amount: i128,
 }
 
 #[contract]
@@ -1712,6 +1751,127 @@ impl CumpleYCobraContract {
 
         AssignProjectFreelancerEvent { task_id, freelancer }.publish(&env);
         Ok(())
+    }
+
+    // El cliente le da más tiempo al programador: el plazo solo puede crecer.
+    // Se permite incluso si el plazo ya venció y nadie disparó el reembolso,
+    // porque es el propio cliente quien renuncia a su derecho a reembolso.
+    // El nuevo plazo no puede quedar a más de 28 días del ledger actual, para
+    // seguir por debajo de los 30 días de TTL que se renuevan al escribir.
+    pub fn extend_deadline(env: Env, task_id: String, extra_secs: u64) -> Result<u64, Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+
+        // Solo el cliente que depositó.
+        task.client.require_auth();
+
+        if extra_secs == 0 {
+            return Err(Error::InvalidDeadline);
+        }
+        let new_deadline = task
+            .deadline
+            .checked_add(extra_secs)
+            .ok_or(Error::InvalidDeadline)?;
+        let max_deadline = env
+            .ledger()
+            .timestamp()
+            .checked_add(MAX_MILESTONE_DEADLINE_SECS)
+            .ok_or(Error::InvalidDeadline)?;
+        if new_deadline > max_deadline {
+            return Err(Error::InvalidDeadline);
+        }
+
+        let old_deadline = task.deadline;
+        task.deadline = new_deadline;
+        Self::save_task(&env, &key, &task);
+
+        ExtendDeadlineEvent {
+            task_id,
+            old_deadline,
+            new_deadline,
+        }
+        .publish(&env);
+        Ok(new_deadline)
+    }
+
+    // El cliente agrega dinero a una tarea depositada (por ejemplo, porque
+    // amplió el alcance o quiere asegurar un pago mayor). Solo antes del plazo:
+    // después, el dinero ya puede volver al cliente con `timeout_refund`.
+    // Devuelve el nuevo monto.
+    pub fn top_up_task(env: Env, task_id: String, amount: i128) -> Result<i128, Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+
+        task.client.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        let new_amount = task.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+
+        // Efectos antes de la interacción + TTL.
+        task.amount = new_amount;
+        Self::save_task(&env, &key, &task);
+
+        // Interacción: el cliente transfiere el extra al contrato.
+        let token_addr = Self::token(&env)?;
+        token::Client::new(&env, &token_addr).transfer(
+            &task.client,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        TopUpTaskEvent {
+            task_id,
+            added: amount,
+            new_amount,
+        }
+        .publish(&env);
+        Ok(new_amount)
+    }
+
+    // El programador asignado renuncia a la tarea: el depósito vuelve íntegro
+    // al cliente en el acto, sin esperar el plazo. Solo lo puede firmar el
+    // programador registrado, y el dinero nunca va a quien firma.
+    pub fn freelancer_refund(env: Env, task_id: String) -> Result<(), Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+
+        // Sin programador asignado no hay a quién pedirle la renuncia.
+        let freelancer = task.freelancer.clone().ok_or(Error::WrongFreelancer)?;
+        freelancer.require_auth();
+
+        // Efectos antes de transferir: la tarea se cierra como reembolsada.
+        task.status = TaskStatus::Refunded;
+        Self::save_task(&env, &key, &task);
+
+        Self::pay(&env, &task.client, task.amount)?;
+
+        FreelancerRefundEvent {
+            task_id,
+            freelancer,
+            client: task.client,
+            amount: task.amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Lectura por lote: de 1 a 20 tareas en una sola simulación. Cada posición
+    // trae la tarea o `None` si ese `task_id` no existe. Sirve al backend y a
+    // los paneles públicos para no hacer una llamada por tarea.
+    pub fn get_tasks(env: Env, task_ids: Vec<String>) -> Result<Vec<Option<Task>>, Error> {
+        if task_ids.is_empty() || task_ids.len() > MAX_BATCH_READ {
+            return Err(Error::TooManyItems);
+        }
+        let mut out: Vec<Option<Task>> = Vec::new(&env);
+        for id in task_ids.iter() {
+            out.push_back(env.storage().persistent().get(&DataKey::Task(id)));
+        }
+        Ok(out)
     }
 
     // -----------------------------------------------------------------------
