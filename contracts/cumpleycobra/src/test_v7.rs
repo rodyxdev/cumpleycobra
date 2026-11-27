@@ -178,3 +178,142 @@ fn v7_transfer_project_client_cambia_quien_recibe_los_reembolsos() {
     est.c.transfer_project_client(&eid, &empresa);
     assert_eq!(est.c.get_project(&eid).client, empresa);
 }
+
+// ---------------------------------------------------------------------------
+// Lote 2: disputas por hito y retiro de disputas
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v7_disputa_de_hito_solo_las_partes_y_congela_solo_ese_hito() {
+    let ctx = setup(Modo::Libre);
+    let sin_programador = deposit_two_milestones(&ctx, "disp-h-0");
+    assert_eq!(
+        ctx.c.try_open_milestone_dispute(&sin_programador, &0, &ctx.client),
+        Err(Ok(Error::WrongFreelancer))
+    );
+    let id = proyecto_asignado(&ctx, "disp-h-1");
+    assert_eq!(
+        ctx.c.try_open_milestone_dispute(&id, &0, &ctx.third),
+        Err(Ok(Error::NotParty))
+    );
+    ctx.c.open_milestone_dispute(&id, &0, &ctx.client);
+    assert_eq!(ctx.c.get_milestone_dispute(&id, &0), Some(ctx.client.clone()));
+    assert_eq!(ctx.c.get_milestone_dispute(&id, &1), None);
+    assert_eq!(
+        ctx.c.try_open_milestone_dispute(&id, &0, &ctx.freelancer),
+        Err(Ok(Error::DisputeOpen))
+    );
+
+    // Vencidos los dos hitos: el 0 está congelado, el 1 se reembolsa.
+    ctx.env.ledger().set_timestamp(START_TS + 2 * DIA);
+    assert_eq!(
+        ctx.c.try_timeout_refund_milestone(&id, &0),
+        Err(Ok(Error::DisputeOpen))
+    );
+    assert_eq!(ctx.c.refund_all_expired_milestones(&id), 1);
+    assert_eq!(estado(&ctx, &id, 0).status, MilestoneStatus::Funded);
+    assert_eq!(estado(&ctx, &id, 1).status, MilestoneStatus::Refunded);
+    // Solo queda el congelado: nada que reembolsar todavía.
+    assert_eq!(
+        ctx.c.try_refund_all_expired_milestones(&id),
+        Err(Ok(Error::DeadlineNotReached))
+    );
+    // A los 14 días del plazo del hito 0, vuelve a poder reembolsarse.
+    ctx.env.ledger().set_timestamp(START_TS + DIA + 14 * DIA);
+    ctx.c.timeout_refund_milestone(&id, &0);
+    // El proyecto sin programador (disp-h-0) sigue depositado: 10 UNIT.
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 10 * UNIT);
+}
+
+#[test]
+fn v7_resolve_milestone_dispute_reparte_el_hito() {
+    let ctx = setup(Modo::Libre);
+    let id = proyecto_asignado(&ctx, "resuelve-h-1");
+    assert_eq!(
+        ctx.c.try_resolve_milestone_dispute(&id, &1, &0),
+        Err(Ok(Error::NoDispute))
+    );
+    ctx.c.open_milestone_dispute(&id, &1, &ctx.freelancer);
+    ctx.env.ledger().set_timestamp(START_TS + 3 * DIA); // también tras el plazo
+    assert_eq!(
+        ctx.c.try_resolve_milestone_dispute(&id, &1, &(7 * UNIT)),
+        Err(Ok(Error::InvalidAmount))
+    );
+    ctx.c.resolve_milestone_dispute(&id, &1, &(5 * UNIT));
+    assert_eq!(estado(&ctx, &id, 1).status, MilestoneStatus::Released);
+    assert_eq!(ctx.c.get_milestone_dispute(&id, &1), None);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 5 * UNIT);
+    assert_eq!(ctx.c.get_stats().held, ctx.token.balance(&ctx.contract_id));
+
+    let est = setup(Modo::Estricto);
+    let eid = proyecto_asignado(&est, "resuelve-h-estricto");
+    firmas(&est, &[&est.client], "open_milestone_dispute", (&eid, 0u32, &est.client).into_val(&est.env));
+    est.c.open_milestone_dispute(&eid, &0, &est.client);
+    let args: Vec<Val> = (&eid, 0u32, 0i128).into_val(&est.env);
+    firmas(&est, &[&est.client], "resolve_milestone_dispute", args.clone());
+    assert!(est.c.try_resolve_milestone_dispute(&eid, &0, &0).is_err());
+    firmas(&est, &[&est.arbiter], "resolve_milestone_dispute", args);
+    est.c.resolve_milestone_dispute(&eid, &0, &0);
+    assert_eq!(est.c.get_project(&eid).milestones.get(0).unwrap().status, MilestoneStatus::Refunded);
+}
+
+#[test]
+fn v7_cancel_dispute_lo_retira_quien_lo_abrio() {
+    let ctx = setup(Modo::Libre);
+    let id = super::test_v4::deposit_simple(&ctx, "retira-1", 2 * UNIT, DIA);
+    assert_eq!(ctx.c.try_cancel_dispute(&id), Err(Ok(Error::NoDispute)));
+    ctx.c.assign_freelancer(&id, &ctx.freelancer);
+    ctx.c.open_dispute(&id, &ctx.client);
+    ctx.c.cancel_dispute(&id);
+    assert_eq!(ctx.c.get_dispute(&id), None);
+    // Sin disputa, el reembolso por plazo funciona en cuanto vence.
+    ctx.env.ledger().set_timestamp(START_TS + DIA);
+    ctx.c.timeout_refund(&id);
+
+    // Limpia la disputa de una tarea que se cerró por otra vía (límite de v6).
+    let id2 = super::test_v4::deposit_simple(&ctx, "retira-2", UNIT, 10 * DIA);
+    ctx.c.assign_freelancer(&id2, &ctx.freelancer);
+    ctx.c.open_dispute(&id2, &ctx.freelancer);
+    ctx.c.client_release(&id2, &ctx.freelancer);
+    assert_eq!(ctx.c.get_dispute(&id2), Some(ctx.freelancer.clone()));
+    ctx.c.cancel_dispute(&id2);
+    assert_eq!(ctx.c.get_dispute(&id2), None);
+
+    // Estricto: solo quien la abrió.
+    let est = setup(Modo::Estricto);
+    let eid = super::test_v4::deposit_simple(&est, "retira-estricto", UNIT, DIA);
+    firmas(&est, &[&est.arbiter], "assign_freelancer", (&eid, &est.freelancer).into_val(&est.env));
+    est.c.assign_freelancer(&eid, &est.freelancer);
+    firmas(&est, &[&est.freelancer], "open_dispute", (&eid, &est.freelancer).into_val(&est.env));
+    est.c.open_dispute(&eid, &est.freelancer);
+    let args: Vec<Val> = (&eid,).into_val(&est.env);
+    firmas(&est, &[&est.client], "cancel_dispute", args.clone());
+    assert!(est.c.try_cancel_dispute(&eid).is_err());
+    firmas(&est, &[&est.freelancer], "cancel_dispute", args);
+    est.c.cancel_dispute(&eid);
+}
+
+#[test]
+fn v7_cancel_milestone_dispute_lo_retira_quien_lo_abrio() {
+    let ctx = setup(Modo::Libre);
+    let id = proyecto_asignado(&ctx, "retira-h-1");
+    assert_eq!(
+        ctx.c.try_cancel_milestone_dispute(&id, &0),
+        Err(Ok(Error::NoDispute))
+    );
+    ctx.c.open_milestone_dispute(&id, &0, &ctx.freelancer);
+    ctx.c.cancel_milestone_dispute(&id, &0);
+    ctx.env.ledger().set_timestamp(START_TS + DIA);
+    ctx.c.timeout_refund_milestone(&id, &0);
+
+    let est = setup(Modo::Estricto);
+    let eid = proyecto_asignado(&est, "retira-h-estricto");
+    firmas(&est, &[&est.client], "open_milestone_dispute", (&eid, 1u32, &est.client).into_val(&est.env));
+    est.c.open_milestone_dispute(&eid, &1, &est.client);
+    let args: Vec<Val> = (&eid, 1u32).into_val(&est.env);
+    firmas(&est, &[&est.freelancer], "cancel_milestone_dispute", args.clone());
+    assert!(est.c.try_cancel_milestone_dispute(&eid, &1).is_err());
+    firmas(&est, &[&est.client], "cancel_milestone_dispute", args);
+    est.c.cancel_milestone_dispute(&eid, &1);
+    assert_eq!(est.c.get_milestone_dispute(&eid, &1), None);
+}

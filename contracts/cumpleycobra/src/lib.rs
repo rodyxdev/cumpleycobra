@@ -47,7 +47,9 @@
 // v7 (27 de noviembre de 2026): los proyectos por hitos reciben los mismos
 // acuerdos que la tarea simple, con la misma regla de firmas de las dos partes:
 // `amend_milestone_rules`, `release_milestone_partial`, `mutual_cancel_project`,
-// `reassign_project_freelancer` y `transfer_project_client`.
+// `reassign_project_freelancer` y `transfer_project_client`. Disputas por hito
+// (`open_milestone_dispute`, `resolve_milestone_dispute`) y retiro de una
+// disputa por quien la abrió (`cancel_dispute`, `cancel_milestone_dispute`).
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -185,6 +187,8 @@ pub enum DataKey {
     TotalOut,
     // v6: quién abrió la disputa de una tarea (persistente).
     Dispute(String),
+    // v7: quién abrió la disputa de un hito (persistente).
+    MilestoneDispute(String, u32),
     // v6: pausa de emergencia de los depósitos (instancia).
     Paused,
 }
@@ -687,6 +691,39 @@ pub struct TransferProjectClientEvent {
     pub new_client: Address,
 }
 
+// v7: el cliente o el programador abrió una disputa sobre un hito.
+#[contractevent(topics = ["open_milestone_dispute"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenMilestoneDisputeEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub opened_by: Address,
+}
+
+// v7: el árbitro resolvió la disputa de un hito y repartió su monto.
+#[contractevent(topics = ["resolve_milestone_dispute"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveMilestoneDisputeEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub freelancer: Address,
+    pub freelancer_amount: i128,
+    pub client: Address,
+    pub refund_amount: i128,
+}
+
+// v7: quien abrió una disputa la retiró (`index` = None en una tarea simple).
+#[contractevent(topics = ["cancel_dispute"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelDisputeEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: Option<u32>,
+    pub opened_by: Address,
+}
+
 #[contract]
 pub struct CumpleYCobraContract;
 
@@ -866,14 +903,8 @@ impl CumpleYCobraContract {
 
         // v6: con una disputa abierta, el reembolso espera a que el árbitro la
         // resuelva, pero nunca más de 14 días después del plazo.
-        if env.storage().persistent().has(&DataKey::Dispute(task_id.clone())) {
-            let limit = task
-                .deadline
-                .checked_add(DISPUTE_GRACE_SECS)
-                .ok_or(Error::InvalidDeadline)?;
-            if env.ledger().timestamp() < limit {
-                return Err(Error::DisputeOpen);
-            }
+        if Self::frozen(&env, &DataKey::Dispute(task_id.clone()), task.deadline)? {
+            return Err(Error::DisputeOpen);
         }
 
         // Efectos antes de la transferencia.
@@ -1100,6 +1131,16 @@ impl CumpleYCobraContract {
         // Solo cuando el timestamp del ledger alcanzó el plazo de ese hito.
         if env.ledger().timestamp() < milestone.deadline {
             return Err(Error::DeadlineNotReached);
+        }
+
+        // v7: con una disputa abierta sobre el hito, su reembolso espera
+        // (como en la tarea simple, nunca más de 14 días tras el plazo).
+        if Self::frozen(
+            &env,
+            &DataKey::MilestoneDispute(task_id.clone(), index),
+            milestone.deadline,
+        )? {
+            return Err(Error::DisputeOpen);
         }
 
         // Efectos antes de la transferencia.
@@ -1468,7 +1509,13 @@ impl CumpleYCobraContract {
             let mut m = project.milestones.get(i).ok_or(Error::MilestoneNotFound)?;
             if m.status == MilestoneStatus::Funded {
                 funded_seen += 1;
-                if now >= m.deadline {
+                // v7: un hito con disputa abierta todavía no se reembolsa.
+                let disputed = Self::frozen(
+                    &env,
+                    &DataKey::MilestoneDispute(task_id.clone(), i),
+                    m.deadline,
+                )?;
+                if now >= m.deadline && !disputed {
                     total_refund = total_refund
                         .checked_add(m.amount)
                         .ok_or(Error::InvalidAmount)?;
@@ -2624,8 +2671,169 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v7: disputas por hito y retiro de disputas
+    // -----------------------------------------------------------------------
+
+    // El cliente o el programador fijado abre una disputa sobre UN hito antes
+    // de su plazo. Solo congela el reembolso por plazo de ese hito.
+    pub fn open_milestone_dispute(
+        env: Env,
+        task_id: String,
+        index: u32,
+        by: Address,
+    ) -> Result<(), Error> {
+        let key = DataKey::Project(task_id.clone());
+        let project = Self::load_project(&env, &key)?;
+        let freelancer = Self::project_freelancer(&project)?;
+        let milestone = Self::funded_milestone(&project, index)?;
+        by.require_auth();
+
+        if by != project.client && by != freelancer {
+            return Err(Error::NotParty);
+        }
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        let dkey = DataKey::MilestoneDispute(task_id.clone(), index);
+        if env.storage().persistent().has(&dkey) {
+            return Err(Error::DisputeOpen);
+        }
+        env.storage().persistent().set(&dkey, &by);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dkey, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::save_project(&env, &key, &project);
+
+        OpenMilestoneDisputeEvent {
+            task_id,
+            index,
+            opened_by: by,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El árbitro resuelve la disputa de un hito: `freelancer_amount` al
+    // programador fijado y el resto al cliente. También tras el plazo.
+    pub fn resolve_milestone_dispute(
+        env: Env,
+        task_id: String,
+        index: u32,
+        freelancer_amount: i128,
+    ) -> Result<(), Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+        let dkey = DataKey::MilestoneDispute(task_id.clone(), index);
+        if !env.storage().persistent().has(&dkey) {
+            return Err(Error::NoDispute);
+        }
+        let freelancer = Self::project_freelancer(&project)?;
+        if freelancer_amount < 0 || freelancer_amount > milestone.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let refund_amount = milestone
+            .amount
+            .checked_sub(freelancer_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        milestone.status = if freelancer_amount > 0 {
+            MilestoneStatus::Released
+        } else {
+            MilestoneStatus::Refunded
+        };
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+        env.storage().persistent().remove(&dkey);
+
+        if freelancer_amount > 0 {
+            Self::pay(&env, &freelancer, freelancer_amount)?;
+        }
+        if refund_amount > 0 {
+            Self::pay(&env, &project.client, refund_amount)?;
+        }
+
+        ResolveMilestoneDisputeEvent {
+            task_id,
+            index,
+            freelancer,
+            freelancer_amount,
+            client: project.client,
+            refund_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Quien abrió la disputa de una tarea simple la retira. El reembolso por
+    // plazo vuelve a funcionar como siempre. También limpia una disputa que
+    // quedó registrada en una tarea ya cerrada por otra vía.
+    pub fn cancel_dispute(env: Env, task_id: String) -> Result<(), Error> {
+        let dkey = DataKey::Dispute(task_id.clone());
+        let opened_by: Address = env
+            .storage()
+            .persistent()
+            .get(&dkey)
+            .ok_or(Error::NoDispute)?;
+        opened_by.require_auth();
+        env.storage().persistent().remove(&dkey);
+        Self::extend_instance(&env);
+
+        CancelDisputeEvent {
+            task_id,
+            index: None,
+            opened_by,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Lo mismo para la disputa de un hito.
+    pub fn cancel_milestone_dispute(env: Env, task_id: String, index: u32) -> Result<(), Error> {
+        let dkey = DataKey::MilestoneDispute(task_id.clone(), index);
+        let opened_by: Address = env
+            .storage()
+            .persistent()
+            .get(&dkey)
+            .ok_or(Error::NoDispute)?;
+        opened_by.require_auth();
+        env.storage().persistent().remove(&dkey);
+        Self::extend_instance(&env);
+
+        CancelDisputeEvent {
+            task_id,
+            index: Some(index),
+            opened_by,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Quién abrió la disputa de un hito, o `None` si no hay.
+    pub fn get_milestone_dispute(env: Env, task_id: String, index: u32) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MilestoneDispute(task_id, index))
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v7: true si hay una disputa abierta en `dkey` y todavía no pasan 14 días
+    // desde `deadline` (mientras tanto, el reembolso por plazo espera).
+    fn frozen(env: &Env, dkey: &DataKey, deadline: u64) -> Result<bool, Error> {
+        if !env.storage().persistent().has(dkey) {
+            return Ok(false);
+        }
+        let limit = deadline
+            .checked_add(DISPUTE_GRACE_SECS)
+            .ok_or(Error::InvalidDeadline)?;
+        Ok(env.ledger().timestamp() < limit)
+    }
 
     // v7: el programador fijado de un proyecto (`WrongFreelancer` si no hay).
     fn project_freelancer(project: &Project) -> Result<Address, Error> {
