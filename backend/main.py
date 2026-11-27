@@ -1390,3 +1390,8 @@ from .ejecucion.rutas import router as verifier_router  # noqa: E402
 from .ejecucion import rutas as exec_rutas  # noqa: E402
 
 app.include_router(verifier_router)
+
+# Funciones experimentales de Ship It (EXTRAS_ENABLED, apagada por defecto): backend/extras.py
+from .extras import router as extras_router  # noqa: E402
+
+app.include_router(extras_router)
