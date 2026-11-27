@@ -396,3 +396,157 @@ fn v4_cancel_unassigned_project_camino_feliz_y_bloqueo_si_ya_tiene_programador()
         Err(Ok(Error::AlreadyAssigned))
     );
 }
+
+// ---------------------------------------------------------------------------
+// Lote 3: refund_all_expired_milestones y reduce_milestone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_refund_all_expired_milestones_lote_parcial_y_total() {
+    let ctx = setup(Modo::Libre);
+    let id = tid(&ctx.env, "batch-ref-1");
+    let amounts: Vec<i128> = vec![&ctx.env, 2 * UNIT, 3 * UNIT, 5 * UNIT];
+    let deadlines: Vec<u64> = vec![&ctx.env, DIA, 2 * DIA, 4 * DIA];
+    let hashes: Vec<BytesN<32>> = vec![
+        &ctx.env,
+        hash(&ctx.env, 20),
+        hash(&ctx.env, 21),
+        hash(&ctx.env, 22),
+    ];
+    ctx.c
+        .deposit_milestones(&ctx.client, &id, &amounts, &deadlines, &hashes);
+
+    // Antes del primer plazo falla con DeadlineNotReached.
+    assert_eq!(
+        ctx.c.try_refund_all_expired_milestones(&id),
+        Err(Ok(Error::DeadlineNotReached))
+    );
+
+    // Avanzamos 2 días: vencen los hitos 0 y 1 (2 + 3 = 5 USDC), el hito 2 sigue vigente.
+    ctx.env.ledger().set_timestamp(START_TS + 2 * DIA);
+    let count = ctx.c.refund_all_expired_milestones(&id);
+    assert_eq!(count, 2);
+    let p = ctx.c.get_project(&id);
+    assert_eq!(p.milestones.get(0).unwrap().status, MilestoneStatus::Refunded);
+    assert_eq!(p.milestones.get(1).unwrap().status, MilestoneStatus::Refunded);
+    assert_eq!(p.milestones.get(2).unwrap().status, MilestoneStatus::Funded);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 5 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 5 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.third), 7);
+
+    // Llamar otra vez antes de que venza el hito 2 -> DeadlineNotReached.
+    assert_eq!(
+        ctx.c.try_refund_all_expired_milestones(&id),
+        Err(Ok(Error::DeadlineNotReached))
+    );
+
+    // Vence el hito 2 -> se reembolsa y un intento posterior da NotFunded.
+    ctx.env.ledger().set_timestamp(START_TS + 4 * DIA);
+    assert_eq!(ctx.c.refund_all_expired_milestones(&id), 1);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT);
+    assert_eq!(
+        ctx.c.try_refund_all_expired_milestones(&id),
+        Err(Ok(Error::NotFunded))
+    );
+}
+
+#[test]
+fn v4_reduce_milestone_validaciones_y_doble_firma() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_two_milestones(&ctx, "red-p1");
+
+    // Recorta 1 USDC del hito 0 (4 -> 3 USDC) antes de asignar programador.
+    ctx.c.reduce_milestone(&id, &0, &(1 * UNIT));
+    assert_eq!(ctx.c.get_project(&id).milestones.get(0).unwrap().amount, 3 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 9 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 9 * UNIT);
+
+    // Rechaza recorte 0, total, índice inválido y plazo vencido.
+    assert_eq!(
+        ctx.c.try_reduce_milestone(&id, &0, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_reduce_milestone(&id, &0, &(3 * UNIT)),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_reduce_milestone(&id, &5, &(1 * UNIT)),
+        Err(Ok(Error::MilestoneNotFound))
+    );
+
+    // Se paga el hito 0 (3 USDC) -> fija al programador; el hito 0 ya no se recorta.
+    ctx.c.client_release_milestone(&id, &0, &ctx.freelancer);
+    assert_eq!(
+        ctx.c.try_reduce_milestone(&id, &0, &(1 * UNIT)),
+        Err(Ok(Error::NotFunded))
+    );
+
+    // Hito 1 (6 USDC) se recorta en 2 USDC (queda en 4 USDC) y luego se paga.
+    ctx.c.reduce_milestone(&id, &1, &(2 * UNIT));
+    ctx.c.client_release_milestone(&id, &1, &ctx.freelancer);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 7 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 7 * UNIT);
+
+    // Modo estricto: con programador fijado, cliente + árbitro NO bastan (debe firmar el programador).
+    let est = setup(Modo::Estricto);
+    let eid = deposit_two_milestones(&est, "red-strict");
+    est.env.mock_auths(&[MockAuth {
+        address: &est.client,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "client_release_milestone",
+            args: (&eid, 0u32, &est.freelancer).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    est.c.client_release_milestone(&eid, &0, &est.freelancer);
+
+    est.env.mock_auths(&[
+        MockAuth {
+            address: &est.client,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "reduce_milestone",
+                args: (&eid, 1u32, 1 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+        MockAuth {
+            address: &est.arbiter,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "reduce_milestone",
+                args: (&eid, 1u32, 1 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+    ]);
+    assert!(est.c.try_reduce_milestone(&eid, &1, &(1 * UNIT)).is_err());
+
+    // Con cliente + programador sí pasa.
+    est.env.mock_auths(&[
+        MockAuth {
+            address: &est.client,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "reduce_milestone",
+                args: (&eid, 1u32, 1 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+        MockAuth {
+            address: &est.freelancer,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "reduce_milestone",
+                args: (&eid, 1u32, 1 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+    ]);
+    est.c.reduce_milestone(&eid, &1, &(1 * UNIT));
+    assert_eq!(est.c.get_project(&eid).milestones.get(1).unwrap().amount, 5 * UNIT);
+}

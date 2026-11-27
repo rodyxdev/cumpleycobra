@@ -343,6 +343,28 @@ pub struct CancelProjectEvent {
     pub total_refund: i128,
 }
 
+// v4: reembolso en lote de todos los hitos vencidos de un proyecto en una sola transferencia.
+#[contractevent(topics = ["refund_all_expired"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundExpiredBatchEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub count: u32,
+    pub total_refund: i128,
+}
+
+// v4: recorte parcial del monto de un hito activo con devolución de la diferencia al cliente.
+#[contractevent(topics = ["reduce_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReduceMilestoneEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub reduced: i128,
+    pub new_amount: i128,
+}
+
 // ---------------------------------------------------------------------------
 // Contrato
 // ---------------------------------------------------------------------------
@@ -1085,6 +1107,108 @@ impl CumpleYCobraContract {
             client: project.client,
             refunded_milestones,
             total_refund,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Reembolso en lote de todos los hitos vencidos de un proyecto. Sin firma:
+    // cualquiera puede dispararlo (como `timeout_refund_milestone`), los hitos
+    // pagados o vigentes no se tocan y el dinero siempre vuelve al cliente en
+    // una sola transferencia. Devuelve cuántos hitos se reembolsaron.
+    pub fn refund_all_expired_milestones(env: Env, task_id: String) -> Result<u32, Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let now = env.ledger().timestamp();
+
+        // Clasifica los hitos: cuenta cuántos siguen en Funded y marca los vencidos.
+        let mut funded_seen: u32 = 0;
+        let mut count: u32 = 0;
+        let mut total_refund: i128 = 0;
+        for i in 0..project.milestones.len() {
+            let mut m = project.milestones.get(i).ok_or(Error::MilestoneNotFound)?;
+            if m.status == MilestoneStatus::Funded {
+                funded_seen += 1;
+                if now >= m.deadline {
+                    total_refund = total_refund
+                        .checked_add(m.amount)
+                        .ok_or(Error::InvalidAmount)?;
+                    m.status = MilestoneStatus::Refunded;
+                    project.milestones.set(i, m);
+                    count += 1;
+                }
+            }
+        }
+        if funded_seen == 0 {
+            return Err(Error::NotFunded);
+        }
+        if count == 0 {
+            return Err(Error::DeadlineNotReached);
+        }
+
+        // Efectos antes de transferir (checks-effects-interactions) + TTL.
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: una sola transferencia de USDC al cliente.
+        Self::pay(&env, &project.client, total_refund)?;
+
+        RefundExpiredBatchEvent {
+            task_id,
+            client: project.client,
+            count,
+            total_refund,
+        }
+        .publish(&env);
+        Ok(count)
+    }
+
+    // Recorta el monto de un hito activo (Funded y antes de su plazo), dejando
+    // un saldo positivo en el hito y devolviendo `reduce_amount` al cliente.
+    // Exige doble firma: cliente + programador (si ya está fijado) o cliente +
+    // árbitro (si aún no hay programador fijado), para impedir recortes unilaterales.
+    pub fn reduce_milestone(
+        env: Env,
+        task_id: String,
+        index: u32,
+        reduce_amount: i128,
+    ) -> Result<(), Error> {
+        // Se carga el proyecto y se verifica que el hito exista y siga en Funded.
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+
+        // Doble autorización: el cliente nunca puede recortar el monto solo.
+        project.client.require_auth();
+        match &project.freelancer {
+            Some(fl) => fl.require_auth(),
+            None => Self::arbiter(&env)?.require_auth(),
+        }
+
+        // Solo antes del plazo del hito y con recorte estrictamente parcial.
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if reduce_amount <= 0 || reduce_amount >= milestone.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let new_amount = milestone
+            .amount
+            .checked_sub(reduce_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        // Efectos antes de transferir (checks-effects-interactions) + TTL.
+        milestone.amount = new_amount;
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: la diferencia recortada vuelve al cliente.
+        Self::pay(&env, &project.client, reduce_amount)?;
+
+        ReduceMilestoneEvent {
+            task_id,
+            index,
+            reduced: reduce_amount,
+            new_amount,
         }
         .publish(&env);
         Ok(())
