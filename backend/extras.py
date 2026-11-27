@@ -62,3 +62,54 @@ async def programmer_badge(address: str):
     summary = reputacion.summary(address, await main.released_records())
     return Response(badge_svg(summary), media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=300"})
+
+
+EXPLORER_TX = "https://stellar.expert/explorer/testnet/tx/"
+EXPLORER_CONTRACT = "https://stellar.expert/explorer/testnet/contract/"
+
+
+@router.get("/tasks/{task_id}/comprobante")
+async def payment_receipt(task_id: str):
+    """Comprobante público de un pago: solo lo que ya es público en el contrato y en su evento.
+
+    Sin código, tokens, análisis ni dirección del cliente. Con `rules_hash`, `code_hash` y
+    `verdict_hash`, cualquiera puede cruzarlo con el evento de `release` en el explorador.
+    """
+    _require_enabled()
+    from backend import hitos, main, reputacion
+
+    task = main.get_task_or_404(task_id)
+    if hitos.is_milestone_task(task):
+        raise main.err(400, "INVALID_REQUEST", "El comprobante todavía no aplica a tareas por hitos")
+    onchain, _ = await main.read_chain(task_id)
+    if not onchain or onchain.get("status") != "Released":
+        raise main.err(409, "TASK_NOT_RELEASED", "La tarea todavía no se paga en el contrato")
+    events: dict = {}
+    source = main.payment_events()
+    if source is not None:
+        try:
+            events = await main.run_in_threadpool(source.refresh)
+        except Exception:  # noqa: BLE001 - sin eventos se usa lo guardado
+            events = {}
+    record = reputacion.paid_records({task_id: task}, {task_id: onchain}, events)[0]
+    release = task.get("release") or {}
+    engine = record["paid_by"] == "motor" and release.get("status") == "success"
+    contract_id = getattr(main.app.state.settings, "contract_id", None)
+    tx = record["transaction_hash"]
+    return {
+        "task_id": task_id,
+        "programador": record["address"],
+        "amount": record["amount"],
+        "paid_by": record["paid_by"],
+        "paid_at": record["paid_at"],
+        "transaction_hash": tx,
+        "explorer_url": EXPLORER_TX + tx if tx else None,
+        "contract_id": contract_id,
+        "contract_url": EXPLORER_CONTRACT + contract_id if contract_id else None,
+        "rules_hash": onchain.get("rules_hash"),
+        "rules_hash_matches": onchain.get("rules_hash") == task["rules_hash"],
+        "criteria_count": record["criteria_count"],
+        "code_hash": release.get("code_hash") if engine else None,
+        "verdict_hash": release.get("verdict_hash") if engine else None,
+        "verify_url": f"/verificar?tarea={task_id}",
+    }
