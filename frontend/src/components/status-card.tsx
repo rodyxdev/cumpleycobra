@@ -1,10 +1,22 @@
-import { Check, Clock } from "lucide-react";
+import { CalendarPlus, Check, Clock } from "lucide-react";
 
 import type { TaskView } from "@/lib/api";
+import { icsPlazo } from "@/lib/calendario";
 import { formatCountdown, STATUS_LABEL } from "@/lib/format";
 import { Money, FxNotice } from "@/components/money";
 
 type Step = { name: string; detail: string; done: boolean };
+
+/** Descarga un .ics con el plazo on-chain (aviso 30 min antes). */
+function descargarPlazo(taskId: string, deadline: number) {
+  const url = `${window.location.origin}/tarea/${encodeURIComponent(taskId)}`;
+  const ics = icsPlazo({ taskId, deadline, url, ahora: Math.floor(Date.now() / 1000) });
+  const enlace = document.createElement("a");
+  enlace.href = URL.createObjectURL(new Blob([ics], { type: "text/calendar;charset=utf-8" }));
+  enlace.download = `plazo-${taskId}.ics`;
+  enlace.click();
+  URL.revokeObjectURL(enlace.href);
+}
 
 /** Pasos de la tarea, deducidos solo de lo que reporta la API y el contrato. */
 export function taskSteps(task: TaskView): Step[] {
@@ -78,6 +90,12 @@ export function StatusCard({ task, secondsLeft }: { task: TaskView; secondsLeft:
             {onchain && status === "Funded" && secondsLeft !== null
               ? secondsLeft > 0 ? formatCountdown(secondsLeft) : "vencido" : "—"}
           </div>
+          {onchain && status === "Funded" && secondsLeft !== null && secondsLeft > 0 && (
+            <button type="button" onClick={() => descargarPlazo(task.task_id, onchain.deadline)}
+              className="inline-flex min-h-10 items-center gap-1.5 text-sm font-semibold text-primary underline-offset-4 hover:underline">
+              <CalendarPlus className="size-4" aria-hidden="true" /> Agregar al calendario
+            </button>
+          )}
         </div>
         <div className="surface space-y-1.5 p-4 sm:space-y-2 sm:p-5">
           <p className="text-sm text-muted-foreground">Envíos usados</p>
