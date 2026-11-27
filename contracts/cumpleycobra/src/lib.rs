@@ -43,6 +43,11 @@
 // con el programador ya registrado). Disputas (`open_dispute`,
 // `resolve_dispute`, `get_dispute`) y pausa de emergencia de los depósitos
 // (`pause`, `unpause`). Sin usar estas funciones, todo se comporta igual que en v5.
+//
+// v7 (27 de noviembre de 2026): los proyectos por hitos reciben los mismos
+// acuerdos que la tarea simple, con la misma regla de firmas de las dos partes:
+// `amend_milestone_rules`, `release_milestone_partial`, `mutual_cancel_project`,
+// `reassign_project_freelancer` y `transfer_project_client`.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -623,6 +628,63 @@ pub struct ResolveDisputeEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PauseEvent {
     pub paused: bool,
+}
+
+// v7: cliente y programador cambiaron los criterios de un hito.
+#[contractevent(topics = ["amend_milestone_rules"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AmendMilestoneRulesEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub old_rules_hash: BytesN<32>,
+    pub new_rules_hash: BytesN<32>,
+}
+
+// v7: el árbitro pagó una parte de un hito; el resto sigue depositado.
+#[contractevent(topics = ["release_milestone_partial"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseMilestonePartialEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub remaining: i128,
+    pub code_hash: BytesN<32>,
+    pub verdict_hash: BytesN<32>,
+}
+
+// v7: cliente y programador cancelaron un proyecto de común acuerdo.
+#[contractevent(topics = ["mutual_cancel_project"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutualCancelProjectEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub count: u32,
+    pub total_refund: i128,
+}
+
+// v7: el proyecto pasó de un programador a otro con el acuerdo de los tres.
+#[contractevent(topics = ["reassign_project_freelancer"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReassignProjectFreelancerEvent {
+    #[topic]
+    pub task_id: String,
+    pub old_freelancer: Address,
+    pub new_freelancer: Address,
+}
+
+// v7: el proyecto (y sus reembolsos) pasó a otro cliente.
+#[contractevent(topics = ["transfer_project_client"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferProjectClientEvent {
+    #[topic]
+    pub task_id: String,
+    pub old_client: Address,
+    pub new_client: Address,
 }
 
 #[contract]
@@ -2370,8 +2432,215 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v7: acuerdos entre las dos partes en proyectos por hitos
+    // -----------------------------------------------------------------------
+
+    // Cliente y programador fijado cambian los criterios de UN hito.
+    pub fn amend_milestone_rules(
+        env: Env,
+        task_id: String,
+        index: u32,
+        new_rules_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let freelancer = Self::project_freelancer(&project)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+
+        project.client.require_auth();
+        freelancer.require_auth();
+
+        if milestone.rules_hash == new_rules_hash {
+            return Err(Error::NoChange);
+        }
+        let old_rules_hash = milestone.rules_hash.clone();
+        milestone.rules_hash = new_rules_hash.clone();
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+
+        AmendMilestoneRulesEvent {
+            task_id,
+            index,
+            old_rules_hash,
+            new_rules_hash,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Pago parcial de un hito por el árbitro, al programador fijado y antes
+    // del plazo de ese hito. Devuelve lo que queda en el hito.
+    pub fn release_milestone_partial(
+        env: Env,
+        task_id: String,
+        index: u32,
+        amount: i128,
+        code_hash: BytesN<32>,
+        verdict_hash: BytesN<32>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let freelancer = Self::project_freelancer(&project)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if amount <= 0 || amount >= milestone.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let remaining = milestone
+            .amount
+            .checked_sub(amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        milestone.amount = remaining;
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+
+        Self::pay(&env, &freelancer, amount)?;
+
+        ReleaseMilestonePartialEvent {
+            task_id,
+            index,
+            freelancer,
+            amount,
+            remaining,
+            code_hash,
+            verdict_hash,
+        }
+        .publish(&env);
+        Ok(remaining)
+    }
+
+    // Cancelación de común acuerdo de un proyecto: cliente y programador
+    // fijado firman y TODOS los hitos que siguen en Funded vuelven al cliente
+    // en una sola transferencia. Los hitos ya pagados no se tocan.
+    pub fn mutual_cancel_project(env: Env, task_id: String) -> Result<u32, Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let freelancer = Self::project_freelancer(&project)?;
+
+        project.client.require_auth();
+        freelancer.require_auth();
+
+        let mut count: u32 = 0;
+        let mut total_refund: i128 = 0;
+        for i in 0..project.milestones.len() {
+            let mut m = project.milestones.get(i).ok_or(Error::MilestoneNotFound)?;
+            if m.status == MilestoneStatus::Funded {
+                total_refund = total_refund
+                    .checked_add(m.amount)
+                    .ok_or(Error::InvalidAmount)?;
+                m.status = MilestoneStatus::Refunded;
+                project.milestones.set(i, m);
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return Err(Error::NotFunded);
+        }
+        Self::save_project(&env, &key, &project);
+
+        Self::pay(&env, &project.client, total_refund)?;
+
+        MutualCancelProjectEvent {
+            task_id,
+            client: project.client,
+            freelancer,
+            count,
+            total_refund,
+        }
+        .publish(&env);
+        Ok(count)
+    }
+
+    // Otro programador sigue el proyecto. Firman los tres: el cliente, el
+    // programador fijado (cede) y el nuevo (acepta). Debe quedar algún hito
+    // con dinero: cambiar al programador de un proyecto cerrado no tiene sentido.
+    pub fn reassign_project_freelancer(
+        env: Env,
+        task_id: String,
+        new_freelancer: Address,
+    ) -> Result<(), Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let old_freelancer = Self::project_freelancer(&project)?;
+        Self::require_funded_milestone(&project)?;
+
+        if new_freelancer == old_freelancer {
+            return Err(Error::NoChange);
+        }
+        project.client.require_auth();
+        old_freelancer.require_auth();
+        new_freelancer.require_auth();
+
+        project.freelancer = Some(new_freelancer.clone());
+        Self::save_project(&env, &key, &project);
+
+        ReassignProjectFreelancerEvent {
+            task_id,
+            old_freelancer,
+            new_freelancer,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El proyecto pasa a otro cliente. Firman el cliente actual, el nuevo y,
+    // si ya hay programador fijado, también él.
+    pub fn transfer_project_client(
+        env: Env,
+        task_id: String,
+        new_client: Address,
+    ) -> Result<(), Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        Self::require_funded_milestone(&project)?;
+
+        if new_client == project.client {
+            return Err(Error::NoChange);
+        }
+        project.client.require_auth();
+        new_client.require_auth();
+        if let Some(freelancer) = &project.freelancer {
+            freelancer.require_auth();
+        }
+
+        let old_client = project.client.clone();
+        project.client = new_client.clone();
+        Self::save_project(&env, &key, &project);
+
+        TransferProjectClientEvent {
+            task_id,
+            old_client,
+            new_client,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v7: el programador fijado de un proyecto (`WrongFreelancer` si no hay).
+    fn project_freelancer(project: &Project) -> Result<Address, Error> {
+        project.freelancer.clone().ok_or(Error::WrongFreelancer)
+    }
+
+    // v7: `NotFunded` si ningún hito del proyecto sigue con dinero.
+    fn require_funded_milestone(project: &Project) -> Result<(), Error> {
+        for m in project.milestones.iter() {
+            if m.status == MilestoneStatus::Funded {
+                return Ok(());
+            }
+        }
+        Err(Error::NotFunded)
+    }
 
     // v6: cambia la pausa; `NoChange` si ya estaba en ese estado.
     fn set_paused(env: &Env, paused: bool) -> Result<(), Error> {
@@ -2545,3 +2814,6 @@ mod test_v5;
 
 // Pruebas de v6 (acuerdos de dos partes, propina, estadísticas, disputas y pausa).
 mod test_v6;
+
+// Pruebas de v7 (acuerdos y disputas en hitos, operaciones por lote).
+mod test_v7;

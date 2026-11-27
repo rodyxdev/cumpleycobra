@@ -13,7 +13,7 @@ use soroban_sdk::{
 };
 
 // Varias firmas explícitas para una misma llamada (modo estricto).
-fn firmas(ctx: &Ctx, quienes: &[&Address], fn_name: &'static str, args: Vec<Val>) {
+pub(crate) fn firmas(ctx: &Ctx, quienes: &[&Address], fn_name: &'static str, args: Vec<Val>) {
     let invoke = MockAuthInvoke {
         contract: &ctx.contract_id,
         fn_name,
