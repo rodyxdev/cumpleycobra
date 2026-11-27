@@ -813,3 +813,94 @@ fn v4_extend_milestone_deadline_prorroga_y_respeta_orden_y_tope() {
         Err(Ok(Error::InvalidDeadline))
     );
 }
+
+// ---------------------------------------------------------------------------
+// Lote 6: rotate_arbiter
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_rotate_arbiter_doble_firma_y_efecto_en_release() {
+    let est = setup(Modo::Estricto);
+    let nuevo = Address::generate(&est.env);
+
+    // Rotar hacia el mismo árbitro falla con SameArbiter.
+    assert_eq!(
+        est.c.try_rotate_arbiter(&est.arbiter),
+        Err(Ok(Error::SameArbiter))
+    );
+
+    // Solo la firma del árbitro actual (sin el nuevo) falla.
+    est.env.mock_auths(&[MockAuth {
+        address: &est.arbiter,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "rotate_arbiter",
+            args: (&nuevo,).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est.c.try_rotate_arbiter(&nuevo).is_err());
+
+    // Solo la firma del nuevo árbitro (sin el actual) falla.
+    est.env.mock_auths(&[MockAuth {
+        address: &nuevo,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "rotate_arbiter",
+            args: (&nuevo,).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est.c.try_rotate_arbiter(&nuevo).is_err());
+
+    // Con ambas firmas sí rota y actualiza `get_config`.
+    est.env.mock_auths(&[
+        MockAuth {
+            address: &est.arbiter,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "rotate_arbiter",
+                args: (&nuevo,).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+        MockAuth {
+            address: &nuevo,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "rotate_arbiter",
+                args: (&nuevo,).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+    ]);
+    est.c.rotate_arbiter(&nuevo);
+    assert_eq!(est.c.get_config().arbiter, nuevo);
+
+    // Tras rotar, el árbitro anterior ya no puede hacer release; el nuevo sí.
+    let id = deposit_simple(&est, "rot-t1", 2 * UNIT, DIA);
+    let ch = hash(&est.env, 60);
+    let vh = hash(&est.env, 61);
+    est.env.mock_auths(&[MockAuth {
+        address: &est.arbiter,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "release",
+            args: (&id, &est.freelancer, &ch, &vh).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est.c.try_release(&id, &est.freelancer, &ch, &vh).is_err());
+
+    est.env.mock_auths(&[MockAuth {
+        address: &nuevo,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "release",
+            args: (&id, &est.freelancer, &ch, &vh).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    est.c.release(&id, &est.freelancer, &ch, &vh);
+    assert_eq!(est.token.balance(&est.freelancer), 2 * UNIT);
+}

@@ -163,6 +163,8 @@ pub enum Error {
     WrongFreelancer = 12,
     // v4: el proyecto ya tiene un programador fijado (no se puede cancelar como no asignado).
     AlreadyAssigned = 13,
+    // v4: la dirección propuesta para rotar el árbitro es igual al árbitro actual.
+    SameArbiter = 14,
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +411,14 @@ pub struct ExtendMilestoneDeadlineEvent {
     pub index: u32,
     pub old_deadline: u64,
     pub new_deadline: u64,
+}
+
+// v4: rotación atómica del árbitro confirmada por el árbitro actual y el nuevo.
+#[contractevent(topics = ["rotate_arbiter"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RotateArbiterEvent {
+    pub old_arbiter: Address,
+    pub new_arbiter: Address,
 }
 
 // ---------------------------------------------------------------------------
@@ -1561,6 +1571,31 @@ impl CumpleYCobraContract {
         }
         .publish(&env);
         Ok(new_deadline)
+    }
+
+    // Rotación segura del árbitro en un paso con doble firma atómica: deben
+    // firmar el árbitro actual y el nuevo árbitro. Así nunca se pierde el
+    // control hacia una dirección equivocada ni queda estado pendiente colgado.
+    pub fn rotate_arbiter(env: Env, new_arbiter: Address) -> Result<(), Error> {
+        let old_arbiter = Self::arbiter(&env)?;
+        if new_arbiter == old_arbiter {
+            return Err(Error::SameArbiter);
+        }
+
+        // Doble autorización: el actual cede el rol y el nuevo demuestra control.
+        old_arbiter.require_auth();
+        new_arbiter.require_auth();
+
+        // Actualiza la configuración en almacenamiento de instancia y extiende TTL.
+        env.storage().instance().set(&DataKey::Arbiter, &new_arbiter);
+        Self::extend_instance(&env);
+
+        RotateArbiterEvent {
+            old_arbiter,
+            new_arbiter,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
