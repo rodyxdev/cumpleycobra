@@ -23,6 +23,13 @@
 // cancelaciones con doble firma, reembolso en lote, recorte/división/prórroga
 // de hitos, bono manual, depósito por lote y rotación segura del árbitro).
 // Ninguna función de v1, v2 ni v3 cambia.
+//
+// v5 (26 de noviembre de 2026): el contrato conoce al programador ANTES de
+// pagar. El árbitro lo registra cuando acepta los criterios
+// (`assign_freelancer`, `assign_project_freelancer`) y, desde ese momento,
+// ningún pago del cliente puede ir a otra dirección (`WrongFreelancer`) ni la
+// tarea se puede cancelar como «sin asignar» (`AlreadyAssigned`). Sin
+// asignación, todas las funciones anteriores se comportan exactamente igual.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -68,7 +75,8 @@ pub enum TaskStatus {
 
 // Una tarea depositada. A diferencia del `Deal` de la base:
 // - se identifica por un `task_id` de texto que genera el backend;
-// - el programador (`freelancer`) no se conoce al depositar, se fija al liberar;
+// - el programador (`freelancer`) no se conoce al depositar: se fija al liberar
+//   o, desde v5, cuando el árbitro lo registra con `assign_freelancer`;
 // - guarda el `rules_hash` (SHA-256 de los criterios acordados) y el plazo.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -424,6 +432,24 @@ pub struct RotateArbiterEvent {
 // ---------------------------------------------------------------------------
 // Contrato
 // ---------------------------------------------------------------------------
+// v5: el árbitro registró al programador que aceptó los criterios de una tarea.
+#[contractevent(topics = ["assign_freelancer"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssignFreelancerEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+}
+
+// v5: el árbitro registró al programador de un proyecto por hitos.
+#[contractevent(topics = ["assign_project_freelancer"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssignProjectFreelancerEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+}
+
 #[contract]
 pub struct CumpleYCobraContract;
 
@@ -529,6 +555,9 @@ impl CumpleYCobraContract {
         let key = DataKey::Task(task_id.clone());
         let mut task = Self::funded_task(&env, &key)?;
 
+        // v5: si ya hay programador asignado, solo se le puede pagar a él.
+        Self::check_assigned(&task, &freelancer)?;
+
         // Solo antes del plazo. Si el timestamp del ledger ya alcanzó el plazo,
         // el árbitro ya no puede pagar: tras el plazo la única salida (además de
         // la aprobación manual del cliente) es `timeout_refund`, así que no hay
@@ -566,6 +595,10 @@ impl CumpleYCobraContract {
 
         // Solo el cliente que depositó puede aprobar manualmente.
         task.client.require_auth();
+
+        // v5: con programador asignado, el cliente no puede pagarle a otra
+        // dirección (por ejemplo, una suya) en lugar de al que hizo el trabajo.
+        Self::check_assigned(&task, &freelancer)?;
 
         // Efectos antes de la transferencia.
         task.status = TaskStatus::Released;
@@ -1000,6 +1033,9 @@ impl CumpleYCobraContract {
         task.client.require_auth();
         freelancer.require_auth();
 
+        // v5: el reparto solo puede ser con el programador asignado.
+        Self::check_assigned(&task, &freelancer)?;
+
         // El reparto debe ser estrictamente parcial: mayor a 0 y menor al total.
         if freelancer_amount <= 0 || freelancer_amount >= task.amount {
             return Err(Error::InvalidAmount);
@@ -1094,6 +1130,12 @@ impl CumpleYCobraContract {
         // Doble firma: cliente solicita cancelar y el árbitro confirma que nadie aceptó.
         task.client.require_auth();
         arbiter.require_auth();
+
+        // v5: si el contrato ya registró a un programador, la tarea no está
+        // «sin asignar»: el cliente tiene que pagar, repartir o esperar el plazo.
+        if task.freelancer.is_some() {
+            return Err(Error::AlreadyAssigned);
+        }
 
         // Solo antes del plazo; después del plazo ya existe `timeout_refund`.
         if env.ledger().timestamp() >= task.deadline {
@@ -1286,6 +1328,9 @@ impl CumpleYCobraContract {
 
         // Solo el cliente de la tarea puede aprobar y pagar el bono.
         task.client.require_auth();
+
+        // v5: el bono también va solo al programador asignado.
+        Self::check_assigned(&task, &freelancer)?;
 
         // Bono estrictamente positivo y sin desborde al sumarse al monto.
         if bonus <= 0 {
@@ -1599,8 +1644,88 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v5: el contrato conoce al programador antes de pagar
+    // -----------------------------------------------------------------------
+
+    // El árbitro registra al programador que aceptó los criterios de una tarea
+    // simple. Lo firma el backend en `/accept`, cuando ya comprobó la
+    // invitación. Es idempotente con la misma dirección; con otra, falla.
+    pub fn assign_freelancer(env: Env, task_id: String, freelancer: Address) -> Result<(), Error> {
+        // Solo el árbitro: es quien sabe quién aceptó la invitación.
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        // Solo mientras el dinero sigue en el contrato.
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+
+        match &task.freelancer {
+            // Repetir la asignación con la misma dirección no cambia nada.
+            Some(bound) if *bound == freelancer => return Ok(()),
+            // Nadie puede reemplazar al programador ya registrado.
+            Some(_) => return Err(Error::AlreadyAssigned),
+            None => {}
+        }
+
+        // Efecto: queda registrado (la tarea sigue en Funded) + TTL.
+        task.freelancer = Some(freelancer.clone());
+        Self::save_task(&env, &key, &task);
+
+        AssignFreelancerEvent { task_id, freelancer }.publish(&env);
+        Ok(())
+    }
+
+    // Lo mismo para un proyecto por hitos: el programador queda fijo desde que
+    // acepta, no desde el primer pago. Desde ahí `bind_freelancer` rechaza
+    // cualquier pago de un hito a otra dirección.
+    pub fn assign_project_freelancer(
+        env: Env,
+        task_id: String,
+        freelancer: Address,
+    ) -> Result<(), Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+
+        match &project.freelancer {
+            Some(bound) if *bound == freelancer => return Ok(()),
+            Some(_) => return Err(Error::AlreadyAssigned),
+            None => {}
+        }
+
+        // Debe quedar al menos un hito con dinero: asignar un proyecto cerrado
+        // no tiene sentido.
+        let mut any_funded = false;
+        for m in project.milestones.iter() {
+            if m.status == MilestoneStatus::Funded {
+                any_funded = true;
+            }
+        }
+        if !any_funded {
+            return Err(Error::NotFunded);
+        }
+
+        project.freelancer = Some(freelancer.clone());
+        Self::save_project(&env, &key, &project);
+
+        AssignProjectFreelancerEvent { task_id, freelancer }.publish(&env);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v5: si la tarea ya tiene programador registrado, `freelancer` debe ser
+    // esa misma dirección. Sin registro (tareas de antes de v5), no restringe.
+    fn check_assigned(task: &Task, freelancer: &Address) -> Result<(), Error> {
+        match &task.freelancer {
+            Some(bound) if bound != freelancer => Err(Error::WrongFreelancer),
+            _ => Ok(()),
+        }
+    }
 
     // Lee el árbitro de la configuración.
     fn arbiter(env: &Env) -> Result<Address, Error> {
@@ -1706,3 +1831,6 @@ mod test_hitos;
 
 // Pruebas de las funciones nuevas de v4.
 mod test_v4;
+
+// Pruebas de v5 (programador registrado antes de pagar y funciones nuevas).
+mod test_v5;

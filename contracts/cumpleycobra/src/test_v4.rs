@@ -17,38 +17,38 @@ use soroban_sdk::{
     vec, Address, BytesN, Env, IntoVal, String, Vec,
 };
 
-const UNIT: i128 = 10_000_000;
-const MINT: i128 = 100 * UNIT;
-const DIA: u64 = 24 * 60 * 60;
-const START_TS: u64 = 2_000_000;
+pub(crate) const UNIT: i128 = 10_000_000;
+pub(crate) const MINT: i128 = 100 * UNIT;
+pub(crate) const DIA: u64 = 24 * 60 * 60;
+pub(crate) const START_TS: u64 = 2_000_000;
 
 #[derive(PartialEq)]
-enum Modo {
+pub(crate) enum Modo {
     Libre,
     Estricto,
 }
 
-struct Ctx {
-    env: Env,
-    modo: Modo,
-    arbiter: Address,
-    client: Address,
-    freelancer: Address,
-    third: Address,
-    token: TokenClient<'static>,
-    contract_id: Address,
-    c: CumpleYCobraContractClient<'static>,
+pub(crate) struct Ctx {
+    pub(crate) env: Env,
+    pub(crate) modo: Modo,
+    pub(crate) arbiter: Address,
+    pub(crate) client: Address,
+    pub(crate) freelancer: Address,
+    pub(crate) third: Address,
+    pub(crate) token: TokenClient<'static>,
+    pub(crate) contract_id: Address,
+    pub(crate) c: CumpleYCobraContractClient<'static>,
 }
 
-fn hash(env: &Env, b: u8) -> BytesN<32> {
+pub(crate) fn hash(env: &Env, b: u8) -> BytesN<32> {
     BytesN::from_array(env, &[b; 32])
 }
 
-fn tid(env: &Env, s: &str) -> String {
+pub(crate) fn tid(env: &Env, s: &str) -> String {
     String::from_str(env, s)
 }
 
-fn setup(modo: Modo) -> Ctx {
+pub(crate) fn setup(modo: Modo) -> Ctx {
     let env = Env::default();
     if modo == Modo::Libre {
         env.mock_all_auths();
@@ -108,7 +108,7 @@ fn setup(modo: Modo) -> Ctx {
     }
 }
 
-fn deposit_simple(ctx: &Ctx, name: &str, amount: i128, deadline_secs: u64) -> String {
+pub(crate) fn deposit_simple(ctx: &Ctx, name: &str, amount: i128, deadline_secs: u64) -> String {
     let id = tid(&ctx.env, name);
     let rh = hash(&ctx.env, 1);
     if ctx.modo == Modo::Estricto {
@@ -133,7 +133,7 @@ fn deposit_simple(ctx: &Ctx, name: &str, amount: i128, deadline_secs: u64) -> St
     id
 }
 
-fn deposit_two_milestones(ctx: &Ctx, name: &str) -> String {
+pub(crate) fn deposit_two_milestones(ctx: &Ctx, name: &str) -> String {
     let id = tid(&ctx.env, name);
     let amounts: Vec<i128> = vec![&ctx.env, 4 * UNIT, 6 * UNIT];
     let deadlines: Vec<u64> = vec![&ctx.env, DIA, 2 * DIA];
