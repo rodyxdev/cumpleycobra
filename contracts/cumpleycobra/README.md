@@ -247,3 +247,55 @@ Explorador: https://stellar.expert/explorer/testnet/contract/CBZ6TBVTNYOWGEFCSUG
 ```bash
 bash scripts/hitos_v4_testnet.sh
 ```
+
+## v5: el contrato conoce al programador antes de pagar (26 de noviembre de 2026)
+
+En v1 a v4, el contrato no sabe quién es el programador hasta el pago: un cliente podía usar `client_release` (o `mutual_split_task`, o `client_release_milestone` antes del primer pago) para pagarle a una dirección suya en lugar de al programador que aceptó. v5 cierra ese hueco: el árbitro registra al programador en cuanto acepta los criterios y, desde ahí, ningún pago puede ir a otra dirección. **Los contratos v1 a v4 desplegados no se modifican:** v5 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
+
+| | |
+| --- | --- |
+| ID del contrato v5 (testnet) | `CDWVPFHQJGBHI7DJQDFGYAHWRQKNDHIESFKO3MSUD6NPS7AKDYKUZEXM` |
+| WASM hash (`stellar contract build --optimize`) | `764204ff5c69b663759e0380c3d04836ecb529f8791e5c89ed9e9096f8e2982f` (31 376 bytes) |
+| Despliegue | tx [`4a4e568f…`](https://stellar.expert/explorer/testnet/tx/4a4e568f6c54c042dc8dc6adc5cc926c2179d9b9f81ec8c4e52f860072532579) (`--alias cumpleycobra-v5`) |
+| `initialize` | tx [`0f111a6d…`](https://stellar.expert/explorer/testnet/tx/0f111a6d0ba9535c53ba628b22ca7b47411b9414b5aefc96e94e048ba9ee5c2c), árbitro `GAGGEH…VOKZGY`, token `CBIELTK6…CAMA` |
+| Tests | `cargo test -p cumpleycobra`: 68 en verde (16 de v5 en `src/test_v5.rs`), 0 advertencias |
+
+Explorador: https://stellar.expert/explorer/testnet/contract/CDWVPFHQJGBHI7DJQDFGYAHWRQKNDHIESFKO3MSUD6NPS7AKDYKUZEXM
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `assign_freelancer(task_id, freelancer)` | Árbitro | Tarea en `Funded`; idempotente con la misma dirección, `AlreadyAssigned` con otra. No mueve dinero |
+| `assign_project_freelancer(task_id, freelancer)` | Árbitro | Proyecto con al menos un hito en `Funded`; idempotente; `AlreadyAssigned` con otra dirección |
+| `extend_deadline(task_id, extra_secs) -> u64` | Cliente | Tarea en `Funded`; `extra_secs > 0`; el nuevo plazo no puede quedar a más de 28 días del ledger actual (`InvalidDeadline`). Se permite tras vencer si nadie pidió el reembolso |
+| `top_up_task(task_id, amount) -> i128` | Cliente | Tarea en `Funded` antes del plazo; `amount > 0`; transfiere el extra al contrato y devuelve el nuevo monto |
+| `freelancer_refund(task_id)` | Programador registrado | Tarea en `Funded` con programador registrado (`WrongFreelancer` si no hay); devuelve el depósito íntegro al cliente |
+| `get_tasks(task_ids) -> Vec<Option<Task>>` | Lectura | De 1 a 20 tareas (`TooManyItems`); `None` para los `task_id` que no existen |
+
+**Cambio en funciones anteriores (solo con programador registrado):** `release`, `client_release`, `client_release_with_bonus` y `mutual_split_task` exigen que `freelancer` sea el registrado (`WrongFreelancer`), y `cancel_unassigned_task` falla con `AlreadyAssigned`. Sin registro, todo se comporta igual que en v4 (test `v5_sin_asignacion_todo_funciona_igual_que_v4`).
+
+**Error nuevo:** 15 `TooManyItems`. Los códigos del 1 al 14 no cambian.
+
+**Corrida real en testnet** con [`scripts/v5_testnet.sh`](../../scripts/v5_testnet.sh) (corrida `1795754103`, saldo final del contrato `0` USDC):
+
+| Paso | Quién firmó | tx |
+| --- | --- | --- |
+| `deposit` de las tareas A (0.02) y B (0.01) | `cyc-client` | [`01ccb637…`](https://stellar.expert/explorer/testnet/tx/01ccb6374b50cdc4e7028000e62f409440d73f75a6bf42080cde9cfe51b51fcc) / [`54ccaa89…`](https://stellar.expert/explorer/testnet/tx/54ccaa89f136ee27c858645432b201c2f44e87da37ce4fbf6808a8c11fae6728) |
+| `assign_freelancer` (A y B) | `cyc-arbiter` | [`875d297a…`](https://stellar.expert/explorer/testnet/tx/875d297a11d33c1dc83335594e172f51a40b8dc15e389d7dd8d84aa36bab38f9) / [`1571898a…`](https://stellar.expert/explorer/testnet/tx/1571898a4e6d43bad5d87275eac1476f0064898ad6db047a9bd23c71d2508489) |
+| `extend_deadline` (A, +300 s) | `cyc-client` | [`0bbe7a38…`](https://stellar.expert/explorer/testnet/tx/0bbe7a387d043b9b633a9b7b90ac635690a82fd07b5dea880fb1e56675186eaf) |
+| `top_up_task` (A, +0.01 → 0.03) | `cyc-client` | [`e54e32c8…`](https://stellar.expert/explorer/testnet/tx/e54e32c816c1780c95c42ecd3eb2816449be5d6c15c4ec3648a87ef917c54fa3) |
+| `client_release` de A hacia el propio cliente | `cyc-client` | Rechazado en la simulación: `Error(Contract, #12)` (`WrongFreelancer`) |
+| `client_release` de A al programador registrado (0.03) | `cyc-client` | [`eb230368…`](https://stellar.expert/explorer/testnet/tx/eb2303689454394ee9dd53cd4ed695d19ba6240e9b7ea6e4baf2b0744ffd5136) |
+| `freelancer_refund` (B, devuelve 0.01 al cliente) | `cyc-freelancer` | [`4088bff5…`](https://stellar.expert/explorer/testnet/tx/4088bff57ddf33615c5417d774747c2d1d04634cc1d3a3ca2991afceec187763) |
+| `deposit_milestones` del proyecto (0.01 + 0.01) | `cyc-client` | [`c2de96f2…`](https://stellar.expert/explorer/testnet/tx/c2de96f260760befac56193f52eb846f6a6cd4c83542465765f70cb135eeda16) |
+| `assign_project_freelancer` | `cyc-arbiter` | [`7945c648…`](https://stellar.expert/explorer/testnet/tx/7945c6481de3e59e869d15f98b29c94e6774efcb604f0ea4cc016e551d41a198) |
+| `client_release_milestone` (hitos 0 y 1) | `cyc-client` | [`aaa0d8f6…`](https://stellar.expert/explorer/testnet/tx/aaa0d8f62340bc4089467c26de9cec4e4d46a6143d1eee4cb0d4b8ae9ddb303a) / [`1016ca1b…`](https://stellar.expert/explorer/testnet/tx/1016ca1bfb718b139477d2ea1fe6e924edb973e14328805888fb15ee4de22a4f) |
+| `get_tasks` (A `Released`, B `Refunded`, uno inexistente → `null`) | Lectura | — |
+
+```bash
+bash scripts/v5_testnet.sh
+```
+
+El backend todavía usa el contrato v1 para las tareas simples: firmar `assign_freelancer` en `/accept` es el siguiente paso para que el registro proteja a los programadores en producción.
+

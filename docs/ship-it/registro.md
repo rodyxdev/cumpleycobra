@@ -35,6 +35,9 @@ Del 23 al 27 de noviembre de 2026. Cuentan los commits a `main` por su calidad, 
 | 26 nov | Suma más · Función nueva | [`673ca08`](https://github.com/rodyxdev/cumpleycobra/commit/673ca08) | «Agregar al calendario»: descarga un `.ics` con el plazo on-chain de la tarea y un aviso 30 minutos antes |
 | 26 nov | Suma más · Función nueva | [`042ca80`](https://github.com/rodyxdev/cumpleycobra/commit/042ca80) | Insignia SVG pública del programador (`/programadores/{address}/insignia.svg`) con sus pagos confirmados on-chain. Experimental, detrás de `EXTRAS_ENABLED` |
 | 26 nov | Suma más · Función nueva | [`94efdcb`](https://github.com/rodyxdev/cumpleycobra/commit/94efdcb) | Comprobante público de pago (`/tasks/{id}/comprobante`) con transacción, `rules_hash`, `code_hash` y `verdict_hash`. Experimental, detrás de `EXTRAS_ENABLED` |
+| 26 nov | Suma más · Función nueva | [`044713d`](https://github.com/rodyxdev/cumpleycobra/commit/044713d) | Contrato v5 (lote 1): `assign_freelancer` y `assign_project_freelancer`; con programador registrado, ningún pago del cliente puede ir a otra dirección (`WrongFreelancer`) |
+| 26 nov | Suma más · Función nueva | [`a2db595`](https://github.com/rodyxdev/cumpleycobra/commit/a2db595) | Contrato v5 (lote 2): `extend_deadline`, `top_up_task`, `freelancer_refund` y `get_tasks` (68 tests en verde, 0 advertencias) |
+| 26 nov | Suma más · Función nueva | este commit | v5 desplegado en testnet (`CDWVPFHQ…UZEXM`, [despliegue](https://stellar.expert/explorer/testnet/tx/4a4e568f6c54c042dc8dc6adc5cc926c2179d9b9f81ec8c4e52f860072532579), [`initialize`](https://stellar.expert/explorer/testnet/tx/0f111a6d0ba9535c53ba628b22ca7b47411b9414b5aefc96e94e048ba9ee5c2c)) y corrida real `1795754103` de las 6 funciones nuevas (`scripts/v5_testnet.sh`): el pago a otra dirección se rechazó on-chain con `#12` y el saldo final del contrato quedó en 0 USDC |
 
 ## Funciones experimentales (por revisar)
 
