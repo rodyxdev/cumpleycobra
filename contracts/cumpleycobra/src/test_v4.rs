@@ -692,3 +692,124 @@ fn v4_batch_deposit_camino_feliz_y_validaciones() {
         Err(Ok(Error::AlreadyExists))
     );
 }
+
+// ---------------------------------------------------------------------------
+// Lote 5: split_milestone y extend_milestone_deadline
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_split_milestone_conserva_total_orden_y_limites() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_two_milestones(&ctx, "split-m1");
+
+    // Divide el hito 1 (6 USDC, vence en 2 días) en 2.5 USDC (1.5 días) + 3.5 USDC (2 días).
+    ctx.c.split_milestone(
+        &id,
+        &1,
+        &(25_000_000),
+        &(DIA + DIA / 2),
+        &hash(&ctx.env, 40),
+        &hash(&ctx.env, 41),
+    );
+
+    let p = ctx.c.get_project(&id);
+    assert_eq!(p.milestones.len(), 3);
+    assert_eq!(p.milestones.get(0).unwrap().amount, 4 * UNIT);
+    assert_eq!(p.milestones.get(1).unwrap().amount, 25_000_000);
+    assert_eq!(p.milestones.get(2).unwrap().amount, 35_000_000);
+    assert_eq!(p.milestones.get(1).unwrap().deadline, START_TS + DIA + DIA / 2);
+    assert_eq!(p.milestones.get(2).unwrap().deadline, START_TS + 2 * DIA);
+
+    // Pagar todos los hitos deja el contrato exactamente en 0 (10 USDC pagados).
+    for i in 0..3u32 {
+        ctx.c.client_release_milestone(&id, &i, &ctx.freelancer);
+    }
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 10 * UNIT);
+
+    // Validaciones de orden de plazos, montos y tope de 10 hitos.
+    let id2 = deposit_two_milestones(&ctx, "split-m2");
+    // Plazo del primer sub-hito menor al hito anterior (DIA) -> InvalidMilestones.
+    assert_eq!(
+        ctx.c.try_split_milestone(
+            &id2,
+            &1,
+            &(2 * UNIT),
+            &(DIA - 1),
+            &hash(&ctx.env, 42),
+            &hash(&ctx.env, 43),
+        ),
+        Err(Ok(Error::InvalidMilestones))
+    );
+    // Plazo del primer sub-hito mayor al plazo del hito original (2 * DIA) -> InvalidMilestones.
+    assert_eq!(
+        ctx.c.try_split_milestone(
+            &id2,
+            &1,
+            &(2 * UNIT),
+            &(2 * DIA + 1),
+            &hash(&ctx.env, 42),
+            &hash(&ctx.env, 43),
+        ),
+        Err(Ok(Error::InvalidMilestones))
+    );
+    // Monto 0 o igual al total -> InvalidAmount.
+    assert_eq!(
+        ctx.c.try_split_milestone(
+            &id2,
+            &1,
+            &0,
+            &(DIA + 10),
+            &hash(&ctx.env, 42),
+            &hash(&ctx.env, 43),
+        ),
+        Err(Ok(Error::InvalidAmount))
+    );
+}
+
+#[test]
+fn v4_extend_milestone_deadline_prorroga_y_respeta_orden_y_tope() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_two_milestones(&ctx, "ext-m1");
+
+    // Extiende hito 0 (1 día) en +12 horas -> sigue <= hito 1 (2 días).
+    let new_dl = ctx.c.extend_milestone_deadline(&id, &0, &(DIA / 2));
+    assert_eq!(new_dl, START_TS + DIA + DIA / 2);
+    assert_eq!(ctx.c.get_project(&id).milestones.get(0).unwrap().deadline, new_dl);
+
+    // El árbitro ahora puede liberar el hito 0 después del plazo original (1 día + 1 s) gracias a la prórroga.
+    ctx.env.ledger().set_timestamp(START_TS + DIA + 1);
+    ctx.c.release_milestone(
+        &id,
+        &0,
+        &ctx.freelancer,
+        &hash(&ctx.env, 50),
+        &hash(&ctx.env, 51),
+    );
+    assert_eq!(
+        ctx.c.get_project(&id).milestones.get(0).unwrap().status,
+        MilestoneStatus::Released
+    );
+
+    // Ya pagado -> NotFunded.
+    assert_eq!(
+        ctx.c.try_extend_milestone_deadline(&id, &0, &60),
+        Err(Ok(Error::NotFunded))
+    );
+
+    // Rechaza extra_secs == 0, superar 28 días desde ahora y rebasar el hito siguiente.
+    let id2 = deposit_two_milestones(&ctx, "ext-m2");
+    assert_eq!(
+        ctx.c.try_extend_milestone_deadline(&id2, &0, &0),
+        Err(Ok(Error::InvalidDeadline))
+    );
+    assert_eq!(
+        ctx.c.try_extend_milestone_deadline(&id2, &0, &(DIA + 1)),
+        Err(Ok(Error::InvalidMilestones))
+    );
+    assert_eq!(
+        ctx.c
+            .try_extend_milestone_deadline(&id2, &1, &(MAX_MILESTONE_DEADLINE_SECS)),
+        Err(Ok(Error::InvalidDeadline))
+    );
+}

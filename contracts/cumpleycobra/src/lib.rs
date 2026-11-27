@@ -387,6 +387,30 @@ pub struct BatchDepositEvent {
     pub total: i128,
 }
 
+// v4: un hito Funded se dividió en dos hitos cuya suma conserva el monto original.
+#[contractevent(topics = ["split_milestone"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitMilestoneEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub first_amount: i128,
+    pub second_amount: i128,
+    pub first_deadline: u64,
+    pub second_deadline: u64,
+}
+
+// v4: el cliente amplió el plazo de un hito Funded sin rebasar 28 días ni el hito siguiente.
+#[contractevent(topics = ["extend_milestone_deadline"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExtendMilestoneDeadlineEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub old_deadline: u64,
+    pub new_deadline: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Contrato
 // ---------------------------------------------------------------------------
@@ -1381,6 +1405,162 @@ impl CumpleYCobraContract {
         }
         .publish(&env);
         Ok(total)
+    }
+
+    // Divide un hito en Funded (y antes de su plazo) en dos hitos consecutivos
+    // cuya suma de montos es exactamente igual al monto original, sin mover
+    // USDC fuera del contrato. Si ya hay programador fijado, exige también su
+    // firma para que el cliente no cambie criterios unilateralmente.
+    pub fn split_milestone(
+        env: Env,
+        task_id: String,
+        index: u32,
+        first_amount: i128,
+        first_deadline_secs: u64,
+        first_rules_hash: BytesN<32>,
+        second_rules_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+
+        // Cliente firma siempre; si el proyecto ya tiene programador fijado, también firma.
+        project.client.require_auth();
+        if let Some(fl) = &project.freelancer {
+            fl.require_auth();
+        }
+
+        // Respetar el tope máximo de 10 hitos por proyecto.
+        if project.milestones.len() >= MAX_MILESTONES {
+            return Err(Error::InvalidMilestones);
+        }
+
+        let milestone = Self::funded_milestone(&project, index)?;
+        let now = env.ledger().timestamp();
+        if now >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+
+        // División estrictamente parcial del monto del hito.
+        if first_amount <= 0 || first_amount >= milestone.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let second_amount = milestone
+            .amount
+            .checked_sub(first_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        // Plazo del primer sub-hito: entre 1 s y 28 días, sin romper el orden
+        // con el hito anterior ni superar el plazo del segundo sub-hito.
+        if first_deadline_secs == 0 || first_deadline_secs > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let first_deadline = now
+            .checked_add(first_deadline_secs)
+            .ok_or(Error::InvalidDeadline)?;
+        let second_deadline = milestone.deadline;
+        if first_deadline > second_deadline {
+            return Err(Error::InvalidMilestones);
+        }
+        if index > 0 {
+            let prev = project
+                .milestones
+                .get(index - 1)
+                .ok_or(Error::MilestoneNotFound)?;
+            if first_deadline < prev.deadline {
+                return Err(Error::InvalidMilestones);
+            }
+        }
+
+        // Efectos: reemplaza `index` con el primer sub-hito e inserta el segundo en `index + 1`.
+        project.milestones.set(
+            index,
+            Milestone {
+                amount: first_amount,
+                deadline: first_deadline,
+                rules_hash: first_rules_hash,
+                status: MilestoneStatus::Funded,
+            },
+        );
+        project.milestones.insert(
+            index + 1,
+            Milestone {
+                amount: second_amount,
+                deadline: second_deadline,
+                rules_hash: second_rules_hash,
+                status: MilestoneStatus::Funded,
+            },
+        );
+        Self::save_project(&env, &key, &project);
+
+        SplitMilestoneEvent {
+            task_id,
+            index,
+            first_amount,
+            second_amount,
+            first_deadline,
+            second_deadline,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Amplía el plazo de un hito en Funded hacia adelante (`extra_secs > 0`).
+    // Solo el cliente firma (nunca perjudica al programador), mantiene el nuevo
+    // plazo en el futuro y por debajo de 28 días desde ahora (TTL de 30 días),
+    // y exige no superar el plazo del hito siguiente. Devuelve el nuevo plazo.
+    pub fn extend_milestone_deadline(
+        env: Env,
+        task_id: String,
+        index: u32,
+        extra_secs: u64,
+    ) -> Result<u64, Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+
+        // Solo el cliente del proyecto puede otorgar más tiempo.
+        project.client.require_auth();
+
+        let mut milestone = Self::funded_milestone(&project, index)?;
+        if extra_secs == 0 {
+            return Err(Error::InvalidDeadline);
+        }
+
+        let old_deadline = milestone.deadline;
+        let new_deadline = old_deadline
+            .checked_add(extra_secs)
+            .ok_or(Error::InvalidDeadline)?;
+        let now = env.ledger().timestamp();
+        let max_allowed = now
+            .checked_add(MAX_MILESTONE_DEADLINE_SECS)
+            .ok_or(Error::InvalidDeadline)?;
+        if new_deadline <= now || new_deadline > max_allowed {
+            return Err(Error::InvalidDeadline);
+        }
+
+        // Conserva el orden monótono con el hito siguiente si existe.
+        if index + 1 < project.milestones.len() {
+            let next = project
+                .milestones
+                .get(index + 1)
+                .ok_or(Error::MilestoneNotFound)?;
+            if new_deadline > next.deadline {
+                return Err(Error::InvalidMilestones);
+            }
+        }
+
+        // Efectos + extensión de TTL.
+        milestone.deadline = new_deadline;
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+
+        ExtendMilestoneDeadlineEvent {
+            task_id,
+            index,
+            old_deadline,
+            new_deadline,
+        }
+        .publish(&env);
+        Ok(new_deadline)
     }
 
     // -----------------------------------------------------------------------
