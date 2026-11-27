@@ -299,3 +299,62 @@ bash scripts/v5_testnet.sh
 
 El backend todavía usa el contrato v1 para las tareas simples: firmar `assign_freelancer` en `/accept` es el siguiente paso para que el registro proteja a los programadores en producción.
 
+## v6: acuerdos de dos partes, disputas, estadísticas y pausa (27 de noviembre de 2026)
+
+14 funciones nuevas en 3 lotes. Regla de diseño: **todo cambio que afecta al cliente y al programador lo firman los dos**, y cuando entra una parte nueva (otro programador u otro cliente) firma también ella. **Los contratos v1 a v5 desplegados no se modifican:** v6 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
+
+| | |
+| --- | --- |
+| ID del contrato v6 (testnet) | `CD5ZI4KIEUT4QI46SJHVRORDQXLTRBFGJTRJQ5SZI2WMJVYTBKN5TABU` |
+| WASM hash (`stellar contract build --optimize`) | `bceff64ba99dd9fbaa5fca93d8e3292c0953df25064fb479c03ae104284ee21f` (39 056 bytes; subida tx [`8752c591…`](https://stellar.expert/explorer/testnet/tx/8752c591d430fd07c69aeb6e4224cabbd2e3e6c50928c2ba13c93b42c5959ea2)) |
+| Despliegue | tx [`a2589fb6…`](https://stellar.expert/explorer/testnet/tx/a2589fb6731db86a033f694bccd12bfb751017b2642171b26ae205686e5b34fc) (`--alias cumpleycobra-v6`) |
+| `initialize` | tx [`8dd3d71d…`](https://stellar.expert/explorer/testnet/tx/8dd3d71df35957ce4eb69ff76fe518af7dd24be50ed5bd72f3e4cbf4841b0b0a), árbitro `GAGGEH…VOKZGY`, token `CBIELTK6…CAMA` |
+| Tests | `cargo test -p cumpleycobra`: 84 en verde (16 de v6 en `src/test_v6.rs`), 0 advertencias |
+
+Explorador: https://stellar.expert/explorer/testnet/contract/CD5ZI4KIEUT4QI46SJHVRORDQXLTRBFGJTRJQ5SZI2WMJVYTBKN5TABU
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `amend_rules(task_id, new_rules_hash)` | Cliente + programador | Tarea `Funded` con programador registrado; cambia el `rules_hash` (`NoChange` si es el mismo) |
+| `release_partial(task_id, amount, code_hash, verdict_hash) -> i128` | Árbitro | Antes del plazo; `0 < amount < monto`; paga al programador registrado y el resto sigue en `Funded` |
+| `mutual_cancel(task_id)` | Cliente + programador | Devuelve todo al cliente, antes o después del plazo |
+| `reassign_freelancer(task_id, new_freelancer)` | Cliente + programador actual + programador nuevo | Cambia el programador registrado |
+| `transfer_client(task_id, new_client)` | Cliente actual + cliente nuevo (+ programador, si hay uno registrado) | El reembolso y la aprobación manual pasan al cliente nuevo |
+| `tip(task_id, amount)` | Cliente | Solo con la tarea `Released`; va directo al programador y deja un evento |
+| `bump_ttl(task_id)` | Cualquiera | Extiende la vida de la tarea o proyecto y de la instancia; no mueve dinero |
+| `get_stats() -> Stats` | Lectura | `deposited`, `paid_out` y `held`; toda entrada pasa por `collect` y toda salida por `pay` |
+| `deposit_assigned(client, task_id, amount, deadline_secs, rules_hash, freelancer)` | Cliente + programador | `deposit` con el programador ya registrado |
+| `open_dispute(task_id, by)` | `by` (cliente o programador registrado) | Antes del plazo; congela `timeout_refund` hasta 14 días después del plazo |
+| `resolve_dispute(task_id, freelancer_amount)` | Árbitro | Reparte el depósito (cualquiera de los dos puede recibir 0), también tras el plazo |
+| `get_dispute(task_id) -> Option<Address>` | Lectura | Quién abrió la disputa |
+| `pause()` / `unpause()` | Árbitro | Detienen solo los depósitos y recargas (`Paused`); pagos y reembolsos nunca se detienen |
+
+**Errores nuevos:** 16 `NoChange`, 17 `NotParty`, 18 `DisputeOpen`, 19 `NoDispute`, 20 `Paused`. Los códigos del 1 al 15 no cambian.
+
+**Límite conocido:** si una tarea con disputa abierta se cierra por otra vía (aprobación manual, reparto, cancelación), `get_dispute` sigue devolviendo quién la abrió; la tarea ya no está en `Funded` y la disputa no tiene efecto.
+
+**Corrida real en testnet** con [`scripts/v6_testnet.sh`](../../scripts/v6_testnet.sh) (corrida `1795755491`, saldo final del contrato `0` USDC y depósitos sin pausa):
+
+| Función | Quién firmó | Qué pasó | tx |
+| --- | --- | --- | --- |
+| `deposit_assigned` | `cyc-client` + `cyc-freelancer` | Depósito de 0.03 USDC con el programador registrado desde el inicio | [`cb3856a6…`](https://stellar.expert/explorer/testnet/tx/cb3856a667163647deed6416fee098de5d3c40d83dc5969bce0ef77dcfcb8d1c) |
+| `amend_rules` | `cyc-client` + `cyc-freelancer` | `rules_hash` nuevo, firmado por los dos | [`2216825d…`](https://stellar.expert/explorer/testnet/tx/2216825dd49c379c06d7f28794be83c5207719d71aa57b97e69aaa551a0c9f38) |
+| `release_partial` | `cyc-arbiter` | Paga 0.01 al programador; quedan 0.02 en el contrato | [`4137e37f…`](https://stellar.expert/explorer/testnet/tx/4137e37f2ed806c866e4bc15e5815511be5bfbe02ef8199a8d1b28cc23e7f6b3) |
+| `open_dispute` | `cyc-freelancer` | El programador abre la disputa | [`24982cef…`](https://stellar.expert/explorer/testnet/tx/24982cefb7cf6f528ac2b8758e6b15e4414cfb2862cee9ba886455bd16875f18) |
+| `get_dispute` | Lectura (enviada como tx) | Devuelve la dirección del programador | [`5745d170…`](https://stellar.expert/explorer/testnet/tx/5745d1701113c82a9e3270a5dc1e89743b7b5c47b059c83859339525b13fed9a) |
+| `resolve_dispute` | `cyc-arbiter` | 0.01 al programador y 0.01 de vuelta al cliente | [`db4e276f…`](https://stellar.expert/explorer/testnet/tx/db4e276f96131ecd388f38798d9934cfdda33292592b7f63c883890caea12c9f) |
+| `tip` | `cyc-client` | Propina de 0.005 directo al programador, con evento de la tarea | [`fa92d72a…`](https://stellar.expert/explorer/testnet/tx/fa92d72a0076543deaf397a238d540ff5539f22052a020075c9c1a1d876f9f2e) |
+| `reassign_freelancer` | `cyc-client` + `cyc-freelancer` + `cyc-third` | Otra tarea (0.02) pasa de `cyc-freelancer` a `cyc-third` | [`525eec18…`](https://stellar.expert/explorer/testnet/tx/525eec185d11e417dc09b2491af88e71683e302de16eded1be4aba167943f782) |
+| `transfer_client` | `cyc-client` + cliente nuevo + `cyc-third` | La tarea cambia de cliente con la firma de los tres | [`c862b35a…`](https://stellar.expert/explorer/testnet/tx/c862b35af73b8e64ccb6b0eef657f2c50bdf88db011b4088768c5da10ed7ed53) |
+| `mutual_cancel` | Cliente nuevo + `cyc-third` | Cancelan de común acuerdo y los 0.02 vuelven al cliente nuevo | [`f2559894…`](https://stellar.expert/explorer/testnet/tx/f2559894e9273aaf31af9b55933bf5f8ca2e6dd68ffc109c4fc9a98cb650f063) |
+| `bump_ttl` | `cyc-third` (sin permisos) | Extiende la vida de la tarea en el ledger | [`cca0e9cb…`](https://stellar.expert/explorer/testnet/tx/cca0e9cb8b704a69901d45d3f9b0305e86c8b6b97ae089339d9f484295b3abe9) |
+| `pause` | `cyc-arbiter` | Un depósito durante la pausa se rechazó con `Error(Contract, #20)` | [`d1c70399…`](https://stellar.expert/explorer/testnet/tx/d1c703990429434081379dc879a205454352911adcb0dc4e671c035db2c93357) |
+| `unpause` | `cyc-arbiter` | Reanuda los depósitos | [`523bea2c…`](https://stellar.expert/explorer/testnet/tx/523bea2cd5cb89b1bc235176ecbfdb95fb0e5c030ba011d03250ebae7338deb5) |
+| `get_stats` | Lectura (enviada como tx) | `deposited` 0.05, `paid_out` 0.05, `held` 0 (igual al saldo real del contrato) | [`8f92999d…`](https://stellar.expert/explorer/testnet/tx/8f92999d38f76f4736030de8d96479e1b7968ff151251a4fe2a0d880791afeb9) |
+
+```bash
+bash scripts/v6_testnet.sh
+```
+
