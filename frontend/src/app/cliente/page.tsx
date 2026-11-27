@@ -185,7 +185,8 @@ function ClientTaskPanel({ taskId, usdc }: { taskId: string; usdc: UsdcStatus })
           </p>
         </details>}
         <div className="text-xs text-muted-foreground">
-          rules_hash <span className="break-all font-mono">{ct.rules_hash}</span>
+          rules_hash <span className="break-all font-mono">{ct.rules_hash}</span>{" "}
+          <Link className="underline" href={`/verificar?tarea=${encodeURIComponent(ct.task_id)}`}>Verificar</Link>
         </div>
       </CardContent>
     </Card>
