@@ -51,6 +51,11 @@
 // (`open_milestone_dispute`, `resolve_milestone_dispute`) y retiro de una
 // disputa por quien la abrió (`cancel_dispute`, `cancel_milestone_dispute`).
 // Operaciones por lote: `release_batch`, `refund_batch` y `get_projects`.
+//
+// v8 (27 de noviembre de 2026): pago por tiempo. El cliente deposita para un
+// programador y una duración, y el dinero se libera de forma lineal segundo a
+// segundo (como un sueldo o un retainer): `deposit_stream`, `withdraw_stream`
+// y `cancel_stream`.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -171,6 +176,30 @@ pub struct Stats {
     pub held: i128,
 }
 
+// v8: estado de un pago por tiempo.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StreamStatus {
+    Active,
+    Canceled,
+}
+
+// v8: un pago por tiempo. `amount` se libera de forma lineal entre `start` y
+// `end`; `withdrawn` es lo que el programador ya retiró. Al cancelar, `amount`
+// queda en lo que el programador ganó hasta ese momento.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Stream {
+    pub stream_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub withdrawn: i128,
+    pub start: u64,
+    pub end: u64,
+    pub status: StreamStatus,
+}
+
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
@@ -192,6 +221,8 @@ pub enum DataKey {
     MilestoneDispute(String, u32),
     // v6: pausa de emergencia de los depósitos (instancia).
     Paused,
+    // v8: un pago por tiempo (persistente).
+    Stream(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +267,8 @@ pub enum Error {
     Paused = 20,
     // v7: las listas de un lote no tienen el mismo largo.
     LengthMismatch = 21,
+    // v8: todavía no se ha liberado nada nuevo que retirar.
+    NothingToWithdraw = 22,
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +758,41 @@ pub struct CancelDisputeEvent {
     pub task_id: String,
     pub index: Option<u32>,
     pub opened_by: Address,
+}
+
+// v8: el cliente abrió un pago por tiempo.
+#[contractevent(topics = ["deposit_stream"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositStreamEvent {
+    #[topic]
+    pub stream_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub start: u64,
+    pub end: u64,
+}
+
+// v8: el programador retiró lo que ya se había liberado.
+#[contractevent(topics = ["withdraw_stream"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WithdrawStreamEvent {
+    #[topic]
+    pub stream_id: String,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub withdrawn: i128,
+}
+
+// v8: el cliente canceló el pago por tiempo; lo ganado fue al programador y el
+// resto volvió al cliente.
+#[contractevent(topics = ["cancel_stream"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelStreamEvent {
+    #[topic]
+    pub stream_id: String,
+    pub freelancer_amount: i128,
+    pub refund_amount: i128,
 }
 
 #[contract]
@@ -2929,8 +2997,173 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v8: pago por tiempo
+    // -----------------------------------------------------------------------
+
+    // El cliente deposita `amount` para `freelancer`, que se libera de forma
+    // lineal durante `duration_secs` (de 1 s a 28 días) desde ahora. No hay
+    // criterios ni árbitro: es un pago por tiempo de trabajo acordado, que el
+    // cliente puede cortar en cualquier momento con `cancel_stream`.
+    pub fn deposit_stream(
+        env: Env,
+        client: Address,
+        stream_id: String,
+        freelancer: Address,
+        amount: i128,
+        duration_secs: u64,
+    ) -> Result<(), Error> {
+        Self::not_paused(&env)?;
+        client.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if freelancer == client {
+            return Err(Error::NoChange);
+        }
+        if duration_secs == 0 || duration_secs > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let key = DataKey::Stream(stream_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let start = env.ledger().timestamp();
+        let end = start.checked_add(duration_secs).ok_or(Error::InvalidDeadline)?;
+
+        let stream = Stream {
+            stream_id: stream_id.clone(),
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            amount,
+            withdrawn: 0,
+            start,
+            end,
+            status: StreamStatus::Active,
+        };
+        Self::save_stream(&env, &key, &stream);
+        Self::collect(&env, &client, amount)?;
+
+        DepositStreamEvent {
+            stream_id,
+            client,
+            freelancer,
+            amount,
+            start,
+            end,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El programador retira todo lo liberado que aún no ha retirado. Funciona
+    // también después de que el cliente cancele (para cobrar lo ya ganado).
+    // Devuelve lo que retiró.
+    pub fn withdraw_stream(env: Env, stream_id: String) -> Result<i128, Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::load_stream(&env, &key)?;
+        stream.freelancer.require_auth();
+
+        let available = Self::vested(&env, &stream)?
+            .checked_sub(stream.withdrawn)
+            .ok_or(Error::InvalidAmount)?;
+        if available <= 0 {
+            return Err(Error::NothingToWithdraw);
+        }
+        stream.withdrawn = stream
+            .withdrawn
+            .checked_add(available)
+            .ok_or(Error::InvalidAmount)?;
+        Self::save_stream(&env, &key, &stream);
+        Self::pay(&env, &stream.freelancer, available)?;
+
+        WithdrawStreamEvent {
+            stream_id,
+            freelancer: stream.freelancer,
+            amount: available,
+            withdrawn: stream.withdrawn,
+        }
+        .publish(&env);
+        Ok(available)
+    }
+
+    // El cliente corta el pago por tiempo. En la misma transacción, el
+    // programador recibe lo ganado hasta este segundo que no había retirado, y
+    // el cliente recupera lo que todavía no se liberaba. Nadie pierde lo suyo.
+    pub fn cancel_stream(env: Env, stream_id: String) -> Result<(), Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::load_stream(&env, &key)?;
+        stream.client.require_auth();
+        if stream.status != StreamStatus::Active {
+            return Err(Error::NotFunded);
+        }
+        let vested = Self::vested(&env, &stream)?;
+        if vested >= stream.amount {
+            // Ya se liberó todo: no hay nada que cancelar.
+            return Err(Error::NotFunded);
+        }
+        let freelancer_amount = vested.checked_sub(stream.withdrawn).ok_or(Error::InvalidAmount)?;
+        let refund_amount = stream.amount.checked_sub(vested).ok_or(Error::InvalidAmount)?;
+
+        // Efectos: el pago queda en lo ganado y todo ya retirado.
+        stream.status = StreamStatus::Canceled;
+        stream.amount = vested;
+        stream.withdrawn = vested;
+        Self::save_stream(&env, &key, &stream);
+
+        if freelancer_amount > 0 {
+            Self::pay(&env, &stream.freelancer, freelancer_amount)?;
+        }
+        Self::pay(&env, &stream.client, refund_amount)?;
+
+        CancelStreamEvent {
+            stream_id,
+            freelancer_amount,
+            refund_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Lectura de un pago por tiempo.
+    pub fn get_stream(env: Env, stream_id: String) -> Result<Stream, Error> {
+        Self::load_stream(&env, &DataKey::Stream(stream_id))
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v8: lo liberado de un pago por tiempo hasta ahora (lineal en el tiempo).
+    // Un pago cancelado ya no libera más: su `amount` es lo ganado al cancelar.
+    fn vested(env: &Env, stream: &Stream) -> Result<i128, Error> {
+        if stream.status == StreamStatus::Canceled {
+            return Ok(stream.amount);
+        }
+        let now = env.ledger().timestamp();
+        if now >= stream.end {
+            return Ok(stream.amount);
+        }
+        let elapsed = now.saturating_sub(stream.start) as i128;
+        let duration = (stream.end - stream.start) as i128;
+        stream
+            .amount
+            .checked_mul(elapsed)
+            .ok_or(Error::InvalidAmount)
+            .map(|x| x / duration)
+    }
+
+    fn load_stream(env: &Env, key: &DataKey) -> Result<Stream, Error> {
+        env.storage().persistent().get(key).ok_or(Error::NotFound)
+    }
+
+    fn save_stream(env: &Env, key: &DataKey, stream: &Stream) {
+        env.storage().persistent().set(key, stream);
+        env.storage()
+            .persistent()
+            .extend_ttl(key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(env);
+    }
 
     // v7: true si hay una disputa abierta en `dkey` y todavía no pasan 14 días
     // desde `deadline` (mientras tanto, el reembolso por plazo espera).
@@ -3134,3 +3367,6 @@ mod test_v6;
 
 // Pruebas de v7 (acuerdos y disputas en hitos, operaciones por lote).
 mod test_v7;
+
+// Pruebas de v8 (pago por tiempo y garantía del programador).
+mod test_v8;
