@@ -57,3 +57,33 @@ Se agregaron durante el reto y **no están en el plan de mejora** (`docs/mejora/
 | Plazo en el calendario (`.ics`) | [`673ca08`](https://github.com/rodyxdev/cumpleycobra/commit/673ca08) | `frontend/src/lib/calendario.ts`, botón en `frontend/src/components/status-card.tsx` | Revertir el commit | Sí, al hacer push (no llama a la API) |
 | Insignia SVG del programador | [`042ca80`](https://github.com/rodyxdev/cumpleycobra/commit/042ca80) | `backend/extras.py` | Borrar `backend/extras.py`, su `include_router` en `backend/main.py` y `backend/tests/test_extras.py` | No: requiere desplegar la API y `EXTRAS_ENABLED=true` |
 | Comprobante público de pago | [`94efdcb`](https://github.com/rodyxdev/cumpleycobra/commit/94efdcb) | `backend/extras.py` | Igual que la insignia | No: requiere desplegar la API y `EXTRAS_ENABLED=true` |
+
+## Revisión de las funciones reclamadas (27 de noviembre de 2026)
+
+De 37 reclamos, 28 se aprobaron y 9 se rechazaron. Los rechazos dejan cinco reglas que se aplican antes de proponer o reclamar una función:
+
+| Regla del revisor | Rechazadas por esa regla |
+| --- | --- |
+| Solo lectura no cuenta | `get_dispute`, `get_stats`, `get_tasks` (se había aprobado por error y se corrigió) |
+| Solo guardar un valor o una bandera no cuenta | `pause`, `unpause` |
+| Mantenimiento no cuenta | `bump_ttl` |
+| Combinar funciones que ya existen no cuenta | `deposit_assigned` (= `deposit` + `assign_freelancer`) |
+| Repetir una regla o un resultado que ya existe no cuenta | `assign_project_freelancer` (repite `bind_freelancer`), `mutual_cancel` (mismo resultado que `freelancer_refund`) |
+
+Las funciones siguen en los contratos y sus tests siguen en el repositorio: solo no suman puntos.
+
+**Contrato v7 antes de reclamar, con esas reglas:**
+
+| Función | Riesgo | Por qué |
+| --- | --- | --- |
+| `release_milestone_partial` | Bajo | Mueve dinero; versión de hito de `release_partial` (aprobada), como otras de hito ya aprobadas |
+| `resolve_milestone_dispute` | Bajo | Reparte dinero; versión de hito de `resolve_dispute` (aprobada) |
+| `reassign_project_freelancer` | Bajo | `bind_freelancer` no permite cambiar al programador ya fijado; versión de proyecto de `reassign_freelancer` (aprobada) |
+| `transfer_project_client` | Bajo | Versión de proyecto de `transfer_client` (aprobada) |
+| `open_milestone_dispute` | Medio | Versión de hito de `open_dispute` (aprobada), pero en el fondo guarda quién la abrió |
+| `amend_milestone_rules` | Medio | Versión de hito de `amend_rules` (aprobada), pero solo cambia un hash guardado |
+| `release_batch` | Medio | Lote nuevo como `batch_deposit` (aprobada), pero podría verse como `release` repetido |
+| `refund_batch` | Medio | Lote como `refund_all_expired_milestones` (aprobada), pero podría verse como `timeout_refund` repetido |
+| `mutual_cancel_project` | Alto | Es el `mutual_cancel` de proyectos, y `mutual_cancel` se rechazó |
+| `cancel_dispute`, `cancel_milestone_dispute` | Alto | Solo borran un valor guardado |
+| `get_milestone_dispute`, `get_projects` | No reclamar | Solo lectura |
