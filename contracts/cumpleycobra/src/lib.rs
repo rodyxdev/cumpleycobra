@@ -50,6 +50,7 @@
 // `reassign_project_freelancer` y `transfer_project_client`. Disputas por hito
 // (`open_milestone_dispute`, `resolve_milestone_dispute`) y retiro de una
 // disputa por quien la abrió (`cancel_dispute`, `cancel_milestone_dispute`).
+// Operaciones por lote: `release_batch`, `refund_batch` y `get_projects`.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -233,6 +234,8 @@ pub enum Error {
     NoDispute = 19,
     // v6: los depósitos están en pausa de emergencia.
     Paused = 20,
+    // v7: las listas de un lote no tienen el mismo largo.
+    LengthMismatch = 21,
 }
 
 // ---------------------------------------------------------------------------
@@ -2817,6 +2820,112 @@ impl CumpleYCobraContract {
         env.storage()
             .persistent()
             .get(&DataKey::MilestoneDispute(task_id, index))
+    }
+
+    // -----------------------------------------------------------------------
+    // v7: operaciones por lote
+    // -----------------------------------------------------------------------
+
+    // El árbitro paga de 2 a 10 tareas aprobadas en una sola transacción. Cada
+    // tarea sigue todas las reglas de `release` y además exige programador
+    // registrado: en un lote nadie elige a quién se paga, va al registrado.
+    // Si una sola tarea falla, se revierte todo el lote. Devuelve el total pagado.
+    pub fn release_batch(
+        env: Env,
+        task_ids: Vec<String>,
+        code_hashes: Vec<BytesN<32>>,
+        verdict_hashes: Vec<BytesN<32>>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let n = task_ids.len();
+        if !(2..=10).contains(&n) {
+            return Err(Error::TooManyItems);
+        }
+        if code_hashes.len() != n || verdict_hashes.len() != n {
+            return Err(Error::LengthMismatch);
+        }
+
+        let now = env.ledger().timestamp();
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let task_id = task_ids.get(i).ok_or(Error::LengthMismatch)?;
+            let key = DataKey::Task(task_id.clone());
+            // Un id repetido falla aquí con NotFunded: no se paga dos veces.
+            let mut task = Self::funded_task(&env, &key)?;
+            let freelancer = Self::assigned(&task)?;
+            if now >= task.deadline {
+                return Err(Error::DeadlinePassed);
+            }
+            task.status = TaskStatus::Released;
+            Self::save_task(&env, &key, &task);
+            Self::pay(&env, &freelancer, task.amount)?;
+            total = total.checked_add(task.amount).ok_or(Error::InvalidAmount)?;
+
+            ReleaseEvent {
+                task_id,
+                freelancer,
+                amount: task.amount,
+                code_hash: code_hashes.get(i).ok_or(Error::LengthMismatch)?,
+                verdict_hash: verdict_hashes.get(i).ok_or(Error::LengthMismatch)?,
+            }
+            .publish(&env);
+        }
+        Ok(total)
+    }
+
+    // Cualquiera reembolsa de una vez varias tareas vencidas (de 1 a 20), cada
+    // una a SU cliente. Las que todavía no se pueden reembolsar (no existen, ya
+    // se cerraron, no vencen o tienen una disputa que las congela) se omiten
+    // sin fallar, para que sirva como tarea automática. Devuelve cuántas
+    // reembolsó; si ninguna, `DeadlineNotReached`.
+    pub fn refund_batch(env: Env, task_ids: Vec<String>) -> Result<u32, Error> {
+        if task_ids.is_empty() || task_ids.len() > MAX_BATCH_READ {
+            return Err(Error::TooManyItems);
+        }
+        let now = env.ledger().timestamp();
+        let mut count: u32 = 0;
+        for task_id in task_ids.iter() {
+            let key = DataKey::Task(task_id.clone());
+            let mut task: Task = match env.storage().persistent().get(&key) {
+                Some(t) => t,
+                None => continue,
+            };
+            if task.status != TaskStatus::Funded || now < task.deadline {
+                continue;
+            }
+            if Self::frozen(&env, &DataKey::Dispute(task_id.clone()), task.deadline)? {
+                continue;
+            }
+            task.status = TaskStatus::Refunded;
+            Self::save_task(&env, &key, &task);
+            Self::pay(&env, &task.client, task.amount)?;
+            count += 1;
+
+            TimeoutRefundEvent {
+                task_id,
+                client: task.client,
+                amount: task.amount,
+            }
+            .publish(&env);
+        }
+        if count == 0 {
+            return Err(Error::DeadlineNotReached);
+        }
+        Ok(count)
+    }
+
+    // Lectura por lote de proyectos: de 1 a 20, con `None` si no existe.
+    pub fn get_projects(env: Env, task_ids: Vec<String>) -> Result<Vec<Option<Project>>, Error> {
+        if task_ids.is_empty() || task_ids.len() > MAX_BATCH_READ {
+            return Err(Error::TooManyItems);
+        }
+        let mut out: Vec<Option<Project>> = Vec::new(&env);
+        for id in task_ids.iter() {
+            out.push_back(env.storage().persistent().get(&DataKey::Project(id)));
+        }
+        Ok(out)
     }
 
     // -----------------------------------------------------------------------

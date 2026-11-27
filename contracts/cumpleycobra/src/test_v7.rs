@@ -317,3 +317,131 @@ fn v7_cancel_milestone_dispute_lo_retira_quien_lo_abrio() {
     est.c.cancel_milestone_dispute(&eid, &1);
     assert_eq!(est.c.get_milestone_dispute(&eid, &1), None);
 }
+
+// ---------------------------------------------------------------------------
+// Lote 3: operaciones por lote
+// ---------------------------------------------------------------------------
+
+fn tarea(ctx: &Ctx, nombre: &str, monto: i128, plazo: u64, asignar: bool) -> String {
+    let id = super::test_v4::deposit_simple(ctx, nombre, monto, plazo);
+    if asignar {
+        ctx.c.assign_freelancer(&id, &ctx.freelancer);
+    }
+    id
+}
+
+#[test]
+fn v7_release_batch_paga_varias_al_programador_registrado() {
+    let ctx = setup(Modo::Libre);
+    let a = tarea(&ctx, "lote-pago-a", 2 * UNIT, DIA, true);
+    let b = tarea(&ctx, "lote-pago-b", 3 * UNIT, DIA, true);
+    let hs: Vec<BytesN<32>> = Vec::from_array(&ctx.env, [hash(&ctx.env, 1), hash(&ctx.env, 2)]);
+    let ids: Vec<String> = Vec::from_array(&ctx.env, [a.clone(), b.clone()]);
+    assert_eq!(ctx.c.release_batch(&ids, &hs, &hs), 5 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 5 * UNIT);
+    assert_eq!(ctx.c.get_task(&a).status, TaskStatus::Released);
+    assert_eq!(ctx.c.get_task(&b).status, TaskStatus::Released);
+
+    // Ya pagadas: el lote completo falla y no se mueve nada.
+    assert_eq!(ctx.c.try_release_batch(&ids, &hs, &hs), Err(Ok(Error::NotFunded)));
+
+    // Una sin programador registrado revierte todo el lote.
+    let c = tarea(&ctx, "lote-pago-c", UNIT, DIA, true);
+    let d = tarea(&ctx, "lote-pago-d", UNIT, DIA, false);
+    let ids2: Vec<String> = Vec::from_array(&ctx.env, [c.clone(), d]);
+    assert_eq!(ctx.c.try_release_batch(&ids2, &hs, &hs), Err(Ok(Error::WrongFreelancer)));
+    assert_eq!(ctx.c.get_task(&c).status, TaskStatus::Funded);
+
+    // Un id repetido no paga dos veces.
+    let rep: Vec<String> = Vec::from_array(&ctx.env, [c.clone(), c.clone()]);
+    assert_eq!(ctx.c.try_release_batch(&rep, &hs, &hs), Err(Ok(Error::NotFunded)));
+
+    // Tamaños.
+    let uno: Vec<String> = Vec::from_array(&ctx.env, [c.clone()]);
+    let h1: Vec<BytesN<32>> = Vec::from_array(&ctx.env, [hash(&ctx.env, 1)]);
+    assert_eq!(ctx.c.try_release_batch(&uno, &h1, &h1), Err(Ok(Error::TooManyItems)));
+    let e = tarea(&ctx, "lote-pago-e", UNIT, DIA, true);
+    let dos: Vec<String> = Vec::from_array(&ctx.env, [c, e]);
+    assert_eq!(ctx.c.try_release_batch(&dos, &hs, &h1), Err(Ok(Error::LengthMismatch)));
+    assert_eq!(ctx.c.get_stats().held, ctx.token.balance(&ctx.contract_id));
+}
+
+#[test]
+fn v7_release_batch_estricto_solo_el_arbitro_y_no_tras_el_plazo() {
+    let est = setup(Modo::Estricto);
+    let a = super::test_v4::deposit_simple(&est, "lote-est-a", UNIT, 100);
+    let b = super::test_v4::deposit_simple(&est, "lote-est-b", UNIT, DIA);
+    for id in [&a, &b] {
+        firmas(&est, &[&est.arbiter], "assign_freelancer", (id, &est.freelancer).into_val(&est.env));
+        est.c.assign_freelancer(id, &est.freelancer);
+    }
+    let ids: Vec<String> = Vec::from_array(&est.env, [a, b]);
+    let hs: Vec<BytesN<32>> = Vec::from_array(&est.env, [hash(&est.env, 1), hash(&est.env, 2)]);
+    let args: Vec<Val> = (&ids, &hs, &hs).into_val(&est.env);
+    firmas(&est, &[&est.client], "release_batch", args.clone());
+    assert!(est.c.try_release_batch(&ids, &hs, &hs).is_err());
+    est.env.ledger().set_timestamp(START_TS + 100);
+    firmas(&est, &[&est.arbiter], "release_batch", args);
+    assert_eq!(est.c.try_release_batch(&ids, &hs, &hs), Err(Ok(Error::DeadlinePassed)));
+}
+
+#[test]
+fn v7_refund_batch_reembolsa_solo_las_que_proceden_sin_permisos() {
+    let ctx = setup(Modo::Libre);
+    let vencida = tarea(&ctx, "lote-ref-a", 2 * UNIT, 100, false);
+    let otra = tarea(&ctx, "lote-ref-b", UNIT, 100, false);
+    let vigente = tarea(&ctx, "lote-ref-c", UNIT, DIA, false);
+    let disputada = tarea(&ctx, "lote-ref-d", UNIT, 100, true);
+    ctx.c.open_dispute(&disputada, &ctx.freelancer);
+    let pagada = tarea(&ctx, "lote-ref-e", UNIT, 100, true);
+    ctx.c.client_release(&pagada, &ctx.freelancer);
+
+    let ids: Vec<String> = Vec::from_array(
+        &ctx.env,
+        [
+            vencida.clone(),
+            otra.clone(),
+            vigente.clone(),
+            disputada.clone(),
+            pagada,
+            String::from_str(&ctx.env, "no-existe"),
+        ],
+    );
+    assert_eq!(ctx.c.try_refund_batch(&ids), Err(Ok(Error::DeadlineNotReached)));
+    ctx.env.ledger().set_timestamp(START_TS + 100);
+    assert_eq!(ctx.c.refund_batch(&ids), 2);
+    assert_eq!(ctx.c.get_task(&vencida).status, TaskStatus::Refunded);
+    assert_eq!(ctx.c.get_task(&otra).status, TaskStatus::Refunded);
+    assert_eq!(ctx.c.get_task(&vigente).status, TaskStatus::Funded);
+    assert_eq!(ctx.c.get_task(&disputada).status, TaskStatus::Funded);
+    // Segunda pasada: ya no queda nada que proceda.
+    assert_eq!(ctx.c.try_refund_batch(&ids), Err(Ok(Error::DeadlineNotReached)));
+    let vacio: Vec<String> = Vec::new(&ctx.env);
+    assert_eq!(ctx.c.try_refund_batch(&vacio), Err(Ok(Error::TooManyItems)));
+    assert_eq!(ctx.c.get_stats().held, ctx.token.balance(&ctx.contract_id));
+
+    // Sin ninguna firma (modo estricto): cualquiera lo dispara.
+    let est = setup(Modo::Estricto);
+    let eid = super::test_v4::deposit_simple(&est, "lote-ref-estricto", UNIT, 100);
+    est.env.ledger().set_timestamp(START_TS + 100);
+    assert_eq!(est.c.refund_batch(&Vec::from_array(&est.env, [eid])), 1);
+    assert_eq!(est.token.balance(&est.client), MINT);
+}
+
+#[test]
+fn v7_get_projects_lee_por_lote() {
+    let ctx = setup(Modo::Libre);
+    let a = deposit_two_milestones(&ctx, "lote-proy-a");
+    let b = proyecto_asignado(&ctx, "lote-proy-b");
+    let ids: Vec<String> = Vec::from_array(
+        &ctx.env,
+        [b.clone(), String::from_str(&ctx.env, "nada"), a.clone()],
+    );
+    let out = ctx.c.get_projects(&ids);
+    assert_eq!(out.len(), 3);
+    assert_eq!(out.get(0).unwrap().unwrap().freelancer, Some(ctx.freelancer.clone()));
+    assert_eq!(out.get(1).unwrap(), None);
+    assert_eq!(out.get(2).unwrap().unwrap().milestones.len(), 2);
+    let vacio: Vec<String> = Vec::new(&ctx.env);
+    assert_eq!(ctx.c.try_get_projects(&vacio), Err(Ok(Error::TooManyItems)));
+}
