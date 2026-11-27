@@ -195,3 +195,55 @@ Explorador: https://stellar.expert/explorer/testnet/contract/CCBZZMNYLDIDL55G7LF
 ```bash
 bash scripts/hitos_v3_testnet.sh
 ```
+
+## v4: acuerdos parciales, cancelaciones, lotes y operación del escrow (26 de noviembre de 2026)
+
+Mismo código y mismas funciones de v1, v2 y v3 sin cambios, más 11 funciones nuevas en 6 lotes (acuerdos parciales con doble firma, cancelaciones antes del plazo, reembolso en lote, recorte/división/prórroga de hitos, bono manual, depósito por lote y rotación segura del árbitro). **Los contratos v1, v2 y v3 desplegados no se modifican:** v4 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
+
+| | |
+| --- | --- |
+| ID del contrato v4 (testnet) | `CBZ6TBVTNYOWGEFCSUGPO4GRWRNW4YAY6SK222XECEVVIIXFLD6TFK2E` |
+| WASM hash (`stellar contract build --optimize`) | `ceba9ed8ad12693e015dace7d5815dbf68ac7dc9473d5ff2f9618e799337b311` (27 411 bytes optimizado; subida tx [`7d2201de…`](https://stellar.expert/explorer/testnet/tx/7d2201de623221b1e7a45d9ccc733e8c957fa02c7acb4e2a1d6eb4dda4c8b90c)) |
+| Despliegue | tx [`01c4d856…`](https://stellar.expert/explorer/testnet/tx/01c4d856c1b4b797cfe8ff2adc2978a29540f604d75971e79e17f4322f71dcd8) (`--alias cumpleycobra-v4`) |
+| `initialize` | tx [`f7ad54e0…`](https://stellar.expert/explorer/testnet/tx/f7ad54e0734e999fb3f96adff9cfaa3e9eb567ba6ace40be893b4d1483210fca), árbitro `GAGGEH…VOKZGY`, token `CBIELTK6…CAMA` |
+| Tests | `cargo test -p cumpleycobra`: 52 en verde (18 de v1, 14 de v2, 6 de v3 y 14 de v4 en `src/test_v4.rs`) |
+
+Explorador: https://stellar.expert/explorer/testnet/contract/CBZ6TBVTNYOWGEFCSUGPO4GRWRNW4YAY6SK222XECEVVIIXFLD6TFK2E
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `mutual_split_task(task_id, freelancer, freelancer_amount)` | Cliente + Programador | Tarea en `Funded`; `0 < freelancer_amount < amount`; paga `freelancer_amount` al programador y devuelve la diferencia al cliente en una transacción atómica |
+| `mutual_split_milestone(task_id, index, freelancer, freelancer_amount)` | Cliente + Programador | Hito en `Funded`; fija/valida programador (`WrongFreelancer`); `0 < freelancer_amount < amount`; reparto atómico en dos transferencias de USDC |
+| `cancel_unassigned_task(task_id)` | Cliente + Árbitro | Tarea en `Funded` antes del plazo (`DeadlinePassed`); marca `Refunded` y devuelve el depósito íntegro al cliente |
+| `cancel_unassigned_project(task_id)` | Cliente + Árbitro | Proyecto sin programador fijado (`AlreadyAssigned`); marca todos los hitos en `Funded` como `Refunded` y devuelve el total en una transferencia |
+| `refund_all_expired_milestones(task_id)` | Cualquiera | Recorre los hitos en `Funded` cuyo plazo venció (`DeadlineNotReached` si ninguno venció, `NotFunded` si no hay `Funded`), los marca `Refunded` y devuelve la suma al cliente en una transferencia |
+| `reduce_milestone(task_id, index, reduce_amount)` | Cliente + Programador (si fijado) o Cliente + Árbitro | Hito en `Funded` antes de su plazo; `0 < reduce_amount < amount`; reduce el hito y devuelve la diferencia al cliente |
+| `client_release_with_bonus(task_id, freelancer, bonus)` | Cliente | Tarea en `Funded` (también tras plazo); `bonus > 0`; libera `task.amount` del contrato y transfiere `bonus` del cliente al programador atómicamente |
+| `batch_deposit(client, task_ids, amounts, deadlines_secs, rules_hashes)` | Cliente | 2 a 10 tareas independientes en una sola llamada y una sola transferencia de USDC; valida unicidad contra almacenamiento y dentro del mismo lote |
+| `split_milestone(task_id, index, first_amount, first_deadline_secs, first_rules_hash, second_rules_hash)` | Cliente (y Programador si ya está fijado) | Divide un hito `Funded` antes del plazo en dos hitos consecutivos conservando el total, el tope de 10 hitos y el orden de plazos |
+| `extend_milestone_deadline(task_id, index, extra_secs)` | Cliente | Prorroga un hito `Funded` hacia adelante (`extra_secs > 0`), dentro de 28 días desde ahora y sin rebasar el hito siguiente |
+| `rotate_arbiter(new_arbiter)` | Árbitro actual + Nuevo árbitro | Rotación atómica del árbitro con doble firma; rechaza rotar hacia la misma dirección (`SameArbiter`) y extiende TTL de instancia |
+
+**Errores nuevos:** 13 `AlreadyAssigned`, 14 `SameArbiter`. Los códigos del 1 al 12 no cambian.
+
+**Corrida real en testnet** con [`scripts/hitos_v4_testnet.sh`](../../scripts/hitos_v4_testnet.sh) (corrida `1795741507`, saldo final del contrato `0` USDC y `cyc-arbiter` restaurado):
+
+| Función | Quién firmó | tx |
+| --- | --- | --- |
+| `batch_deposit` (3 tareas: 0.03 + 0.02 + 0.02 USDC) | `cyc-client` | [`70cbb7eb…`](https://stellar.expert/explorer/testnet/tx/70cbb7eb9fa9bf0d5956c94a6b870f69102466bded70f18f79626a0584cc5096) |
+| `mutual_split_task` (0.01 programador + 0.02 cliente) | `cyc-client` + `cyc-freelancer` | [`30cd7690…`](https://stellar.expert/explorer/testnet/tx/30cd7690be98e572b4b389b2d76f0d2b9a6ce38fba0e41a76f3e6c983ab58b01) |
+| `cancel_unassigned_task` (devuelve 0.02 al cliente) | `cyc-client` + `cyc-arbiter` | [`ee0b6408…`](https://stellar.expert/explorer/testnet/tx/ee0b6408da6dab1dcaf8b31f23bbbf0094fe439dc95a027ee0c6e98848073177) |
+| `client_release_with_bonus` (0.02 + 0.005 bono) | `cyc-client` | [`5d41bfbb…`](https://stellar.expert/explorer/testnet/tx/5d41bfbbcd408481ce0522934857cc5d65084315bf47d8f617f15687076dffc0) |
+| `cancel_unassigned_project` (devuelve 0.04 al cliente) | `cyc-client` + `cyc-arbiter` | [`0b91cfaa…`](https://stellar.expert/explorer/testnet/tx/0b91cfaa8332a834638c41b26d2e02fa70a7e34761f8a9b0da941a7ec95b8c98) |
+| `reduce_milestone` (hito 0: 0.03 → 0.02, devuelve 0.01) | `cyc-client` + `cyc-arbiter` | [`70a045ea…`](https://stellar.expert/explorer/testnet/tx/70a045ea5a84effd0436bc5271e67b9aa75edfff5973287a0a98184f2a606870) |
+| `split_milestone` (hito 1: 0.04 → 0.02 + 0.02) | `cyc-client` | [`1003972a…`](https://stellar.expert/explorer/testnet/tx/1003972ab0086e17ea4db24f280083693009b7c2948b9cbf310bfc80c895c085) |
+| `extend_milestone_deadline` (hito 0: +10 s) | `cyc-client` | [`d78633a4…`](https://stellar.expert/explorer/testnet/tx/d78633a418c70c2c19a8ceb852065b9f728393144df4dd2760dc355be4cc42cf) |
+| `mutual_split_milestone` (hito 0: 0.01 + 0.01) | `cyc-client` + `cyc-freelancer` | [`00e1b4b4…`](https://stellar.expert/explorer/testnet/tx/00e1b4b4cafb25807f5f87fb392a73c30cb09de7579ee09eaccc8c6702141f1e) |
+| `rotate_arbiter` (`cyc-arbiter` → `cyc-third` y regreso) | `cyc-arbiter` + `cyc-third` | [`f63bb8a6…`](https://stellar.expert/explorer/testnet/tx/f63bb8a67b2b6a34a17ce5326bf5e17d8185a1e589d53a41405427a9edd2a5ca) / [`483255f5…`](https://stellar.expert/explorer/testnet/tx/483255f596c27328b57468d7606bf4472af572d879dffbd1dd5d86413ce8facb) |
+| `refund_all_expired_milestones` (hitos 1 y 2: 0.04) | `cyc-third` (sin permisos) | [`f194133e…`](https://stellar.expert/explorer/testnet/tx/f194133eee9b88a67aa2ef20386876dae95a8bd26380d1bf856d52759ca104be) |
+
+```bash
+bash scripts/hitos_v4_testnet.sh
+```

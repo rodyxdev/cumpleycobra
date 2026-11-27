@@ -63,6 +63,17 @@ pub struct Project {
 | `get_project(task_id)` | Lectura | Cliente, programador, hitos con monto, plazo, `rules_hash` y estado |
 | `add_milestone(task_id, amount, deadline_secs, rules_hash)` (v3) | Cliente del proyecto | Agrega un hito en `Funded` al final del proyecto y transfiere `amount` al contrato. Exige proyecto existente (`NotFound`), total ≤ 10 hitos (`InvalidMilestones`), `amount > 0` (`InvalidAmount`), plazo entre 1 s y 28 días con `checked_add` (`InvalidDeadline`) y vencimiento absoluto ≥ plazo del último hito (`InvalidMilestones`). Evento `add_milestone` |
 | `top_up_milestone(task_id, index, amount)` (v3) | Cliente del proyecto | Aumenta el monto de un hito existente (`MilestoneNotFound`) que siga en `Funded` (`NotFunded`) y antes de su plazo (`DeadlinePassed`). Exige `amount > 0` y `checked_add` sobre el monto (`InvalidAmount`); transfiere `amount` al contrato. Evento `top_up_milestone` |
+| `mutual_split_task(task_id, freelancer, freelancer_amount)` (v4) | Cliente + Programador | Reparto parcial atómico de una tarea simple en `Funded` (`0 < freelancer_amount < amount`): paga al programador y devuelve la diferencia al cliente |
+| `mutual_split_milestone(task_id, index, freelancer, freelancer_amount)` (v4) | Cliente + Programador | Reparto parcial atómico de un hito en `Funded`, respetando al programador fijado del proyecto (`WrongFreelancer`) |
+| `cancel_unassigned_task(task_id)` (v4) | Cliente + Árbitro | Cancela una tarea simple en `Funded` antes del plazo (`DeadlinePassed`) y devuelve el depósito íntegro al cliente |
+| `cancel_unassigned_project(task_id)` (v4) | Cliente + Árbitro | Cancela un proyecto sin programador fijado (`AlreadyAssigned`), marca los hitos en `Funded` como `Refunded` y devuelve el total en una transferencia |
+| `refund_all_expired_milestones(task_id)` (v4) | Nadie (sin firma) | Reembolsa en lote todos los hitos `Funded` cuyo plazo venció en una sola transferencia al cliente |
+| `reduce_milestone(task_id, index, reduce_amount)` (v4) | Cliente + Programador (o Árbitro si no hay programador) | Recorta parcialmente un hito en `Funded` antes de su plazo y devuelve `reduce_amount` al cliente |
+| `client_release_with_bonus(task_id, freelancer, bonus)` (v4) | Cliente | Aprobación manual de una tarea en `Funded` con un bono extra (`bonus > 0`) pagado en la misma transacción atómica |
+| `batch_deposit(client, task_ids, amounts, deadlines_secs, rules_hashes)` (v4) | Cliente | Deposita de 2 a 10 tareas independientes en una sola llamada y una sola transferencia de USDC |
+| `split_milestone(task_id, index, first_amount, first_deadline_secs, first_rules_hash, second_rules_hash)` (v4) | Cliente (y Programador si ya está fijado) | Divide un hito `Funded` en dos hitos consecutivos conservando el total, el tope de 10 hitos y el orden de plazos |
+| `extend_milestone_deadline(task_id, index, extra_secs)` (v4) | Cliente | Prorroga hacia adelante el plazo de un hito `Funded`, dentro de 28 días desde ahora y sin rebasar el hito siguiente |
+| `rotate_arbiter(new_arbiter)` (v4) | Árbitro actual + Nuevo árbitro | Rotación segura del árbitro en una sola transacción con doble firma (`SameArbiter` si coincide con el actual) |
 
 Las cuatro primeras mueven dinero: no son «solo leer» ni «solo guardar un valor».
 
@@ -73,6 +84,8 @@ Las cuatro primeras mueven dinero: no son «solo leer» ni «solo guardar un val
 | 10 | `InvalidMilestones` | Listas de distinto largo, menos de 2 o más de 10 hitos, o plazos que bajan |
 | 11 | `MilestoneNotFound` | `index` fuera de rango |
 | 12 | `WrongFreelancer` | Un pago a una dirección distinta del programador ya fijado |
+| 13 | `AlreadyAssigned` | Intento de cancelar como no asignado un proyecto que ya tiene programador fijado (v4) |
+| 14 | `SameArbiter` | Intento de rotar el árbitro hacia la misma dirección actual (v4) |
 
 Los de hoy se reutilizan: `InvalidAmount`, `AlreadyExists`, `NotFound`, `NotFunded` (el hito ya no está en `Funded`), `DeadlinePassed`, `DeadlineNotReached`, `InvalidDeadline` y `NotInitialized`.
 
