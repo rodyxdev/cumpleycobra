@@ -464,6 +464,7 @@ A, B y C en el menú principal; D en "más casos"; también opción "Pegar códi
 | `EVIDENCE_BUCKET` (Cloud Storage) o `EVIDENCE_DIR` (local, por defecto `.data/evidencia`) | backend (fase 3) |
 | `VERIFIER_API_URL`, `VERIFIER_QUEUE_TOKEN`, `SANDBOX_RUNTIME`, `RUNNER_IMAGE`, `WEB_RUNNER_IMAGE`, `BUILD_NETWORK`, `BUILD_PROXY`/`BUILD_PROXY_CONTAINER`, `VERIFIER_IDLE_SHUTDOWN_SECS` (los escribe `startup.sh` en la VM) | trabajador (fase 3) |
 | `NEXT_PUBLIC_VERIFIER_ENABLED` | frontend (fase 3) |
+| `EXTRAS_ENABLED` (`false` por defecto): funciones experimentales de Ship It en `backend/extras.py` (`GET /programadores/{address}/insignia.svg`, `GET /tasks/{id}/comprobante`); se revisan y se quitan o se integran después del reto (ver `docs/ship-it/registro.md`) | backend (experimental) |
 | `MILESTONES_ENABLED` (`false` por defecto), `MILESTONES_CONTRACT_ID` (ID del contrato v2/v3 de hitos en testnet) | backend (hitos, etapa 2) |
 
 `.env` y `state.json` nunca se suben al repositorio; mantener un `.env.example`.
