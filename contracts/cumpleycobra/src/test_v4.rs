@@ -550,3 +550,145 @@ fn v4_reduce_milestone_validaciones_y_doble_firma() {
     est.c.reduce_milestone(&eid, &1, &(1 * UNIT));
     assert_eq!(est.c.get_project(&eid).milestones.get(1).unwrap().amount, 5 * UNIT);
 }
+
+// ---------------------------------------------------------------------------
+// Lote 4: client_release_with_bonus y batch_deposit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_client_release_with_bonus_camino_feliz_validaciones_y_estricto() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_simple(&ctx, "bonus-t1", 5 * UNIT, DIA);
+
+    // Rechaza bono 0 o negativo.
+    assert_eq!(
+        ctx.c.try_client_release_with_bonus(&id, &ctx.freelancer, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        ctx.c.try_client_release_with_bonus(&id, &ctx.freelancer, &(-10)),
+        Err(Ok(Error::InvalidAmount))
+    );
+
+    // Incluso tras vencer el plazo, el cliente puede aprobar con bono.
+    ctx.env.ledger().set_timestamp(START_TS + DIA + 5);
+    ctx.c
+        .client_release_with_bonus(&id, &ctx.freelancer, &(2 * UNIT));
+
+    let task = ctx.c.get_task(&id);
+    assert_eq!(task.status, TaskStatus::Released);
+    assert_eq!(task.freelancer, Some(ctx.freelancer.clone()));
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 7 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 7 * UNIT);
+
+    // Doble liberación falla con NotFunded.
+    assert_eq!(
+        ctx.c
+            .try_client_release_with_bonus(&id, &ctx.freelancer, &(1 * UNIT)),
+        Err(Ok(Error::NotFunded))
+    );
+
+    // Modo estricto: un tercero no puede aprobar ni cobrar bono, pero el cliente con sub-invocación sí.
+    let est = setup(Modo::Estricto);
+    let eid = deposit_simple(&est, "bonus-strict", 3 * UNIT, DIA);
+    let token_id = est.token.address.clone();
+    est.env.mock_auths(&[MockAuth {
+        address: &est.third,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "client_release_with_bonus",
+            args: (&eid, &est.freelancer, 1 * UNIT).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est
+        .c
+        .try_client_release_with_bonus(&eid, &est.freelancer, &(1 * UNIT))
+        .is_err());
+
+    est.env.mock_auths(&[MockAuth {
+        address: &est.client,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "client_release_with_bonus",
+            args: (&eid, &est.freelancer, 1 * UNIT).into_val(&est.env),
+            sub_invokes: &[MockAuthInvoke {
+                contract: &token_id,
+                fn_name: "transfer",
+                args: (&est.client, &est.freelancer, 1 * UNIT).into_val(&est.env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+    est.c
+        .client_release_with_bonus(&eid, &est.freelancer, &(1 * UNIT));
+    assert_eq!(est.token.balance(&est.freelancer), 4 * UNIT);
+    assert_eq!(est.token.balance(&est.client), MINT - 4 * UNIT);
+}
+
+#[test]
+fn v4_batch_deposit_camino_feliz_y_validaciones() {
+    let ctx = setup(Modo::Libre);
+    let ids: Vec<String> = vec![
+        &ctx.env,
+        tid(&ctx.env, "lote-a"),
+        tid(&ctx.env, "lote-b"),
+        tid(&ctx.env, "lote-c"),
+    ];
+    let amounts: Vec<i128> = vec![&ctx.env, 1 * UNIT, 2 * UNIT, 3 * UNIT];
+    let deadlines: Vec<u64> = vec![&ctx.env, DIA, DIA, 2 * DIA];
+    let hashes: Vec<BytesN<32>> = vec![
+        &ctx.env,
+        hash(&ctx.env, 30),
+        hash(&ctx.env, 31),
+        hash(&ctx.env, 32),
+    ];
+
+    let total = ctx
+        .c
+        .batch_deposit(&ctx.client, &ids, &amounts, &deadlines, &hashes);
+    assert_eq!(total, 6 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 6 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 6 * UNIT);
+    assert_eq!(ctx.c.get_task(&tid(&ctx.env, "lote-b")).amount, 2 * UNIT);
+
+    // Cada tarea del lote opera independientemente: una se paga y las otras se reembolsan tras el plazo.
+    ctx.c
+        .client_release(&tid(&ctx.env, "lote-a"), &ctx.freelancer);
+    ctx.env.ledger().set_timestamp(START_TS + 2 * DIA);
+    ctx.c.timeout_refund(&tid(&ctx.env, "lote-b"));
+    ctx.c.timeout_refund(&tid(&ctx.env, "lote-c"));
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 1 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 1 * UNIT);
+
+    // Rechaza menos de 2 tareas, listas desiguales, IDs repetidos dentro del lote y montos/plazos inválidos.
+    let one_id: Vec<String> = vec![&ctx.env, tid(&ctx.env, "sola")];
+    let one_amt: Vec<i128> = vec![&ctx.env, UNIT];
+    let one_dl: Vec<u64> = vec![&ctx.env, DIA];
+    let one_h: Vec<BytesN<32>> = vec![&ctx.env, hash(&ctx.env, 33)];
+    assert_eq!(
+        ctx.c
+            .try_batch_deposit(&ctx.client, &one_id, &one_amt, &one_dl, &one_h),
+        Err(Ok(Error::InvalidMilestones))
+    );
+
+    let dup_ids: Vec<String> = vec![&ctx.env, tid(&ctx.env, "dup"), tid(&ctx.env, "dup")];
+    let two_amt: Vec<i128> = vec![&ctx.env, UNIT, UNIT];
+    let two_dl: Vec<u64> = vec![&ctx.env, DIA, DIA];
+    let two_h: Vec<BytesN<32>> = vec![&ctx.env, hash(&ctx.env, 34), hash(&ctx.env, 35)];
+    assert_eq!(
+        ctx.c
+            .try_batch_deposit(&ctx.client, &dup_ids, &two_amt, &two_dl, &two_h),
+        Err(Ok(Error::AlreadyExists))
+    );
+
+    // Reutilizar un ID que ya existía falla con AlreadyExists.
+    let exist_ids: Vec<String> = vec![&ctx.env, tid(&ctx.env, "lote-a"), tid(&ctx.env, "nueva-x")];
+    assert_eq!(
+        ctx.c
+            .try_batch_deposit(&ctx.client, &exist_ids, &two_amt, &two_dl, &two_h),
+        Err(Ok(Error::AlreadyExists))
+    );
+}

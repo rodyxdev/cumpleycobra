@@ -365,6 +365,28 @@ pub struct ReduceMilestoneEvent {
     pub new_amount: i128,
 }
 
+// v4: el cliente aprobó manualmente una tarea y sumó un bono extra en la misma transacción.
+#[contractevent(topics = ["client_release_bonus"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientReleaseBonusEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub bonus: i128,
+}
+
+// v4: el cliente depositó un lote de tareas independientes en una sola transferencia.
+#[contractevent(topics = ["batch_deposit"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchDepositEvent {
+    #[topic]
+    pub client: Address,
+    pub count: u32,
+    pub total: i128,
+}
+
 // ---------------------------------------------------------------------------
 // Contrato
 // ---------------------------------------------------------------------------
@@ -1212,6 +1234,153 @@ impl CumpleYCobraContract {
         }
         .publish(&env);
         Ok(())
+    }
+
+    // Aprobación manual con bono extra: el cliente libera el depósito de una
+    // tarea en Funded y transfiere un bono adicional (`bonus > 0`) desde su
+    // wallet al programador en una sola transacción atómica. Permitida también
+    // tras el plazo, igual que `client_release`.
+    pub fn client_release_with_bonus(
+        env: Env,
+        task_id: String,
+        freelancer: Address,
+        bonus: i128,
+    ) -> Result<(), Error> {
+        // Primero se carga la tarea y se exige que siga en Funded.
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+
+        // Solo el cliente de la tarea puede aprobar y pagar el bono.
+        task.client.require_auth();
+
+        // Bono estrictamente positivo y sin desborde al sumarse al monto.
+        if bonus <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let _total_paid = task.amount.checked_add(bonus).ok_or(Error::InvalidAmount)?;
+        let token_addr = Self::token(&env)?;
+
+        // Efectos antes de las transferencias (checks-effects-interactions) + TTL.
+        task.status = TaskStatus::Released;
+        task.freelancer = Some(freelancer.clone());
+        Self::save_task(&env, &key, &task);
+
+        // Interacciones atómicas: el contrato libera `task.amount` y el cliente envía `bonus`.
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(&env.current_contract_address(), &freelancer, &task.amount);
+        token_client.transfer(&task.client, &freelancer, &bonus);
+
+        ClientReleaseBonusEvent {
+            task_id,
+            client: task.client,
+            freelancer,
+            amount: task.amount,
+            bonus,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Depósito por lote de 2 a 10 tareas simples independientes en una sola
+    // transacción y una sola transferencia de USDC del cliente al contrato.
+    // Valida unicidad de cada `task_id` contra tareas/proyectos existentes y
+    // también dentro del mismo lote. Devuelve el monto total depositado.
+    pub fn batch_deposit(
+        env: Env,
+        client: Address,
+        task_ids: Vec<String>,
+        amounts: Vec<i128>,
+        deadlines_secs: Vec<u64>,
+        rules_hashes: Vec<BytesN<32>>,
+    ) -> Result<i128, Error> {
+        // Solo el dueño de los fondos puede depositarlos.
+        client.require_auth();
+
+        // Entre 2 y 10 tareas y las cuatro listas con el mismo largo.
+        let count = task_ids.len();
+        if count < MIN_MILESTONES
+            || count > MAX_MILESTONES
+            || amounts.len() != count
+            || deadlines_secs.len() != count
+            || rules_hashes.len() != count
+        {
+            return Err(Error::InvalidMilestones);
+        }
+
+        let token_addr = Self::token(&env)?;
+        let now = env.ledger().timestamp();
+        let mut total: i128 = 0;
+
+        // Primera pasada: valida todas las entradas y unicidad antes de escribir.
+        for i in 0..count {
+            let task_id = task_ids.get(i).ok_or(Error::InvalidMilestones)?;
+            let amount = amounts.get(i).ok_or(Error::InvalidMilestones)?;
+            let secs = deadlines_secs.get(i).ok_or(Error::InvalidMilestones)?;
+            if amount <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            if secs == 0 {
+                return Err(Error::InvalidDeadline);
+            }
+            now.checked_add(secs).ok_or(Error::InvalidDeadline)?;
+            total = total.checked_add(amount).ok_or(Error::InvalidAmount)?;
+            if env.storage().persistent().has(&DataKey::Task(task_id.clone()))
+                || env
+                    .storage()
+                    .persistent()
+                    .has(&DataKey::Project(task_id.clone()))
+            {
+                return Err(Error::AlreadyExists);
+            }
+            for j in 0..i {
+                if task_ids.get(j).ok_or(Error::InvalidMilestones)? == task_id {
+                    return Err(Error::AlreadyExists);
+                }
+            }
+        }
+
+        // Segunda pasada (efectos): guarda cada tarea en Funded extendiendo su TTL.
+        for i in 0..count {
+            let task_id = task_ids.get(i).ok_or(Error::InvalidMilestones)?;
+            let amount = amounts.get(i).ok_or(Error::InvalidMilestones)?;
+            let secs = deadlines_secs.get(i).ok_or(Error::InvalidMilestones)?;
+            let rules_hash = rules_hashes.get(i).ok_or(Error::InvalidMilestones)?;
+            let deadline = now.checked_add(secs).ok_or(Error::InvalidDeadline)?;
+            let key = DataKey::Task(task_id.clone());
+            let task = Task {
+                task_id: task_id.clone(),
+                client: client.clone(),
+                freelancer: None,
+                amount,
+                deadline,
+                rules_hash: rules_hash.clone(),
+                status: TaskStatus::Funded,
+            };
+            Self::save_task(&env, &key, &task);
+            DepositEvent {
+                task_id,
+                client: client.clone(),
+                amount,
+                deadline,
+                rules_hash,
+            }
+            .publish(&env);
+        }
+
+        // Interacción: una sola transferencia por el total del lote al contrato.
+        token::Client::new(&env, &token_addr).transfer(
+            &client,
+            &env.current_contract_address(),
+            &total,
+        );
+
+        BatchDepositEvent {
+            client,
+            count,
+            total,
+        }
+        .publish(&env);
+        Ok(total)
     }
 
     // -----------------------------------------------------------------------
