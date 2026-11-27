@@ -161,6 +161,8 @@ pub enum Error {
     MilestoneNotFound = 11,
     // Un hito intenta pagarle a una dirección distinta del programador ya fijado.
     WrongFreelancer = 12,
+    // v4: el proyecto ya tiene un programador fijado (no se puede cancelar como no asignado).
+    AlreadyAssigned = 13,
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +320,27 @@ pub struct MutualSplitMilestoneEvent {
     pub freelancer: Address,
     pub freelancer_amount: i128,
     pub refund_amount: i128,
+}
+
+// v4: cliente y árbitro cancelaron una tarea simple sin asignar antes del plazo.
+#[contractevent(topics = ["cancel_unassigned_task"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelTaskEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub amount: i128,
+}
+
+// v4: cliente y árbitro cancelaron un proyecto sin programador fijado y devolvieron lo pendiente.
+#[contractevent(topics = ["cancel_unassigned_project"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelProjectEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub refunded_milestones: u32,
+    pub total_refund: i128,
 }
 
 // ---------------------------------------------------------------------------
@@ -976,6 +999,92 @@ impl CumpleYCobraContract {
             freelancer,
             freelancer_amount,
             refund_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Cancelación antes del plazo de una tarea simple que ningún programador ha
+    // aceptado: exige doble firma (cliente + árbitro) para que el cliente no
+    // pueda retirar los fondos a espaldas de un programador que ya trabaja.
+    pub fn cancel_unassigned_task(env: Env, task_id: String) -> Result<(), Error> {
+        // La tarea debe existir y seguir en Funded.
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        let arbiter = Self::arbiter(&env)?;
+
+        // Doble firma: cliente solicita cancelar y el árbitro confirma que nadie aceptó.
+        task.client.require_auth();
+        arbiter.require_auth();
+
+        // Solo antes del plazo; después del plazo ya existe `timeout_refund`.
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+
+        // Efectos antes de transferir (checks-effects-interactions) + TTL.
+        task.status = TaskStatus::Refunded;
+        Self::save_task(&env, &key, &task);
+
+        // Interacción: el depósito vuelve íntegro al cliente.
+        Self::pay(&env, &task.client, task.amount)?;
+
+        CancelTaskEvent {
+            task_id,
+            client: task.client,
+            amount: task.amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Cancelación antes del plazo de un proyecto por hitos que aún no tiene
+    // programador fijado: exige doble firma (cliente + árbitro), marca todos
+    // los hitos en Funded como Refunded y devuelve el total en una transferencia.
+    pub fn cancel_unassigned_project(env: Env, task_id: String) -> Result<(), Error> {
+        // Se carga el proyecto y el árbitro configurado.
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let arbiter = Self::arbiter(&env)?;
+
+        // Doble firma: cliente y árbitro aprueban cancelar el proyecto completo.
+        project.client.require_auth();
+        arbiter.require_auth();
+
+        // Si ya hubo un pago (programador fijado), no se puede cancelar como no asignado.
+        if project.freelancer.is_some() {
+            return Err(Error::AlreadyAssigned);
+        }
+
+        // Recorre todos los hitos y acumula lo que sigue en Funded con `checked_add`.
+        let mut refunded_milestones: u32 = 0;
+        let mut total_refund: i128 = 0;
+        for i in 0..project.milestones.len() {
+            let mut m = project.milestones.get(i).ok_or(Error::MilestoneNotFound)?;
+            if m.status == MilestoneStatus::Funded {
+                total_refund = total_refund
+                    .checked_add(m.amount)
+                    .ok_or(Error::InvalidAmount)?;
+                m.status = MilestoneStatus::Refunded;
+                project.milestones.set(i, m);
+                refunded_milestones += 1;
+            }
+        }
+        if refunded_milestones == 0 {
+            return Err(Error::NotFunded);
+        }
+
+        // Efectos antes de transferir (checks-effects-interactions) + TTL.
+        Self::save_project(&env, &key, &project);
+
+        // Interacción: una sola transferencia al cliente por todos los hitos cancelados.
+        Self::pay(&env, &project.client, total_refund)?;
+
+        CancelProjectEvent {
+            task_id,
+            client: project.client,
+            refunded_milestones,
+            total_refund,
         }
         .publish(&env);
         Ok(())

@@ -299,3 +299,100 @@ fn v4_mutual_split_milestone_camino_feliz_y_validaciones() {
         Err(Ok(Error::NotFunded))
     );
 }
+
+// ---------------------------------------------------------------------------
+// Lote 2: cancel_unassigned_task y cancel_unassigned_project
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v4_cancel_unassigned_task_camino_feliz_plazo_y_doble_firma() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_simple(&ctx, "cancel-t1", 7 * UNIT, DIA);
+
+    // Antes del plazo devuelve el depósito íntegro al cliente.
+    ctx.c.cancel_unassigned_task(&id);
+    assert_eq!(ctx.c.get_task(&id).status, TaskStatus::Refunded);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT);
+
+    // Segundo intento falla con NotFunded.
+    assert_eq!(
+        ctx.c.try_cancel_unassigned_task(&id),
+        Err(Ok(Error::NotFunded))
+    );
+
+    // En o después del plazo falla con DeadlinePassed (para eso existe timeout_refund).
+    let id2 = deposit_simple(&ctx, "cancel-t2", 3 * UNIT, 100);
+    ctx.env.ledger().set_timestamp(START_TS + 100);
+    assert_eq!(
+        ctx.c.try_cancel_unassigned_task(&id2),
+        Err(Ok(Error::DeadlinePassed))
+    );
+
+    // En modo estricto, el cliente solo (sin el árbitro) NO puede cancelar.
+    let est = setup(Modo::Estricto);
+    let eid = deposit_simple(&est, "cancel-t-strict", 4 * UNIT, DIA);
+    est.env.mock_auths(&[MockAuth {
+        address: &est.client,
+        invoke: &MockAuthInvoke {
+            contract: &est.contract_id,
+            fn_name: "cancel_unassigned_task",
+            args: (&eid,).into_val(&est.env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(est.c.try_cancel_unassigned_task(&eid).is_err());
+
+    // Con cliente + árbitro sí cancela y devuelve el monto.
+    est.env.mock_auths(&[
+        MockAuth {
+            address: &est.client,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "cancel_unassigned_task",
+                args: (&eid,).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+        MockAuth {
+            address: &est.arbiter,
+            invoke: &MockAuthInvoke {
+                contract: &est.contract_id,
+                fn_name: "cancel_unassigned_task",
+                args: (&eid,).into_val(&est.env),
+                sub_invokes: &[],
+            },
+        },
+    ]);
+    est.c.cancel_unassigned_task(&eid);
+    assert_eq!(est.token.balance(&est.client), MINT);
+}
+
+#[test]
+fn v4_cancel_unassigned_project_camino_feliz_y_bloqueo_si_ya_tiene_programador() {
+    let ctx = setup(Modo::Libre);
+    let id = deposit_two_milestones(&ctx, "cancel-p1");
+
+    // Cancela todos los hitos Funded de una vez sin esperar al plazo.
+    ctx.c.cancel_unassigned_project(&id);
+    let p = ctx.c.get_project(&id);
+    assert_eq!(p.milestones.get(0).unwrap().status, MilestoneStatus::Refunded);
+    assert_eq!(p.milestones.get(1).unwrap().status, MilestoneStatus::Refunded);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT);
+
+    // Ya no quedan hitos Funded -> NotFunded.
+    assert_eq!(
+        ctx.c.try_cancel_unassigned_project(&id),
+        Err(Ok(Error::NotFunded))
+    );
+
+    // Si ya se pagó un hito (programador fijado), cancelar falla con AlreadyAssigned.
+    let id2 = deposit_two_milestones(&ctx, "cancel-p2");
+    ctx.c
+        .client_release_milestone(&id2, &0, &ctx.freelancer);
+    assert_eq!(
+        ctx.c.try_cancel_unassigned_project(&id2),
+        Err(Ok(Error::AlreadyAssigned))
+    );
+}
