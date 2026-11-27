@@ -20,7 +20,7 @@ use soroban_sdk::{
 };
 
 // Firma explícita de una sola dirección para una llamada al contrato (modo estricto).
-fn firma(ctx: &Ctx, quien: &Address, fn_name: &'static str, args: Vec<Val>) {
+pub(crate) fn firma(ctx: &Ctx, quien: &Address, fn_name: &'static str, args: Vec<Val>) {
     ctx.env.mock_auths(&[MockAuth {
         address: quien,
         invoke: &MockAuthInvoke {

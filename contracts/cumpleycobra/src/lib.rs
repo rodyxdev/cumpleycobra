@@ -32,6 +32,13 @@
 // asignación, todas las funciones anteriores se comportan exactamente igual.
 // Se agregan además `extend_deadline`, `top_up_task`, `freelancer_refund` y la
 // lectura por lote `get_tasks`.
+//
+// v6 (27 de noviembre de 2026): acuerdos entre las dos partes sobre una tarea
+// ya depositada. Todo cambio que afecta al cliente y al programador exige la
+// firma de ambos (y la de quien entra, cuando cambia una de las partes):
+// `amend_rules`, `mutual_cancel`, `reassign_freelancer` y `transfer_client`.
+// Más `release_partial` (el árbitro paga una parte cuando se cumplen algunos
+// criterios). Sin usar estas funciones, todo se comporta igual que en v5.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -181,6 +188,8 @@ pub enum Error {
     SameArbiter = 14,
     // v5: la lectura por lote pide 0 tareas o más de 20.
     TooManyItems = 15,
+    // v6: el valor nuevo es igual al actual (misma dirección o mismo rules_hash).
+    NoChange = 16,
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +496,60 @@ pub struct FreelancerRefundEvent {
     pub freelancer: Address,
     pub client: Address,
     pub amount: i128,
+}
+
+// v6: cliente y programador cambiaron los criterios acordados.
+#[contractevent(topics = ["amend_rules"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AmendRulesEvent {
+    #[topic]
+    pub task_id: String,
+    pub old_rules_hash: BytesN<32>,
+    pub new_rules_hash: BytesN<32>,
+}
+
+// v6: el árbitro pagó una parte de la tarea; el resto sigue en el contrato.
+#[contractevent(topics = ["release_partial"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleasePartialEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub remaining: i128,
+    pub code_hash: BytesN<32>,
+    pub verdict_hash: BytesN<32>,
+}
+
+// v6: cliente y programador cancelaron de común acuerdo.
+#[contractevent(topics = ["mutual_cancel"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MutualCancelEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+}
+
+// v6: la tarea pasó de un programador a otro con el acuerdo de los tres.
+#[contractevent(topics = ["reassign_freelancer"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReassignFreelancerEvent {
+    #[topic]
+    pub task_id: String,
+    pub old_freelancer: Address,
+    pub new_freelancer: Address,
+}
+
+// v6: la tarea (y su derecho a reembolso) pasó a otro cliente.
+#[contractevent(topics = ["transfer_client"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferClientEvent {
+    #[topic]
+    pub task_id: String,
+    pub old_client: Address,
+    pub new_client: Address,
 }
 
 #[contract]
@@ -1875,8 +1938,177 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v6: acuerdos entre las dos partes
+    // -----------------------------------------------------------------------
+
+    // Cliente y programador renegocian los criterios: el `rules_hash` on-chain
+    // cambia solo si los dos firman. Así el acuerdo verificable nunca cambia
+    // por decisión de una sola parte. Exige programador registrado.
+    pub fn amend_rules(env: Env, task_id: String, new_rules_hash: BytesN<32>) -> Result<(), Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        let freelancer = Self::assigned(&task)?;
+
+        // Doble firma: los dos aceptan los criterios nuevos.
+        task.client.require_auth();
+        freelancer.require_auth();
+
+        if task.rules_hash == new_rules_hash {
+            return Err(Error::NoChange);
+        }
+        let old_rules_hash = task.rules_hash.clone();
+        task.rules_hash = new_rules_hash.clone();
+        Self::save_task(&env, &key, &task);
+
+        AmendRulesEvent {
+            task_id,
+            old_rules_hash,
+            new_rules_hash,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Pago parcial del árbitro: el motor aprobó una parte de los criterios y
+    // se paga esa parte al programador registrado; el resto sigue en Funded y
+    // se puede pagar después (o volver al cliente tras el plazo). Mismas reglas
+    // que `release`: solo antes del plazo y solo al programador registrado.
+    // Devuelve lo que queda en la tarea.
+    pub fn release_partial(
+        env: Env,
+        task_id: String,
+        amount: i128,
+        code_hash: BytesN<32>,
+        verdict_hash: BytesN<32>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        let freelancer = Self::assigned(&task)?;
+
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        // Estrictamente parcial: para pagar todo existe `release`.
+        if amount <= 0 || amount >= task.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let remaining = task.amount.checked_sub(amount).ok_or(Error::InvalidAmount)?;
+
+        // Efectos antes de transferir: baja el monto pendiente, sigue en Funded.
+        task.amount = remaining;
+        Self::save_task(&env, &key, &task);
+
+        Self::pay(&env, &freelancer, amount)?;
+
+        ReleasePartialEvent {
+            task_id,
+            freelancer,
+            amount,
+            remaining,
+            code_hash,
+            verdict_hash,
+        }
+        .publish(&env);
+        Ok(remaining)
+    }
+
+    // Cancelación de común acuerdo: cliente y programador registrado firman y
+    // el depósito vuelve íntegro al cliente, antes o después del plazo.
+    pub fn mutual_cancel(env: Env, task_id: String) -> Result<(), Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        let freelancer = Self::assigned(&task)?;
+
+        task.client.require_auth();
+        freelancer.require_auth();
+
+        task.status = TaskStatus::Refunded;
+        Self::save_task(&env, &key, &task);
+
+        Self::pay(&env, &task.client, task.amount)?;
+
+        MutualCancelEvent {
+            task_id,
+            client: task.client,
+            freelancer,
+            amount: task.amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El programador registrado le pasa la tarea a otro. Firman los tres: el
+    // cliente (acepta al nuevo), el programador actual (cede) y el nuevo
+    // (demuestra que controla la dirección y acepta los criterios).
+    pub fn reassign_freelancer(
+        env: Env,
+        task_id: String,
+        new_freelancer: Address,
+    ) -> Result<(), Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        let old_freelancer = Self::assigned(&task)?;
+
+        if new_freelancer == old_freelancer {
+            return Err(Error::NoChange);
+        }
+        task.client.require_auth();
+        old_freelancer.require_auth();
+        new_freelancer.require_auth();
+
+        task.freelancer = Some(new_freelancer.clone());
+        Self::save_task(&env, &key, &task);
+
+        ReassignFreelancerEvent {
+            task_id,
+            old_freelancer,
+            new_freelancer,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // La tarea pasa a otro cliente (por ejemplo, la cuenta de una empresa).
+    // Firman el cliente actual (cede), el nuevo (acepta) y, si ya hay
+    // programador registrado, también él: cambia a quién le entrega y quién
+    // puede aprobar manualmente. El reembolso, desde ahí, va al cliente nuevo.
+    pub fn transfer_client(env: Env, task_id: String, new_client: Address) -> Result<(), Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+
+        if new_client == task.client {
+            return Err(Error::NoChange);
+        }
+        task.client.require_auth();
+        new_client.require_auth();
+        if let Some(freelancer) = &task.freelancer {
+            freelancer.require_auth();
+        }
+
+        let old_client = task.client.clone();
+        task.client = new_client.clone();
+        Self::save_task(&env, &key, &task);
+
+        TransferClientEvent {
+            task_id,
+            old_client,
+            new_client,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v6: el programador registrado de una tarea (`WrongFreelancer` si no hay).
+    fn assigned(task: &Task) -> Result<Address, Error> {
+        task.freelancer.clone().ok_or(Error::WrongFreelancer)
+    }
 
     // v5: si la tarea ya tiene programador registrado, `freelancer` debe ser
     // esa misma dirección. Sin registro (tareas de antes de v5), no restringe.
@@ -1994,3 +2226,6 @@ mod test_v4;
 
 // Pruebas de v5 (programador registrado antes de pagar y funciones nuevas).
 mod test_v5;
+
+// Pruebas de v6 (acuerdos de dos partes, propina, estadísticas, disputas y pausa).
+mod test_v6;
