@@ -414,3 +414,47 @@ Explorador: https://stellar.expert/explorer/testnet/contract/CCTEXF2IQTD6KXNC64T
 bash scripts/v7_testnet.sh
 ```
 
+## v8: pago por tiempo y garantía del programador (27 de noviembre de 2026)
+
+Dos mecanismos de dinero que el contrato no tenía. **Pago por tiempo:** el cliente deposita para un programador y una duración, y el dinero se libera de forma lineal segundo a segundo (como un sueldo o un retainer). **Garantía del programador:** el programador registrado deposita una garantía que recupera si la tarea se paga y que pasa al cliente si la tarea termina reembolsada. **Los contratos v1 a v7 desplegados no se modifican:** v8 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
+
+| | |
+| --- | --- |
+| ID del contrato v8 (testnet) | `CB3VPJSLGWIAO3LQNZETWFF6UHO5OYEQ33HTLV3FFJMNZVJHW67O4AKZ` |
+| WASM hash (`stellar contract build --optimize`) | `e059c04e85c93662e798eacd0e365179949a4363aa90d1fac20af352fd34071e` (59 123 bytes; subida tx [`a6f8b894…`](https://stellar.expert/explorer/testnet/tx/a6f8b894dc329f3f2bdf46728b1612528b349485e73ee259774eff71f364f841)) |
+| Despliegue | tx [`72411331…`](https://stellar.expert/explorer/testnet/tx/72411331252ce21e5f8614653621832a9c30f543052276b8ca1ef7ec7dd848fd) (`--alias cumpleycobra-v8`) |
+| `initialize` | tx [`fcf7406c…`](https://stellar.expert/explorer/testnet/tx/fcf7406c6b5d2f5f3cbe9dc30a9f737c676fb0ad7183907eff797d60d57a2372), árbitro `GAGGEH…VOKZGY`, token `CBIELTK6…CAMA` |
+| Tests | `cargo test -p cumpleycobra`: 106 en verde (9 de v8 en `src/test_v8.rs`), 0 advertencias |
+
+Explorador: https://stellar.expert/explorer/testnet/contract/CB3VPJSLGWIAO3LQNZETWFF6UHO5OYEQ33HTLV3FFJMNZVJHW67O4AKZ
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `deposit_stream(client, stream_id, freelancer, amount, duration_secs)` | Cliente | `amount > 0`; duración de 1 s a 28 días; `stream_id` nuevo; respeta la pausa |
+| `withdraw_stream(stream_id) -> i128` | Programador | Retira lo liberado que no había retirado (`NothingToWithdraw` si no hay nada nuevo); también tras una cancelación |
+| `cancel_stream(stream_id)` | Cliente | Solo activo y sin terminar; el programador recibe lo ganado hasta ese segundo y el cliente lo no liberado, en la misma transacción |
+| `get_stream(stream_id) -> Stream` | Lectura | Cliente, programador, monto, retirado, inicio, fin y estado |
+| `post_bond(task_id, amount)` | Programador registrado | Tarea `Funded` antes del plazo; una garantía por tarea; respeta la pausa |
+| `reclaim_bond(task_id) -> i128` | Programador de la garantía | Tarea `Released`; o `Refunded` y 14 días después del plazo sin decisión del árbitro |
+| `slash_bond(task_id) -> i128` | Árbitro | Solo con la tarea `Refunded`; la garantía va al cliente. Nunca sobre una tarea pagada |
+| `get_bond(task_id) -> Option<Bond>` | Lectura | La garantía de la tarea |
+
+**Error nuevo:** 22 `NothingToWithdraw`. Los códigos del 1 al 21 no cambian.
+
+**Corrida real en testnet** con [`scripts/v8_testnet.sh`](../../scripts/v8_testnet.sh) (corrida `1795759595`; al final `get_stats` dio `deposited` = `paid_out` = 0.05 USDC y `held` 0, igual al saldo real del contrato):
+
+| Función | Quién firmó | Qué pasó | tx |
+| --- | --- | --- | --- |
+| `deposit_stream` | `cyc-client` | 0.02 USDC para `cyc-freelancer`, liberados en 120 s | [`90cf625c…`](https://stellar.expert/explorer/testnet/tx/90cf625cc7c3e69afb769d4f538f0e75338f83c8073dc2705ee3af37bb2c7d9e) |
+| `withdraw_stream` | `cyc-freelancer` | A los ~40 s retiró 0.0066666 (un tercio) | [`da0ff400…`](https://stellar.expert/explorer/testnet/tx/da0ff4002ab0b5caafb84938e68cb495e4c6ac75d60cec6205726776b2ca82e6) |
+| `cancel_stream` | `cyc-client` | A los ~80 s: lo ganado y no retirado al programador, lo no liberado al cliente | [`0cfd6a84…`](https://stellar.expert/explorer/testnet/tx/0cfd6a84815fb99f910a6b4a470928c7d7537ff94cac1de090d118cc09ad1ff7) |
+| `post_bond` | `cyc-freelancer` | Garantía de 0.005 sobre una tarea de 0.01 | [`d1d77799…`](https://stellar.expert/explorer/testnet/tx/d1d77799fac428423b04719b3ea3065b9f2ca9931c10609f675b4941820f5454) |
+| `reclaim_bond` | `cyc-freelancer` | La tarea se pagó y la garantía volvió al programador | [`346e516d…`](https://stellar.expert/explorer/testnet/tx/346e516d7a468d0979e93747dd4fd81062bd2daf9d06f2017676fae84becfce5) |
+| `slash_bond` | `cyc-arbiter` | Otra tarea venció sin entrega, se reembolsó y su garantía pasó al cliente | [`80a1e8a4…`](https://stellar.expert/explorer/testnet/tx/80a1e8a45c3c394e14d6cf8cdf1935220ab729749fd8ebf6b25bc6d647f7c4dc) |
+
+```bash
+bash scripts/v8_testnet.sh
+```
+
