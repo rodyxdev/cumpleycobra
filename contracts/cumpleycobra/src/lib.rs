@@ -40,8 +40,9 @@
 // Más `release_partial` (el árbitro paga una parte cuando se cumplen algunos
 // criterios), `tip` (propina tras el pago), `bump_ttl` (mantener viva una
 // tarea), `get_stats` (totales del contrato) y `deposit_assigned` (depositar
-// con el programador ya registrado). Sin usar estas funciones, todo se
-// comporta igual que en v5.
+// con el programador ya registrado). Disputas (`open_dispute`,
+// `resolve_dispute`, `get_dispute`) y pausa de emergencia de los depósitos
+// (`pause`, `unpause`). Sin usar estas funciones, todo se comporta igual que en v5.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -73,6 +74,11 @@ const MAX_MILESTONE_DEADLINE_SECS: u64 = 28 * 24 * 60 * 60;
 // v5: una lectura por lote devuelve como máximo 20 tareas, para que la
 // simulación no pase el límite de lecturas de una transacción de Soroban.
 const MAX_BATCH_READ: u32 = 20;
+
+// v6: una disputa abierta congela el reembolso por plazo, pero solo hasta 14
+// días después del plazo. Si el árbitro no la resuelve en ese tiempo, el
+// cliente vuelve a poder recuperar su dinero: nadie lo puede retener para siempre.
+const DISPUTE_GRACE_SECS: u64 = 14 * 24 * 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Tipos guardados en el contrato
@@ -172,6 +178,10 @@ pub enum DataKey {
     // v6: total que entró al contrato y total que salió (instancia).
     TotalIn,
     TotalOut,
+    // v6: quién abrió la disputa de una tarea (persistente).
+    Dispute(String),
+    // v6: pausa de emergencia de los depósitos (instancia).
+    Paused,
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +216,14 @@ pub enum Error {
     TooManyItems = 15,
     // v6: el valor nuevo es igual al actual (misma dirección o mismo rules_hash).
     NoChange = 16,
+    // v6: quien abre la disputa no es el cliente ni el programador registrado.
+    NotParty = 17,
+    // v6: ya hay una disputa abierta (o congela el reembolso por plazo).
+    DisputeOpen = 18,
+    // v6: no hay disputa abierta que resolver.
+    NoDispute = 19,
+    // v6: los depósitos están en pausa de emergencia.
+    Paused = 20,
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +597,34 @@ pub struct TipEvent {
     pub amount: i128,
 }
 
+// v6: el cliente o el programador abrió una disputa.
+#[contractevent(topics = ["open_dispute"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenDisputeEvent {
+    #[topic]
+    pub task_id: String,
+    pub opened_by: Address,
+}
+
+// v6: el árbitro resolvió la disputa y repartió el depósito.
+#[contractevent(topics = ["resolve_dispute"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveDisputeEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+    pub freelancer_amount: i128,
+    pub client: Address,
+    pub refund_amount: i128,
+}
+
+// v6: el árbitro pausó o reanudó los depósitos.
+#[contractevent(topics = ["pause"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PauseEvent {
+    pub paused: bool,
+}
+
 #[contract]
 pub struct CumpleYCobraContract;
 
@@ -611,6 +657,8 @@ impl CumpleYCobraContract {
         deadline_secs: u64,
         rules_hash: BytesN<32>,
     ) -> Result<(), Error> {
+        // v6: los depósitos nuevos se detienen en pausa de emergencia.
+        Self::not_paused(&env)?;
         // Solo el dueño de los fondos puede depositarlos.
         client.require_auth();
 
@@ -754,6 +802,18 @@ impl CumpleYCobraContract {
             return Err(Error::DeadlineNotReached);
         }
 
+        // v6: con una disputa abierta, el reembolso espera a que el árbitro la
+        // resuelva, pero nunca más de 14 días después del plazo.
+        if env.storage().persistent().has(&DataKey::Dispute(task_id.clone())) {
+            let limit = task
+                .deadline
+                .checked_add(DISPUTE_GRACE_SECS)
+                .ok_or(Error::InvalidDeadline)?;
+            if env.ledger().timestamp() < limit {
+                return Err(Error::DisputeOpen);
+            }
+        }
+
         // Efectos antes de la transferencia.
         task.status = TaskStatus::Refunded;
         Self::save_task(&env, &key, &task);
@@ -804,6 +864,8 @@ impl CumpleYCobraContract {
         deadlines_secs: Vec<u64>,
         rules_hashes: Vec<BytesN<32>>,
     ) -> Result<(), Error> {
+        // v6: los depósitos nuevos se detienen en pausa de emergencia.
+        Self::not_paused(&env)?;
         // Solo el dueño de los fondos puede depositarlos.
         client.require_auth();
 
@@ -1017,6 +1079,8 @@ impl CumpleYCobraContract {
         deadline_secs: u64,
         rules_hash: BytesN<32>,
     ) -> Result<(), Error> {
+        // v6: los depósitos nuevos se detienen en pausa de emergencia.
+        Self::not_paused(&env)?;
         // Primero se carga el proyecto para comprobar que existe y saber quién
         // es su cliente.
         let key = DataKey::Project(task_id.clone());
@@ -1081,6 +1145,8 @@ impl CumpleYCobraContract {
         index: u32,
         amount: i128,
     ) -> Result<(), Error> {
+        // v6: los depósitos nuevos se detienen en pausa de emergencia.
+        Self::not_paused(&env)?;
         // Primero se carga el proyecto para comprobar que existe y saber quién
         // es su cliente.
         let key = DataKey::Project(task_id.clone());
@@ -1485,6 +1551,8 @@ impl CumpleYCobraContract {
         deadlines_secs: Vec<u64>,
         rules_hashes: Vec<BytesN<32>>,
     ) -> Result<i128, Error> {
+        // v6: los depósitos nuevos se detienen en pausa de emergencia.
+        Self::not_paused(&env)?;
         // Solo el dueño de los fondos puede depositarlos.
         client.require_auth();
 
@@ -1869,6 +1937,8 @@ impl CumpleYCobraContract {
     // después, el dinero ya puede volver al cliente con `timeout_refund`.
     // Devuelve el nuevo monto.
     pub fn top_up_task(env: Env, task_id: String, amount: i128) -> Result<i128, Error> {
+        // v6: los depósitos nuevos se detienen en pausa de emergencia.
+        Self::not_paused(&env)?;
         let key = DataKey::Task(task_id.clone());
         let mut task = Self::funded_task(&env, &key)?;
 
@@ -2196,8 +2266,134 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v6: disputas y pausa de emergencia
+    // -----------------------------------------------------------------------
+
+    // El cliente o el programador registrado abre una disputa antes del plazo.
+    // No mueve dinero: solo congela el reembolso por plazo (hasta 14 días
+    // después) para que el árbitro decida. Pagar, repartir o cancelar de común
+    // acuerdo siguen permitidos y cierran la disputa en la práctica.
+    pub fn open_dispute(env: Env, task_id: String, by: Address) -> Result<(), Error> {
+        let key = DataKey::Task(task_id.clone());
+        let task = Self::funded_task(&env, &key)?;
+        let freelancer = Self::assigned(&task)?;
+        by.require_auth();
+
+        if by != task.client && by != freelancer {
+            return Err(Error::NotParty);
+        }
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        let dkey = DataKey::Dispute(task_id.clone());
+        if env.storage().persistent().has(&dkey) {
+            return Err(Error::DisputeOpen);
+        }
+        env.storage().persistent().set(&dkey, &by);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dkey, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::save_task(&env, &key, &task); // renueva el TTL de la tarea
+
+        OpenDisputeEvent {
+            task_id,
+            opened_by: by,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // El árbitro resuelve la disputa: `freelancer_amount` va al programador
+    // registrado y el resto vuelve al cliente (cualquiera de los dos puede ser
+    // 0). Se permite después del plazo: para eso se congeló el reembolso.
+    pub fn resolve_dispute(env: Env, task_id: String, freelancer_amount: i128) -> Result<(), Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        let dkey = DataKey::Dispute(task_id.clone());
+        if !env.storage().persistent().has(&dkey) {
+            return Err(Error::NoDispute);
+        }
+        let freelancer = Self::assigned(&task)?;
+        if freelancer_amount < 0 || freelancer_amount > task.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let refund_amount = task
+            .amount
+            .checked_sub(freelancer_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        // Efectos antes de transferir: la tarea se cierra y la disputa se borra.
+        task.status = if freelancer_amount > 0 {
+            TaskStatus::Released
+        } else {
+            TaskStatus::Refunded
+        };
+        Self::save_task(&env, &key, &task);
+        env.storage().persistent().remove(&dkey);
+
+        if freelancer_amount > 0 {
+            Self::pay(&env, &freelancer, freelancer_amount)?;
+        }
+        if refund_amount > 0 {
+            Self::pay(&env, &task.client, refund_amount)?;
+        }
+
+        ResolveDisputeEvent {
+            task_id,
+            freelancer,
+            freelancer_amount,
+            client: task.client,
+            refund_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Quién abrió la disputa de una tarea, o `None` si no hay.
+    pub fn get_dispute(env: Env, task_id: String) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::Dispute(task_id))
+    }
+
+    // Pausa de emergencia (solo el árbitro): detiene los depósitos nuevos y
+    // las recargas. NUNCA detiene pagos ni reembolsos: el dinero ya
+    // depositado siempre puede salir hacia el programador o el cliente.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        Self::set_paused(&env, true)
+    }
+
+    // Reanuda los depósitos (solo el árbitro).
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        Self::set_paused(&env, false)
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v6: cambia la pausa; `NoChange` si ya estaba en ese estado.
+    fn set_paused(env: &Env, paused: bool) -> Result<(), Error> {
+        let arbiter = Self::arbiter(env)?;
+        arbiter.require_auth();
+        let current: bool = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
+        if current == paused {
+            return Err(Error::NoChange);
+        }
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        Self::extend_instance(env);
+        PauseEvent { paused }.publish(env);
+        Ok(())
+    }
+
+    // v6: `Paused` si los depósitos están detenidos.
+    fn not_paused(env: &Env) -> Result<(), Error> {
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::Paused);
+        }
+        Ok(())
+    }
 
     // v6: lee uno de los totales de la instancia (0 si nunca se escribió).
     fn total(env: &Env, key: &DataKey) -> i128 {

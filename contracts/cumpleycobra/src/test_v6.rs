@@ -354,3 +354,148 @@ fn v6_deposit_assigned_estricto_exige_cliente_y_programador() {
     est.c.deposit_assigned(&est.client, &id, &(2 * UNIT), &DIA, &rh, &est.freelancer);
     assert_eq!(est.c.get_task(&id).freelancer, Some(est.freelancer.clone()));
 }
+
+// ---------------------------------------------------------------------------
+// Lote 3: disputas y pausa de emergencia
+// ---------------------------------------------------------------------------
+
+#[test]
+fn v6_open_dispute_solo_las_partes_antes_del_plazo_y_una_vez() {
+    let ctx = setup(Modo::Libre);
+    let sin_asignar = deposit_simple(&ctx, "disputa-0", UNIT, DIA);
+    assert_eq!(
+        ctx.c.try_open_dispute(&sin_asignar, &ctx.client),
+        Err(Ok(Error::WrongFreelancer))
+    );
+    let id = tarea_asignada(&ctx, "disputa-1", 4 * UNIT);
+    assert_eq!(
+        ctx.c.try_open_dispute(&id, &ctx.third),
+        Err(Ok(Error::NotParty))
+    );
+    assert_eq!(ctx.c.get_dispute(&id), None);
+    ctx.c.open_dispute(&id, &ctx.freelancer);
+    assert_eq!(ctx.c.get_dispute(&id), Some(ctx.freelancer.clone()));
+    assert_eq!(
+        ctx.c.try_open_dispute(&id, &ctx.client),
+        Err(Ok(Error::DisputeOpen))
+    );
+    // Tras el plazo ya no se abre (para eso está el reembolso).
+    let tarde = tarea_asignada(&ctx, "disputa-2", UNIT);
+    ctx.env.ledger().set_timestamp(START_TS + DIA);
+    assert_eq!(
+        ctx.c.try_open_dispute(&tarde, &ctx.client),
+        Err(Ok(Error::DeadlinePassed))
+    );
+
+    // Estricto: quien dice abrirla debe firmar.
+    let est = setup(Modo::Estricto);
+    let eid = tarea_asignada_estricta(&est, "disputa-estricto", UNIT);
+    firmas(&est, &[&est.freelancer], "open_dispute", (&eid, &est.client).into_val(&est.env));
+    assert!(est.c.try_open_dispute(&eid, &est.client).is_err());
+    firmas(&est, &[&est.client], "open_dispute", (&eid, &est.client).into_val(&est.env));
+    est.c.open_dispute(&eid, &est.client);
+}
+
+#[test]
+fn v6_disputa_congela_el_reembolso_maximo_14_dias_tras_el_plazo() {
+    let ctx = setup(Modo::Libre);
+    let id = tarea_asignada(&ctx, "disputa-congela", 4 * UNIT);
+    ctx.c.open_dispute(&id, &ctx.client);
+    ctx.env.ledger().set_timestamp(START_TS + DIA);
+    assert_eq!(ctx.c.try_timeout_refund(&id), Err(Ok(Error::DisputeOpen)));
+    ctx.env.ledger().set_timestamp(START_TS + DIA + 14 * DIA - 1);
+    assert_eq!(ctx.c.try_timeout_refund(&id), Err(Ok(Error::DisputeOpen)));
+    // A los 14 días, si el árbitro no resolvió, el dinero vuelve al cliente.
+    ctx.env.ledger().set_timestamp(START_TS + DIA + 14 * DIA);
+    ctx.c.timeout_refund(&id);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT);
+}
+
+#[test]
+fn v6_resolve_dispute_reparte_y_cierra() {
+    let ctx = setup(Modo::Libre);
+    let sin_disputa = tarea_asignada(&ctx, "resuelve-0", UNIT);
+    assert_eq!(
+        ctx.c.try_resolve_dispute(&sin_disputa, &0),
+        Err(Ok(Error::NoDispute))
+    );
+
+    // Reparto 3 / 1 después del plazo.
+    let id = tarea_asignada(&ctx, "resuelve-1", 4 * UNIT);
+    ctx.c.open_dispute(&id, &ctx.freelancer);
+    ctx.env.ledger().set_timestamp(START_TS + 2 * DIA);
+    for malo in [-1, 5 * UNIT] {
+        assert_eq!(ctx.c.try_resolve_dispute(&id, &malo), Err(Ok(Error::InvalidAmount)));
+    }
+    ctx.c.resolve_dispute(&id, &(3 * UNIT));
+    assert_eq!(ctx.c.get_task(&id).status, TaskStatus::Released);
+    assert_eq!(ctx.c.get_dispute(&id), None);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 3 * UNIT);
+
+    // Todo al cliente: la tarea queda Refunded.
+    let id2 = deposit_simple(&ctx, "resuelve-2", 2 * UNIT, DIA);
+    ctx.c.assign_freelancer(&id2, &ctx.freelancer);
+    ctx.c.open_dispute(&id2, &ctx.client);
+    ctx.c.resolve_dispute(&id2, &0);
+    assert_eq!(ctx.c.get_task(&id2).status, TaskStatus::Refunded);
+    assert_eq!(ctx.c.get_stats().held, ctx.token.balance(&ctx.contract_id));
+
+    // Estricto: solo el árbitro resuelve.
+    let est = setup(Modo::Estricto);
+    let eid = tarea_asignada_estricta(&est, "resuelve-estricto", 2 * UNIT);
+    firmas(&est, &[&est.client], "open_dispute", (&eid, &est.client).into_val(&est.env));
+    est.c.open_dispute(&eid, &est.client);
+    let args: Vec<Val> = (&eid, 0i128).into_val(&est.env);
+    firmas(&est, &[&est.client], "resolve_dispute", args.clone());
+    assert!(est.c.try_resolve_dispute(&eid, &0).is_err());
+    firmas(&est, &[&est.arbiter], "resolve_dispute", args);
+    est.c.resolve_dispute(&eid, &0);
+    assert_eq!(est.token.balance(&est.client), MINT);
+}
+
+#[test]
+fn v6_pausa_detiene_depositos_pero_nunca_pagos_ni_reembolsos() {
+    let ctx = setup(Modo::Libre);
+    let (h1, h2) = (hash(&ctx.env, 1), hash(&ctx.env, 2));
+    let a = tarea_asignada(&ctx, "pausa-a", 2 * UNIT);
+    let b = deposit_simple(&ctx, "pausa-b", UNIT, 100);
+
+    assert_eq!(ctx.c.try_unpause(), Err(Ok(Error::NoChange)));
+    ctx.c.pause();
+    assert_eq!(ctx.c.try_pause(), Err(Ok(Error::NoChange)));
+
+    // Dinero nuevo: bloqueado.
+    let nueva = String::from_str(&ctx.env, "pausa-c");
+    assert_eq!(
+        ctx.c.try_deposit(&ctx.client, &nueva, &UNIT, &DIA, &h1),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(
+        ctx.c.try_deposit_assigned(&ctx.client, &nueva, &UNIT, &DIA, &h1, &ctx.freelancer),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(ctx.c.try_top_up_task(&a, &UNIT), Err(Ok(Error::Paused)));
+
+    // Dinero que sale: sigue funcionando.
+    ctx.c.release(&a, &ctx.freelancer, &h1, &h2);
+    ctx.env.ledger().set_timestamp(START_TS + 100);
+    ctx.c.timeout_refund(&b);
+    assert_eq!(ctx.token.balance(&ctx.contract_id), 0);
+
+    ctx.c.unpause();
+    ctx.c.deposit(&ctx.client, &nueva, &UNIT, &DIA, &h1);
+}
+
+#[test]
+fn v6_pausa_estricto_solo_el_arbitro() {
+    let est = setup(Modo::Estricto);
+    let sin_args: Vec<Val> = Vec::new(&est.env);
+    firmas(&est, &[&est.client], "pause", sin_args.clone());
+    assert!(est.c.try_pause().is_err());
+    firmas(&est, &[&est.arbiter], "pause", sin_args.clone());
+    est.c.pause();
+    firmas(&est, &[&est.third], "unpause", sin_args.clone());
+    assert!(est.c.try_unpause().is_err());
+    firmas(&est, &[&est.arbiter], "unpause", sin_args);
+    est.c.unpause();
+}
