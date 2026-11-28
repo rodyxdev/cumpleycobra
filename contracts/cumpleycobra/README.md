@@ -542,3 +542,28 @@ Corrida con [`scripts/v12_testnet.sh`](../../scripts/v12_testnet.sh); al final `
 ## v13 (27 de noviembre de 2026)
 
 Contrato v13 en testnet: `CANNTLUPTRTAGLEDJS5R5NHLYPQFHEOUKXCOY3H3DF77IGZM37WEIFHF`, 137 tests en verde. Funciones nuevas: `client_release_with_fee`, `client_release_milestone_fee`, `contribute_task`, `contribute_milestone`, `contribute_stream`, `top_up_project_bond`, `extend_project_deadlines`, `withdraw_stream_to`, `refund_expired_projects_batch` y `mutual_split_project`. Corrida real `1795844061` con [`scripts/v13_testnet.sh`](../../scripts/v13_testnet.sh); al final `get_stats` dio `held` 0.
+
+## v14: concursos, retainers, financiamiento colectivo, equipos y cliff (27 de noviembre de 2026)
+
+**Los contratos v1 a v13 desplegados no se modifican.** v14: `CCRL3UWLII45QQSXYNOFLR2MFUSNOLDZ3IW7YMU4FO4OXKGHUCVVFJJT` (WASM hash `24a669d30c8cd8ff23e2bd06e661b7f690e85e8672133a80cd281b1794a4e772`, 102 552 bytes; subida [`a5aadabf…`](https://stellar.expert/explorer/testnet/tx/a5aadabf0bf16b644c7ab74a05c869c14e59a1746219865cd8641d35d4c1d324), despliegue [`22688b42…`](https://stellar.expert/explorer/testnet/tx/22688b42cdebd22a9c32916cbd404733eae9880a2348f4efb33dd3586e6f4dc4), `initialize` [`3618a757…`](https://stellar.expert/explorer/testnet/tx/3618a757442b4ca4f1daf4b020726017f9821d5495aee65c7e0dc309c8617247)). `cargo test -p cumpleycobra`: 142 en verde (0 advertencias).
+
+| Función | Quién firma | Reglas | tx (corrida `1795845176`) |
+| --- | --- | --- | --- |
+| `open_bounty` | Cliente | Abre concurso multi-ganador con pozo en USDC | [`ebd21f09…`](https://stellar.expert/explorer/testnet/tx/ebd21f093317ab560af7f2169f134fe919504c52916820a42e232a7c075c0902) |
+| `top_up_bounty` | Patrocinador | Suma fondos a un concurso abierto antes del plazo | [`8d0b00f1…`](https://stellar.expert/explorer/testnet/tx/8d0b00f18bad0b6f9c48461bdc651e7f2066c7ead921e8c135bed71a27284c88) |
+| `award_bounty` | Árbitro | Premia parcialmente a múltiples ganadores del mismo concurso | [`eb0acbc1…`](https://stellar.expert/explorer/testnet/tx/eb0acbc1a471ce91d7b0671ef6b1192d64a1b53745a1b2a0d85f4145d0470cbc) |
+| `refund_bounty` | Cualquiera | Reembolsa lo no premiado tras vencer el plazo | [`e4ca5bd6…`](https://stellar.expert/explorer/testnet/tx/e4ca5bd6112858b4b9ec314dd7d249c8b3e175018e6ffab37a5c7a7d639e2bd6) |
+| `create_retainer` | Cliente | Deposita 2 a 12 ciclos recurrentes para un programador | [`93aca760…`](https://stellar.expert/explorer/testnet/tx/93aca76010c12fe7ef773a9407415bfb5c3880c5aa5f1cb88e1dabd1c1223281) |
+| `release_retainer_cycle` | Árbitro | Libera el ciclo vigente antes de su vencimiento | [`ec27de87…`](https://stellar.expert/explorer/testnet/tx/ec27de8724229c38c352aee5cded0284256abf6ee474569a8eb2dae3e5fc5f11) |
+| `refund_expired_retainer_cycle` | Cualquiera | Reembolsa un ciclo vencido y avanza al siguiente | [`68b48a41…`](https://stellar.expert/explorer/testnet/tx/68b48a41fe55917b4180c414f3f4a51a3057f462913e2afa35a24ba2fc66d6d9) |
+| `cancel_retainer` | Cliente + programador | Cierra los ciclos restantes y devuelve el saldo al cliente | [`608795fc…`](https://stellar.expert/explorer/testnet/tx/608795fcafaedfc160fbf751c5a5ac6f4f91d608a5671ee4a0b5a00349bed789) |
+| `create_crowdfund_task` | Creador | Tarea financiada entre hasta 10 aportantes | [`eee541dd…`](https://stellar.expert/explorer/testnet/tx/eee541ddb1346291a5bfbd39d2f1261f8e50be58c58de5f7ba043f41ca5f2365) |
+| `pledge_crowdfund_task` | Patrocinador | Aporta fondos rastreados individualmente | [`ceaea7c9…`](https://stellar.expert/explorer/testnet/tx/ceaea7c9c911453d5fdceb2260a04ac7d0614a6632107c4644989228490a3897) |
+| `release_crowdfund_task` | Árbitro | Libera el pozo colectivo al programador | [`361628d5…`](https://stellar.expert/explorer/testnet/tx/361628d589463d93940e765addb06eacebc764db4c9d0566677e13e5332f387e) |
+| `refund_crowdfund_task` | Cualquiera | Devuelve exactamente lo aportado a cada patrocinador | [`633224fb…`](https://stellar.expert/explorer/testnet/tx/633224fb4d3d984cbeacd5c8667ff37607042545487a9237add6299d55b9e0bf) |
+| `deposit_team_task` | Cliente | Deposita tarea para equipo de 2 a 5 programadores en bps | [`19acb2bf…`](https://stellar.expert/explorer/testnet/tx/19acb2bf19048511fd1e72efde92eb5df1129e93f4a12d8ec35424d88ef3d502) |
+| `release_team_task` | Árbitro | Reparte el pago automáticamente a todo el equipo en una tx | [`a21e2379…`](https://stellar.expert/explorer/testnet/tx/a21e237967274c81176f90531ab93886608978928d54be9edc02bfaaa6e7a887) |
+| `refund_team_task` | Cualquiera | Reembolsa una tarea en equipo vencida | [`373e9268…`](https://stellar.expert/explorer/testnet/tx/373e92689b7d73fd1609729750ef02b062d5ac2f934b9704680bb2990d87850e) |
+| `deposit_cliff_stream` | Cliente | Pago por tiempo bloqueado hasta `cliff` con desbloqueo retroactivo | [`38f000a4…`](https://stellar.expert/explorer/testnet/tx/38f000a44401093d7a97c39520ceb3d6dbfc7ab9b0b1db460e5c81f944490e64) |
+
+Corrida con [`scripts/v14_testnet.sh`](../../scripts/v14_testnet.sh); al final `get_stats` dio `deposited` = `paid_out` = `165000` y `held` `0`, igual al saldo real del contrato (`0`).
