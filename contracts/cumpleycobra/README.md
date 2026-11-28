@@ -538,3 +538,7 @@ Corrida con [`scripts/v11_testnet.sh`](../../scripts/v11_testnet.sh); al final `
 
 Corrida con [`scripts/v12_testnet.sh`](../../scripts/v12_testnet.sh); al final `get_stats` dio `held` 0, igual al saldo real.
 
+
+## v13 (27 de noviembre de 2026)
+
+Contrato v13 en testnet: `CANNTLUPTRTAGLEDJS5R5NHLYPQFHEOUKXCOY3H3DF77IGZM37WEIFHF`, 137 tests en verde. Funciones nuevas: `client_release_with_fee`, `client_release_milestone_fee`, `contribute_task`, `contribute_milestone`, `contribute_stream`, `top_up_project_bond`, `extend_project_deadlines`, `withdraw_stream_to`, `refund_expired_projects_batch` y `mutual_split_project`. Corrida real `1795844061` con [`scripts/v13_testnet.sh`](../../scripts/v13_testnet.sh); al final `get_stats` dio `held` 0.
