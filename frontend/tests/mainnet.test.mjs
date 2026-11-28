@@ -17,8 +17,9 @@ test("formatUsdc es el inverso de parseUsdc", () => {
   for (const t of ["0.02", "1", "0.0000001", "12.5"]) assert.equal(formatUsdc(parseUsdc(t)), t);
 });
 
-test("la configuración apunta a la red pública y al USDC de Circle", () => {
+test("la configuración apunta a la red pública, al XLM nativo y al USDC de Circle", () => {
   assert.equal(MAINNET.passphrase, "Public Global Stellar Network ; September 2015");
   assert.equal(MAINNET.usdcSac, "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75");
+  assert.equal(MAINNET.token.sac, "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA");
   assert.match(MAINNET.explorer, /explorer\/public$/);
 });

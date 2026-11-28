@@ -41,9 +41,9 @@ type Registro = { fn: MainnetFn; hash: string; at: string };
 export default function MainnetPage() {
   const [address, setAddress] = useState<string | null>(null);
   const [taskId, setTaskId] = useState("");
-  const [amount, setAmount] = useState("0.02");
+  const [amount, setAmount] = useState("0.5");
   const [minutes, setMinutes] = useState("10");
-  const [topUp, setTopUp] = useState("0.01");
+  const [topUp, setTopUp] = useState("0.2");
   const [extraMin, setExtraMin] = useState("5");
   const [freelancer, setFreelancer] = useState("");
   const [task, setTask] = useState<MainnetTask | null>(null);
@@ -116,7 +116,7 @@ export default function MainnetPage() {
         <h1>El contrato en la red principal de Stellar</h1>
         <p className="max-w-2xl text-base text-muted-foreground">
           Edición experimental para la misión especial de Ship It: el mismo contrato de Cumple&amp;Cobra, desplegado en mainnet,
-          que usas aquí con tu propia wallet y USDC real.
+          que usas aquí con tu propia wallet y {MAINNET.token.symbol} real.
         </p>
       </div>
 
@@ -124,7 +124,7 @@ export default function MainnetPage() {
         <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
         <div className="space-y-1">
           <p className="font-semibold">Dinero real, contrato sin auditoría.</p>
-          <p>Usa solo centavos de USDC y tu propia wallet. Esta página no usa el backend ni la llave del árbitro: todo lo firmas tú en Freighter. El flujo normal de Cumple&amp;Cobra sigue en testnet.</p>
+          <p>Usa solo montos mínimos de {MAINNET.token.symbol} y tu propia wallet. Esta página no usa el backend ni la llave del árbitro: todo lo firmas tú en Freighter. El flujo normal de Cumple&amp;Cobra sigue en testnet.</p>
         </div>
       </div>
 
@@ -154,7 +154,7 @@ export default function MainnetPage() {
           </div>
           {task && (
             <p className="text-sm text-muted-foreground">
-              Estado: <b>{task.status}</b> · Monto: <b>{formatUsdc(task.amount)} USDC</b> ·{" "}
+              Estado: <b>{task.status}</b> · Monto: <b>{formatUsdc(task.amount)} {MAINNET.token.symbol}</b> ·{" "}
               {secondsLeft !== null && secondsLeft > 0 ? `vence en ${Math.ceil(secondsLeft / 60)} min` : "plazo vencido"}
             </p>
           )}
@@ -166,10 +166,10 @@ export default function MainnetPage() {
         <Card>
           <CardHeader>
             <CardTitle>1. <code>deposit</code></CardTitle>
-            <CardDescription>Depositas USDC en el contrato con el rules_hash del acuerdo de prueba.</CardDescription>
+            <CardDescription>Depositas {MAINNET.token.symbol} en el contrato con el rules_hash del acuerdo de prueba.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-2"><Label htmlFor="amount">Monto (USDC)</Label><Input id="amount" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
+            <div className="space-y-2"><Label htmlFor="amount">Monto ({MAINNET.token.symbol})</Label><Input id="amount" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
             <div className="space-y-2"><Label htmlFor="minutes">Plazo (minutos)</Label><Input id="minutes" value={minutes} onChange={(e) => setMinutes(e.target.value)} /></div>
             <Button className="min-h-10 sm:col-span-2" disabled={disabled} onClick={() => run("deposit", async () => {
               const rulesHash = await sha256Hex(canonicalJson(objetoAcordado({ ...ACUERDO, task_id: taskId })));
@@ -181,10 +181,10 @@ export default function MainnetPage() {
         <Card>
           <CardHeader>
             <CardTitle>2. <code>top_up_task</code></CardTitle>
-            <CardDescription>Agregas USDC a la tarea depositada, antes del plazo.</CardDescription>
+            <CardDescription>Agregas {MAINNET.token.symbol} a la tarea depositada, antes del plazo.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="space-y-2"><Label htmlFor="topup">Monto extra (USDC)</Label><Input id="topup" value={topUp} onChange={(e) => setTopUp(e.target.value)} /></div>
+            <div className="space-y-2"><Label htmlFor="topup">Monto extra ({MAINNET.token.symbol})</Label><Input id="topup" value={topUp} onChange={(e) => setTopUp(e.target.value)} /></div>
             <Button className="min-h-10 w-full" disabled={disabled} onClick={() => run("top_up_task", () => CALLS.top_up_task({ taskId, amount: parseUsdc(topUp) }))}>
               {busy === "top_up_task" ? "Firmando…" : "Recargar"}
             </Button>
@@ -207,7 +207,7 @@ export default function MainnetPage() {
         <Card>
           <CardHeader>
             <CardTitle>4. <code>client_release</code></CardTitle>
-            <CardDescription>Apruebas manualmente y el contrato paga al programador. Necesita trustline de USDC.</CardDescription>
+            <CardDescription>Apruebas manualmente y el contrato paga al programador.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-2"><Label htmlFor="freelancer">Dirección del programador</Label><Input id="freelancer" value={freelancer} onChange={(e) => setFreelancer(e.target.value)} placeholder="G…" /></div>

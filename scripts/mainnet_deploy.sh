@@ -16,7 +16,9 @@ set -euo pipefail
 NET=cyc-mainnet
 RPC=https://soroban-rpc.mainnet.stellar.gateway.fm
 PASSPHRASE="Public Global Stellar Network ; September 2015"
-USDC_SAC=CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75 # USDC de Circle en mainnet
+# Token del depósito: XLM nativo en la edición experimental (sin trustline ni USDC).
+# Para un lanzamiento con USDC de Circle: CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75
+TOKEN_SAC=${TOKEN_SAC:-CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA}
 ARBITER_ID=cyc-mainnet-arbiter
 WASM=target/wasm32v1-none/release/cumpleycobra.wasm
 
@@ -45,9 +47,9 @@ echo "== Despliegue"
 ID=$(stellar contract deploy --wasm "$WASM" --source "$ARBITER_ID" --network "$NET" --alias cumpleycobra-mainnet)
 echo "   Contrato: $ID"
 
-echo "== initialize (árbitro de mainnet + USDC de Circle)"
+echo "== initialize (árbitro de mainnet + token $TOKEN_SAC)"
 stellar contract invoke --id "$ID" --source "$ARBITER_ID" --network "$NET" -- \
-  initialize --arbiter "$ARBITER" --token "$USDC_SAC"
+  initialize --arbiter "$ARBITER" --token "$TOKEN_SAC"
 stellar contract invoke --id "$ID" --source "$ARBITER_ID" --network "$NET" --send=no -- get_config
 
 echo "== Listo. Pon este ID en frontend/src/lib/mainnet.ts y en docs/mainnet.md:"

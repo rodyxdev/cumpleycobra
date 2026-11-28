@@ -22,12 +22,16 @@ export const MAINNET = {
   rpcUrl: "https://soroban-rpc.mainnet.stellar.gateway.fm",
   // Se llena al desplegar con scripts/mainnet_deploy.sh. Vacío = todavía no desplegado.
   contractId: "",
-  // SAC del USDC de Circle en mainnet (USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN).
+  // Token del depósito en la edición experimental: XLM nativo (su SAC), para no exigir
+  // trustline ni USDC en Stellar a la wallet de prueba. Mismos 7 decimales que USDC.
+  token: { symbol: "XLM", sac: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA" },
+  // SAC del USDC de Circle en mainnet (USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN),
+  // verificado on-chain; es el token de un lanzamiento real.
   usdcSac: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
   explorer: "https://stellar.expert/explorer/public",
 } as const;
 
-export const USDC_UNITS = BigInt(10_000_000); // 7 decimales
+export const USDC_UNITS = BigInt(10_000_000); // 7 decimales (igual en XLM y USDC)
 
 const server = new rpc.Server(MAINNET.rpcUrl);
 
@@ -52,7 +56,7 @@ function explain(e: unknown): MainnetError {
   const text = e instanceof Error ? e.message : String(e);
   const m = text.match(/Error\(Contract, #(\d+)\)/);
   if (m) return new MainnetError(ERRORS[Number(m[1])] ?? `Error del contrato #${m[1]}.`);
-  if (/trustline/i.test(text)) return new MainnetError("Falta la trustline de USDC en alguna cuenta.");
+  if (/trustline/i.test(text)) return new MainnetError("Falta la trustline del token en alguna cuenta.");
   if (/balance|insufficient|underfunded/i.test(text)) return new MainnetError("Saldo insuficiente.");
   return new MainnetError(`La red rechazó la transacción: ${text.slice(0, 200)}`);
 }
