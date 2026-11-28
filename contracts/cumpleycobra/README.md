@@ -567,3 +567,7 @@ Contrato v13 en testnet: `CANNTLUPTRTAGLEDJS5R5NHLYPQFHEOUKXCOY3H3DF77IGZM37WEIF
 | `deposit_cliff_stream` | Cliente | Pago por tiempo bloqueado hasta `cliff` con desbloqueo retroactivo | [`38f000a4…`](https://stellar.expert/explorer/testnet/tx/38f000a44401093d7a97c39520ceb3d6dbfc7ab9b0b1db460e5c81f944490e64) |
 
 Corrida con [`scripts/v14_testnet.sh`](../../scripts/v14_testnet.sh); al final `get_stats` dio `deposited` = `paid_out` = `165000` y `held` `0`, igual al saldo real del contrato (`0`).
+
+## v15 (28 de noviembre de 2026)
+
+Contrato v15 en testnet: `CAQUWYA5IWT7KF4GFCHTMX7F5XT3JSSPG2OS7EFAIT4ZNUDXYS62V3BC`, 147 tests en verde. Operaciones por lote: `client_release_batch`, `client_release_milestones_batch`, `extend_deadlines_batch`, `top_up_tasks_batch`, `reclaim_bonds_batch` y `cancel_unassigned_tasks_batch`. Corrida real `1795846475` con [`scripts/v15_testnet.sh`](../../scripts/v15_testnet.sh); al final `get_stats` dio `held` 0.
