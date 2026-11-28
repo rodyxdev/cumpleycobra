@@ -146,3 +146,31 @@ fn v14_retainer_ciclos_reembolso_y_cancelacion_mutua() {
     firmas(&est, &[&est.client, &est.freelancer], "cancel_retainer", (&erid,).into_val(&est.env));
     assert_eq!(est.c.cancel_retainer(&erid), 2 * UNIT);
 }
+
+#[test]
+fn v14_crowdfund_colectivo_pago_y_reembolso_individual() {
+    let ctx = setup(Modo::Libre);
+    let c1 = String::from_str(&ctx.env, "cf-release");
+    let c2 = String::from_str(&ctx.env, "cf-refund");
+
+    // Camino 1: cliente + tercero juntan pozo y el árbitro paga el total al programador.
+    assert_eq!(ctx.c.create_crowdfund_task(&ctx.client, &c1, &(4 * UNIT), &DIA, &h(&ctx.env, 20)), 4 * UNIT);
+    assert_eq!(ctx.c.pledge_crowdfund_task(&ctx.third, &c1, &4), 4 * UNIT + 4);
+    assert_eq!(ctx.c.pledge_crowdfund_task(&ctx.client, &c1, &(1 * UNIT)), 5 * UNIT + 4);
+    assert_eq!(
+        ctx.c.release_crowdfund_task(&c1, &ctx.freelancer, &h(&ctx.env, 21), &h(&ctx.env, 22)),
+        5 * UNIT + 4
+    );
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 5 * UNIT + 4);
+
+    // Camino 2: vence el plazo -> cada aportante recupera exactamente lo suyo.
+    ctx.c.create_crowdfund_task(&ctx.client, &c2, &(2 * UNIT), &100, &h(&ctx.env, 23));
+    ctx.c.pledge_crowdfund_task(&ctx.third, &c2, &3);
+    assert_eq!(ctx.c.try_refund_crowdfund_task(&c2), Err(Ok(Error::DeadlineNotReached)));
+    ctx.env.ledger().set_timestamp(START_TS + 100);
+    assert_eq!(ctx.c.refund_crowdfund_task(&c2), 2);
+    assert_eq!(ctx.c.try_refund_crowdfund_task(&c2), Err(Ok(Error::NotFunded)));
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 5 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.third), 3);
+    cuadra(&ctx);
+}

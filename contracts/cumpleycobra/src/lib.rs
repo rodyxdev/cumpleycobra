@@ -275,6 +275,28 @@ pub struct Retainer {
     pub total_cycles: u32,
 }
 
+// v14: aportación individual en una tarea financiada entre varios patrocinadores.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Backer {
+    pub address: Address,
+    pub amount: i128,
+}
+
+// v14: tarea con financiamiento colectivo (`CrowdfundTask`). Al aprobarse se paga
+// el pozo completo al programador; si vence sin entrega, cada aportante recupera
+// exactamente lo que puso.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CrowdfundTask {
+    pub task_id: String,
+    pub backers: Vec<Backer>,
+    pub total: i128,
+    pub deadline: u64,
+    pub rules_hash: BytesN<32>,
+    pub status: TaskStatus,
+}
+
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
@@ -308,6 +330,8 @@ pub enum DataKey {
     Bounty(String),
     // v14: acuerdo recurrente por ciclos (persistente).
     Retainer(String),
+    // v14: tarea con financiamiento colectivo y reembolso individual (persistente).
+    Crowdfund(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -4924,6 +4948,160 @@ impl CumpleYCobraContract {
         Self::pay(&env, &r.client, refund)?;
         Self::v14_event(&env, "cancel_retainer", retainer_id, r.client, refund, remaining_cycles);
         Ok(refund)
+    }
+
+    // -----------------------------------------------------------------------
+    // v14 (lote 3): financiamiento colectivo (`CrowdfundTask`)
+    // -----------------------------------------------------------------------
+
+    // Abre una tarea financiada entre varios aportantes (hasta 10). A diferencia
+    // de `contribute_task` de v13, cada aportante queda registrado para recibir
+    // su reembolso exacto si vence el plazo sin completar la entrega.
+    pub fn create_crowdfund_task(
+        env: Env,
+        creator: Address,
+        task_id: String,
+        amount: i128,
+        deadline_secs: u64,
+        rules_hash: BytesN<32>,
+    ) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        creator.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if deadline_secs == 0 || deadline_secs > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let key = DataKey::Crowdfund(task_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let deadline = env
+            .ledger()
+            .timestamp()
+            .checked_add(deadline_secs)
+            .ok_or(Error::InvalidDeadline)?;
+        let mut backers = Vec::new(&env);
+        backers.push_back(Backer {
+            address: creator.clone(),
+            amount,
+        });
+        let cf = CrowdfundTask {
+            task_id: task_id.clone(),
+            backers,
+            total: amount,
+            deadline,
+            rules_hash,
+            status: TaskStatus::Funded,
+        };
+        env.storage().persistent().set(&key, &cf);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::collect(&env, &creator, amount)?;
+        Self::v14_event(&env, "create_cf", task_id, creator, amount, deadline as i128);
+        Ok(amount)
+    }
+
+    // Suma la aportación de un patrocinador a una tarea colectiva en Funded y
+    // antes de su plazo (máximo 10 aportantes distintos; si ya aportó, se acumula).
+    pub fn pledge_crowdfund_task(
+        env: Env,
+        backer: Address,
+        task_id: String,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        backer.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let key = DataKey::Crowdfund(task_id.clone());
+        let mut cf: CrowdfundTask = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if cf.status != TaskStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() >= cf.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        let mut updated = false;
+        for i in 0..cf.backers.len() {
+            let mut b = cf.backers.get(i).ok_or(Error::NotFound)?;
+            if b.address == backer {
+                b.amount = b.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+                cf.backers.set(i, b);
+                updated = true;
+                break;
+            }
+        }
+        if !updated {
+            if cf.backers.len() >= MAX_MILESTONES {
+                return Err(Error::TooManyItems);
+            }
+            cf.backers.push_back(Backer {
+                address: backer.clone(),
+                amount,
+            });
+        }
+        cf.total = cf.total.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        env.storage().persistent().set(&key, &cf);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::collect(&env, &backer, amount)?;
+        Self::v14_event(&env, "pledge_cf", task_id, backer, amount, cf.total);
+        Ok(cf.total)
+    }
+
+    // El árbitro libera el pozo colectivo completo al programador tras aprobarse.
+    pub fn release_crowdfund_task(
+        env: Env,
+        task_id: String,
+        freelancer: Address,
+        code_hash: BytesN<32>,
+        verdict_hash: BytesN<32>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+        let key = DataKey::Crowdfund(task_id.clone());
+        let mut cf: CrowdfundTask = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if cf.status != TaskStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() >= cf.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        let _ = (code_hash, verdict_hash);
+        let payout = cf.total;
+        cf.status = TaskStatus::Released;
+        env.storage().persistent().set(&key, &cf);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::pay(&env, &freelancer, payout)?;
+        Self::v14_event(&env, "release_cf", task_id, freelancer, payout, cf.backers.len() as i128);
+        Ok(payout)
+    }
+
+    // Reembolso proporcional sin permisos al vencer una tarea colectiva: cada
+    // aportante recibe exactamente lo que depositó en una transacción atómica.
+    pub fn refund_crowdfund_task(env: Env, task_id: String) -> Result<u32, Error> {
+        let key = DataKey::Crowdfund(task_id.clone());
+        let mut cf: CrowdfundTask = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if cf.status != TaskStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() < cf.deadline {
+            return Err(Error::DeadlineNotReached);
+        }
+        let count = cf.backers.len();
+        cf.status = TaskStatus::Refunded;
+        env.storage().persistent().set(&key, &cf);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        for b in cf.backers.iter() {
+            Self::pay(&env, &b.address, b.amount)?;
+        }
+        Self::v14_event(&env, "refund_cf", task_id, cf.backers.get(0).ok_or(Error::NotFound)?.address, cf.total, count as i128);
+        Ok(count)
     }
 
     // -----------------------------------------------------------------------
