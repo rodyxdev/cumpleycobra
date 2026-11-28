@@ -75,6 +75,10 @@
 // operaciones por lote para pagos por tiempo y para hitos, más la propina de
 // un proyecto. En cada acuerdo sobre un pago por tiempo, el programador cobra
 // primero lo ya ganado: ningún cambio le quita lo liberado.
+//
+// v12 (27 de noviembre de 2026): aprobación manual parcial del cliente (tarea
+// y hito), garantía del programador para proyectos por hitos y retiro de
+// varios pagos por tiempo a la vez.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -258,6 +262,8 @@ pub enum DataKey {
     Bond(String),
     // v11: quién abrió la disputa de un pago por tiempo (persistente).
     StreamDispute(String),
+    // v12: garantía del programador sobre un proyecto por hitos (persistente).
+    ProjectBond(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -977,6 +983,38 @@ pub struct OpenStreamDisputeEvent {
     #[topic]
     pub stream_id: String,
     pub opened_by: Address,
+}
+
+// v12: el cliente aprobó manualmente una parte (tarea o hito; index None en tarea).
+#[contractevent(topics = ["client_release_partial"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientReleasePartialEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: Option<u32>,
+    pub freelancer: Address,
+    pub amount: i128,
+    pub remaining: i128,
+}
+
+// v12: movimiento de la garantía de un proyecto.
+#[contractevent(topics = ["project_bond"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectBondEvent {
+    #[topic]
+    pub task_id: String,
+    pub action: soroban_sdk::Symbol,
+    pub to_freelancer: i128,
+    pub to_client: i128,
+}
+
+// v12: el programador retiró de varios pagos por tiempo a la vez.
+#[contractevent(topics = ["withdraw_stream_batch"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WithdrawStreamBatchEvent {
+    pub freelancer: Address,
+    pub count: u32,
+    pub total: i128,
 }
 
 #[contract]
@@ -4109,8 +4147,190 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v12
+    // -----------------------------------------------------------------------
+
+    // Aprobación manual parcial: el cliente paga una parte de la tarea al
+    // programador (el registrado, si lo hay) y el resto sigue en Funded para
+    // pagarse o reembolsarse después. Se permite también tras el plazo.
+    pub fn client_release_partial(
+        env: Env,
+        task_id: String,
+        freelancer: Address,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        task.client.require_auth();
+        Self::check_assigned(&task, &freelancer)?;
+        if amount <= 0 || amount >= task.amount {
+            return Err(Error::InvalidAmount);
+        }
+        task.amount -= amount;
+        Self::save_task(&env, &key, &task);
+        Self::pay(&env, &freelancer, amount)?;
+        ClientReleasePartialEvent { task_id, index: None, freelancer, amount, remaining: task.amount }.publish(&env);
+        Ok(task.amount)
+    }
+
+    // Lo mismo para un hito: el cliente paga una parte y el resto del hito
+    // sigue en Funded. El programador queda fijo como en cualquier pago.
+    pub fn client_release_milestone_partial(
+        env: Env,
+        task_id: String,
+        index: u32,
+        freelancer: Address,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        project.client.require_auth();
+        let mut m = Self::funded_milestone(&project, index)?;
+        Self::bind_freelancer(&mut project, &freelancer)?;
+        if amount <= 0 || amount >= m.amount {
+            return Err(Error::InvalidAmount);
+        }
+        m.amount -= amount;
+        let remaining = m.amount;
+        project.milestones.set(index, m);
+        Self::save_project(&env, &key, &project);
+        Self::pay(&env, &freelancer, amount)?;
+        ClientReleasePartialEvent { task_id, index: Some(index), freelancer, amount, remaining }.publish(&env);
+        Ok(remaining)
+    }
+
+    // El programador fijado de un proyecto deposita una garantía mientras quede
+    // algún hito con dinero. Una por proyecto.
+    pub fn post_project_bond(env: Env, task_id: String, amount: i128) -> Result<(), Error> {
+        Self::not_paused(&env)?;
+        let project = Self::load_project(&env, &DataKey::Project(task_id.clone()))?;
+        let freelancer = Self::project_freelancer(&project)?;
+        freelancer.require_auth();
+        Self::require_funded_milestone(&project)?;
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let key = DataKey::ProjectBond(task_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let bond = Bond { task_id: task_id.clone(), freelancer: freelancer.clone(), amount };
+        env.storage().persistent().set(&key, &bond);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::collect(&env, &freelancer, amount)?;
+        Self::project_bond_event(&env, task_id, "post", amount, 0);
+        Ok(())
+    }
+
+    // El programador recupera la garantía del proyecto cuando ya no queda
+    // ningún hito con dinero y al menos uno se pagó.
+    pub fn reclaim_project_bond(env: Env, task_id: String) -> Result<i128, Error> {
+        let key = DataKey::ProjectBond(task_id.clone());
+        let bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        bond.freelancer.require_auth();
+        let project = Self::load_project(&env, &DataKey::Project(task_id.clone()))?;
+        let (funded, released, _) = Self::milestone_counts(&project);
+        if funded > 0 || released == 0 {
+            return Err(Error::NotFunded);
+        }
+        env.storage().persistent().remove(&key);
+        Self::pay(&env, &bond.freelancer, bond.amount)?;
+        Self::project_bond_event(&env, task_id, "reclaim", bond.amount, 0);
+        Ok(bond.amount)
+    }
+
+    // El árbitro reparte la garantía de un proyecto cerrado con algún hito
+    // reembolsado: `client_amount` al cliente (hasta toda) y el resto de vuelta
+    // al programador.
+    pub fn slash_project_bond(env: Env, task_id: String, client_amount: i128) -> Result<(), Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+        let key = DataKey::ProjectBond(task_id.clone());
+        let bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        let project = Self::load_project(&env, &DataKey::Project(task_id.clone()))?;
+        let (funded, _, refunded) = Self::milestone_counts(&project);
+        if funded > 0 || refunded == 0 {
+            return Err(Error::NotFunded);
+        }
+        if client_amount <= 0 || client_amount > bond.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let back = bond.amount - client_amount;
+        env.storage().persistent().remove(&key);
+        Self::pay(&env, &project.client, client_amount)?;
+        if back > 0 {
+            Self::pay(&env, &bond.freelancer, back)?;
+        }
+        Self::project_bond_event(&env, task_id, "slash", back, client_amount);
+        Ok(())
+    }
+
+    // El programador retira lo liberado de 1 a 20 pagos por tiempo suyos en
+    // una sola transferencia. Omite los que no son suyos o no tienen nada
+    // nuevo; `NothingToWithdraw` si en total no hay nada.
+    pub fn withdraw_stream_batch(
+        env: Env,
+        freelancer: Address,
+        stream_ids: soroban_sdk::Vec<String>,
+    ) -> Result<i128, Error> {
+        freelancer.require_auth();
+        if stream_ids.is_empty() || stream_ids.len() > MAX_BATCH_READ {
+            return Err(Error::TooManyItems);
+        }
+        let mut total: i128 = 0;
+        let mut count: u32 = 0;
+        for id in stream_ids.iter() {
+            let key = DataKey::Stream(id);
+            let mut stream: Stream = match env.storage().persistent().get(&key) {
+                Some(st) => st,
+                None => continue,
+            };
+            if stream.freelancer != freelancer {
+                continue;
+            }
+            let available = Self::vested(&env, &stream)? - stream.withdrawn;
+            if available <= 0 {
+                continue;
+            }
+            stream.withdrawn += available;
+            Self::save_stream(&env, &key, &stream);
+            total = total.checked_add(available).ok_or(Error::InvalidAmount)?;
+            count += 1;
+        }
+        if total <= 0 {
+            return Err(Error::NothingToWithdraw);
+        }
+        Self::pay(&env, &freelancer, total)?;
+        WithdrawStreamBatchEvent { freelancer, count, total }.publish(&env);
+        Ok(total)
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v12: cuántos hitos hay en Funded, Released y Refunded.
+    fn milestone_counts(project: &Project) -> (u32, u32, u32) {
+        let (mut f, mut r, mut d) = (0, 0, 0);
+        for m in project.milestones.iter() {
+            match m.status {
+                MilestoneStatus::Funded => f += 1,
+                MilestoneStatus::Released => r += 1,
+                MilestoneStatus::Refunded => d += 1,
+            }
+        }
+        (f, r, d)
+    }
+
+    fn project_bond_event(env: &Env, task_id: String, action: &str, to_freelancer: i128, to_client: i128) {
+        ProjectBondEvent {
+            task_id,
+            action: soroban_sdk::Symbol::new(env, action),
+            to_freelancer,
+            to_client,
+        }
+        .publish(env);
+    }
 
     // v11: pago por tiempo activo y sin terminar (`NotFunded` si no).
     fn active_stream(env: &Env, key: &DataKey) -> Result<Stream, Error> {
@@ -4400,3 +4620,6 @@ mod test_v10;
 
 // Pruebas de v11.
 mod test_v11;
+
+// Pruebas de v12.
+mod test_v12;
