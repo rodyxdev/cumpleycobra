@@ -69,6 +69,12 @@
 // garantía), `release_milestone_with_fee` (pago de un hito con comisión de
 // plataforma) y `transfer_stream_client` (un pago por tiempo cambia de cliente
 // con la firma de los tres).
+//
+// v11 (27 de noviembre de 2026): los pagos por tiempo reciben los acuerdos de
+// la tarea simple (prorrogar, recortar, repartir, propina y disputa), y hay
+// operaciones por lote para pagos por tiempo y para hitos, más la propina de
+// un proyecto. En cada acuerdo sobre un pago por tiempo, el programador cobra
+// primero lo ya ganado: ningún cambio le quita lo liberado.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -250,6 +256,8 @@ pub enum DataKey {
     Stream(String),
     // v8: garantía del programador de una tarea (persistente).
     Bond(String),
+    // v11: quién abrió la disputa de un pago por tiempo (persistente).
+    StreamDispute(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -935,6 +943,40 @@ pub struct TransferStreamClientEvent {
     pub stream_id: String,
     pub old_client: Address,
     pub new_client: Address,
+}
+
+// v11: se cambió el periodo o el monto pendiente de un pago por tiempo (el
+// programador cobró `paid` de lo ya ganado y `remaining` sigue fluyendo).
+#[contractevent(topics = ["stream_change"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamChangeEvent {
+    #[topic]
+    pub stream_id: String,
+    pub action: soroban_sdk::Symbol,
+    pub paid: i128,
+    pub refunded: i128,
+    pub remaining: i128,
+    pub end: u64,
+}
+
+// v11: propina sobre un pago por tiempo o un proyecto.
+#[contractevent(topics = ["tip_v11"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TipV11Event {
+    #[topic]
+    pub id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub amount: i128,
+}
+
+// v11: se abrió la disputa de un pago por tiempo.
+#[contractevent(topics = ["open_stream_dispute"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenStreamDisputeEvent {
+    #[topic]
+    pub stream_id: String,
+    pub opened_by: Address,
 }
 
 #[contract]
@@ -3239,6 +3281,10 @@ impl CumpleYCobraContract {
         if stream.status != StreamStatus::Active {
             return Err(Error::NotFunded);
         }
+        // v11: con una disputa abierta, el cliente no puede cortar el pago por su cuenta.
+        if env.storage().persistent().has(&DataKey::StreamDispute(stream_id.clone())) {
+            return Err(Error::DisputeOpen);
+        }
         let vested = Self::vested(&env, &stream)?;
         if vested >= stream.amount {
             // Ya se liberó todo: no hay nada que cancelar.
@@ -3728,8 +3774,386 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v11: acuerdos sobre pagos por tiempo
+    // -----------------------------------------------------------------------
+
+    // Cliente y programador alargan un pago por tiempo activo. El programador
+    // cobra en la misma transacción lo ganado y no retirado, y lo que falta se
+    // libera desde ahora hasta el nuevo final (tope: 28 días desde ahora).
+    pub fn extend_stream(env: Env, stream_id: String, extra_secs: u64) -> Result<u64, Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::active_stream(&env, &key)?;
+        stream.client.require_auth();
+        stream.freelancer.require_auth();
+        if extra_secs == 0 {
+            return Err(Error::InvalidDeadline);
+        }
+        let new_end = stream.end.checked_add(extra_secs).ok_or(Error::InvalidDeadline)?;
+        let max = env
+            .ledger()
+            .timestamp()
+            .checked_add(MAX_MILESTONE_DEADLINE_SECS)
+            .ok_or(Error::InvalidDeadline)?;
+        if new_end > max {
+            return Err(Error::InvalidDeadline);
+        }
+        let (paid, remaining) = Self::settle_earned(&env, &mut stream)?;
+        stream.end = new_end;
+        Self::save_stream(&env, &key, &stream);
+        if paid > 0 {
+            Self::pay(&env, &stream.freelancer, paid)?;
+        }
+        Self::stream_event(&env, stream_id, "extend", paid, 0, remaining, new_end);
+        Ok(new_end)
+    }
+
+    // Cliente y programador recortan lo que falta por liberar: `reduce_amount`
+    // vuelve al cliente y el resto sigue fluyendo hasta el mismo final. El
+    // programador cobra antes lo ya ganado.
+    pub fn reduce_stream(env: Env, stream_id: String, reduce_amount: i128) -> Result<i128, Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::active_stream(&env, &key)?;
+        stream.client.require_auth();
+        stream.freelancer.require_auth();
+        let (paid, remaining) = Self::settle_earned(&env, &mut stream)?;
+        if reduce_amount <= 0 || reduce_amount >= remaining {
+            return Err(Error::InvalidAmount);
+        }
+        stream.amount = remaining - reduce_amount;
+        Self::save_stream(&env, &key, &stream);
+        if paid > 0 {
+            Self::pay(&env, &stream.freelancer, paid)?;
+        }
+        Self::pay(&env, &stream.client, reduce_amount)?;
+        Self::stream_event(&env, stream_id, "reduce", paid, reduce_amount, stream.amount, stream.end);
+        Ok(stream.amount)
+    }
+
+    // Cliente y programador cierran el pago por tiempo con un reparto: el
+    // programador recibe lo ganado más `freelancer_amount` de lo pendiente y
+    // el resto vuelve al cliente, en una transacción.
+    pub fn mutual_split_stream(
+        env: Env,
+        stream_id: String,
+        freelancer_amount: i128,
+    ) -> Result<(), Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::active_stream(&env, &key)?;
+        stream.client.require_auth();
+        stream.freelancer.require_auth();
+        let (paid, remaining) = Self::settle_earned(&env, &mut stream)?;
+        if freelancer_amount <= 0 || freelancer_amount >= remaining {
+            return Err(Error::InvalidAmount);
+        }
+        let refund = remaining - freelancer_amount;
+        Self::close_stream(&env, &key, &mut stream, freelancer_amount);
+        Self::pay(&env, &stream.freelancer, paid + freelancer_amount)?;
+        Self::pay(&env, &stream.client, refund)?;
+        Self::stream_event(&env, stream_id, "split", paid + freelancer_amount, refund, 0, stream.end);
+        Ok(())
+    }
+
+    // Propina del cliente al programador de un pago por tiempo (activo o
+    // terminado). Va directo entre ellos y deja un evento amarrado al pago.
+    pub fn tip_stream(env: Env, stream_id: String, amount: i128) -> Result<(), Error> {
+        let stream = Self::load_stream(&env, &DataKey::Stream(stream_id.clone()))?;
+        stream.client.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if stream.withdrawn <= 0 && Self::vested(&env, &stream)? <= 0 {
+            // Todavía no ha ganado nada: para eso existe top_up_stream.
+            return Err(Error::NothingToWithdraw);
+        }
+        token::Client::new(&env, &Self::token(&env)?).transfer(&stream.client, &stream.freelancer, &amount);
+        TipV11Event { id: stream_id, client: stream.client, freelancer: stream.freelancer, amount }.publish(&env);
+        Ok(())
+    }
+
+    // El cliente o el programador abre una disputa sobre un pago por tiempo
+    // activo. Mientras esté abierta, el cliente no puede cancelarlo por su
+    // cuenta (el dinero sigue liberándose); el árbitro la resuelve.
+    pub fn open_stream_dispute(env: Env, stream_id: String, by: Address) -> Result<(), Error> {
+        let stream = Self::active_stream(&env, &DataKey::Stream(stream_id.clone()))?;
+        by.require_auth();
+        if by != stream.client && by != stream.freelancer {
+            return Err(Error::NotParty);
+        }
+        let dkey = DataKey::StreamDispute(stream_id.clone());
+        if env.storage().persistent().has(&dkey) {
+            return Err(Error::DisputeOpen);
+        }
+        env.storage().persistent().set(&dkey, &by);
+        env.storage().persistent().extend_ttl(&dkey, TTL_THRESHOLD, TTL_EXTEND_TO);
+        OpenStreamDisputeEvent { stream_id, opened_by: by }.publish(&env);
+        Ok(())
+    }
+
+    // El árbitro resuelve la disputa de un pago por tiempo: el programador
+    // recibe lo ganado más `freelancer_amount` de lo pendiente (puede ser 0) y
+    // el resto vuelve al cliente. El pago queda cerrado.
+    pub fn resolve_stream_dispute(
+        env: Env,
+        stream_id: String,
+        freelancer_amount: i128,
+    ) -> Result<(), Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::load_stream(&env, &key)?;
+        if stream.status != StreamStatus::Active {
+            return Err(Error::NotFunded);
+        }
+        let dkey = DataKey::StreamDispute(stream_id.clone());
+        if !env.storage().persistent().has(&dkey) {
+            return Err(Error::NoDispute);
+        }
+        let (paid, remaining) = Self::settle_earned(&env, &mut stream)?;
+        if freelancer_amount < 0 || freelancer_amount > remaining {
+            return Err(Error::InvalidAmount);
+        }
+        let refund = remaining - freelancer_amount;
+        Self::close_stream(&env, &key, &mut stream, freelancer_amount);
+        env.storage().persistent().remove(&dkey);
+        if paid + freelancer_amount > 0 {
+            Self::pay(&env, &stream.freelancer, paid + freelancer_amount)?;
+        }
+        if refund > 0 {
+            Self::pay(&env, &stream.client, refund)?;
+        }
+        Self::stream_event(&env, stream_id, "resolve", paid + freelancer_amount, refund, 0, stream.end);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // v11: lotes y propina de proyecto
+    // -----------------------------------------------------------------------
+
+    // El cliente abre de 2 a 10 pagos por tiempo en una transacción y una sola
+    // transferencia. Cada uno con las reglas de `deposit_stream`.
+    pub fn batch_deposit_streams(
+        env: Env,
+        client: Address,
+        stream_ids: soroban_sdk::Vec<String>,
+        freelancers: soroban_sdk::Vec<Address>,
+        amounts: soroban_sdk::Vec<i128>,
+        durations_secs: soroban_sdk::Vec<u64>,
+    ) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        client.require_auth();
+        let n = stream_ids.len();
+        if !(2..=10).contains(&n) {
+            return Err(Error::TooManyItems);
+        }
+        if freelancers.len() != n || amounts.len() != n || durations_secs.len() != n {
+            return Err(Error::LengthMismatch);
+        }
+        let start = env.ledger().timestamp();
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let id = stream_ids.get(i).ok_or(Error::LengthMismatch)?;
+            let freelancer = freelancers.get(i).ok_or(Error::LengthMismatch)?;
+            let amount = amounts.get(i).ok_or(Error::LengthMismatch)?;
+            let duration = durations_secs.get(i).ok_or(Error::LengthMismatch)?;
+            if amount <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            if freelancer == client {
+                return Err(Error::NoChange);
+            }
+            if duration == 0 || duration > MAX_MILESTONE_DEADLINE_SECS {
+                return Err(Error::InvalidDeadline);
+            }
+            let key = DataKey::Stream(id.clone());
+            // También detecta ids repetidos dentro del mismo lote.
+            if env.storage().persistent().has(&key) {
+                return Err(Error::AlreadyExists);
+            }
+            let end = start.checked_add(duration).ok_or(Error::InvalidDeadline)?;
+            let stream = Stream {
+                stream_id: id,
+                client: client.clone(),
+                freelancer,
+                amount,
+                withdrawn: 0,
+                start,
+                end,
+                status: StreamStatus::Active,
+            };
+            Self::save_stream(&env, &key, &stream);
+            total = total.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        }
+        Self::collect(&env, &client, total)?;
+        Ok(total)
+    }
+
+    // El cliente cancela de 1 a 20 pagos por tiempo suyos en una transacción;
+    // cada uno con las reglas de `cancel_stream`. Los que no se pueden
+    // cancelar (terminados, cancelados, de otro cliente o en disputa) se
+    // omiten. Devuelve cuántos canceló.
+    pub fn cancel_stream_batch(
+        env: Env,
+        client: Address,
+        stream_ids: soroban_sdk::Vec<String>,
+    ) -> Result<u32, Error> {
+        client.require_auth();
+        if stream_ids.is_empty() || stream_ids.len() > MAX_BATCH_READ {
+            return Err(Error::TooManyItems);
+        }
+        let mut count: u32 = 0;
+        for id in stream_ids.iter() {
+            let key = DataKey::Stream(id.clone());
+            let mut stream: Stream = match env.storage().persistent().get(&key) {
+                Some(s) => s,
+                None => continue,
+            };
+            if stream.client != client
+                || stream.status != StreamStatus::Active
+                || env.storage().persistent().has(&DataKey::StreamDispute(id.clone()))
+            {
+                continue;
+            }
+            let vested = Self::vested(&env, &stream)?;
+            if vested >= stream.amount {
+                continue;
+            }
+            let earned = vested - stream.withdrawn;
+            let refund = stream.amount - vested;
+            stream.status = StreamStatus::Canceled;
+            stream.amount = vested;
+            stream.withdrawn = vested;
+            Self::save_stream(&env, &key, &stream);
+            if earned > 0 {
+                Self::pay(&env, &stream.freelancer, earned)?;
+            }
+            Self::pay(&env, &client, refund)?;
+            Self::stream_event(&env, id, "cancel", earned, refund, 0, stream.end);
+            count += 1;
+        }
+        if count == 0 {
+            return Err(Error::NotFunded);
+        }
+        Ok(count)
+    }
+
+    // El árbitro paga de 2 a 10 hitos de un proyecto en una transacción y una
+    // sola transferencia; cada hito con las reglas de `release_milestone`. Si
+    // uno falla (repetido, vencido o ya cerrado) se revierte todo.
+    pub fn release_milestones_batch(
+        env: Env,
+        task_id: String,
+        indices: soroban_sdk::Vec<u32>,
+        freelancer: Address,
+        code_hashes: soroban_sdk::Vec<BytesN<32>>,
+        verdict_hashes: soroban_sdk::Vec<BytesN<32>>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+        let n = indices.len();
+        if !(2..=10).contains(&n) {
+            return Err(Error::TooManyItems);
+        }
+        if code_hashes.len() != n || verdict_hashes.len() != n {
+            return Err(Error::LengthMismatch);
+        }
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        Self::bind_freelancer(&mut project, &freelancer)?;
+        let now = env.ledger().timestamp();
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let index = indices.get(i).ok_or(Error::LengthMismatch)?;
+            let mut m = Self::funded_milestone(&project, index)?;
+            if now >= m.deadline {
+                return Err(Error::DeadlinePassed);
+            }
+            m.status = MilestoneStatus::Released;
+            total = total.checked_add(m.amount).ok_or(Error::InvalidAmount)?;
+            project.milestones.set(index, m.clone());
+            MilestoneReleaseEvent {
+                task_id: task_id.clone(),
+                index,
+                freelancer: freelancer.clone(),
+                amount: m.amount,
+                code_hash: code_hashes.get(i).ok_or(Error::LengthMismatch)?,
+                verdict_hash: verdict_hashes.get(i).ok_or(Error::LengthMismatch)?,
+            }
+            .publish(&env);
+        }
+        Self::save_project(&env, &key, &project);
+        Self::pay(&env, &freelancer, total)?;
+        Ok(total)
+    }
+
+    // Propina del cliente al programador fijado de un proyecto con al menos un
+    // hito pagado. Va directo entre ellos, con evento amarrado al proyecto.
+    pub fn tip_project(env: Env, task_id: String, amount: i128) -> Result<(), Error> {
+        let project = Self::load_project(&env, &DataKey::Project(task_id.clone()))?;
+        project.client.require_auth();
+        let freelancer = Self::project_freelancer(&project)?;
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let mut any_released = false;
+        for m in project.milestones.iter() {
+            if m.status == MilestoneStatus::Released {
+                any_released = true;
+            }
+        }
+        if !any_released {
+            return Err(Error::NotFunded);
+        }
+        token::Client::new(&env, &Self::token(&env)?).transfer(&project.client, &freelancer, &amount);
+        TipV11Event { id: task_id, client: project.client, freelancer, amount }.publish(&env);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v11: pago por tiempo activo y sin terminar (`NotFunded` si no).
+    fn active_stream(env: &Env, key: &DataKey) -> Result<Stream, Error> {
+        let stream = Self::load_stream(env, key)?;
+        if stream.status != StreamStatus::Active || env.ledger().timestamp() >= stream.end {
+            return Err(Error::NotFunded);
+        }
+        Ok(stream)
+    }
+
+    // v11: separa lo ganado y no retirado (`paid`, a pagar al programador) de
+    // lo que falta por liberar (`remaining`), y reinicia el pago desde ahora
+    // con `remaining` como monto. No transfiere: lo hace quien llama.
+    fn settle_earned(env: &Env, stream: &mut Stream) -> Result<(i128, i128), Error> {
+        let vested = Self::vested(env, stream)?;
+        let paid = vested.checked_sub(stream.withdrawn).ok_or(Error::InvalidAmount)?;
+        let remaining = stream.amount.checked_sub(vested).ok_or(Error::InvalidAmount)?;
+        stream.amount = remaining;
+        stream.withdrawn = 0;
+        stream.start = env.ledger().timestamp();
+        Ok((paid, remaining))
+    }
+
+    // v11: cierra un pago por tiempo (tras settle_earned) dejando constancia
+    // de lo que recibió el programador de lo pendiente.
+    fn close_stream(env: &Env, key: &DataKey, stream: &mut Stream, freelancer_part: i128) {
+        stream.status = StreamStatus::Canceled;
+        stream.amount = freelancer_part;
+        stream.withdrawn = freelancer_part;
+        Self::save_stream(env, key, stream);
+    }
+
+    fn stream_event(env: &Env, stream_id: String, action: &str, paid: i128, refunded: i128, remaining: i128, end: u64) {
+        StreamChangeEvent {
+            stream_id,
+            action: soroban_sdk::Symbol::new(env, action),
+            paid,
+            refunded,
+            remaining,
+            end,
+        }
+        .publish(env);
+    }
 
     // v8: lo liberado de un pago por tiempo hasta ahora (lineal en el tiempo).
     // Un pago cancelado ya no libera más: su `amount` es lo ganado al cancelar.
@@ -3973,3 +4397,6 @@ mod test_v9;
 
 // Pruebas de v10.
 mod test_v10;
+
+// Pruebas de v11.
+mod test_v11;
