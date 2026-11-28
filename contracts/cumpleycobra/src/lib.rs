@@ -260,6 +260,21 @@ pub struct Bounty {
     pub rules_hash: BytesN<32>,
 }
 
+// v14: acuerdo recurrente por ciclos/sprints (`Retainer`). En cada ciclo se
+// puede liberar `period_amount` (árbitro) o reembolsar si venció sin entrega.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Retainer {
+    pub retainer_id: String,
+    pub client: Address,
+    pub freelancer: Address,
+    pub period_amount: i128,
+    pub period_secs: u64,
+    pub start: u64,
+    pub current_cycle: u32,
+    pub total_cycles: u32,
+}
+
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
@@ -291,6 +306,8 @@ pub enum DataKey {
     ProjectBond(String),
     // v14: concurso multi-ganador (persistente).
     Bounty(String),
+    // v14: acuerdo recurrente por ciclos (persistente).
+    Retainer(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -4772,6 +4789,140 @@ impl CumpleYCobraContract {
         Self::extend_instance(&env);
         Self::pay(&env, &bounty.client, refund)?;
         Self::v14_event(&env, "refund_bounty", bounty_id, bounty.client, refund, 0);
+        Ok(refund)
+    }
+
+    // -----------------------------------------------------------------------
+    // v14 (lote 2): acuerdos recurrentes por ciclos (`Retainer`)
+    // -----------------------------------------------------------------------
+
+    // El cliente deposita de 2 a 12 ciclos fijos de `period_amount` para un
+    // programador (`freelancer`). La duración total queda dentro de 28 días.
+    pub fn create_retainer(
+        env: Env,
+        client: Address,
+        retainer_id: String,
+        freelancer: Address,
+        period_amount: i128,
+        period_secs: u64,
+        cycles: u32,
+    ) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        client.require_auth();
+        if freelancer == client {
+            return Err(Error::NoChange);
+        }
+        if period_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if !(2..=12).contains(&cycles) {
+            return Err(Error::InvalidMilestones);
+        }
+        let span = period_secs.checked_mul(cycles as u64).ok_or(Error::InvalidDeadline)?;
+        if period_secs == 0 || span > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let key = DataKey::Retainer(retainer_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let total = period_amount.checked_mul(cycles as i128).ok_or(Error::InvalidAmount)?;
+        let start = env.ledger().timestamp();
+        start.checked_add(span).ok_or(Error::InvalidDeadline)?;
+
+        let retainer = Retainer {
+            retainer_id: retainer_id.clone(),
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            period_amount,
+            period_secs,
+            start,
+            current_cycle: 0,
+            total_cycles: cycles,
+        };
+        env.storage().persistent().set(&key, &retainer);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::collect(&env, &client, total)?;
+        Self::v14_event(&env, "create_retainer", retainer_id, freelancer, total, cycles as i128);
+        Ok(total)
+    }
+
+    // El árbitro libera el pago del ciclo vigente antes de que venza su plazo.
+    // Devuelve cuántos ciclos quedan pendientes.
+    pub fn release_retainer_cycle(
+        env: Env,
+        retainer_id: String,
+        deliverable_hash: BytesN<32>,
+    ) -> Result<u32, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+        let key = DataKey::Retainer(retainer_id.clone());
+        let mut r: Retainer = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if r.current_cycle >= r.total_cycles {
+            return Err(Error::NotFunded);
+        }
+        let cycle_end = r
+            .start
+            .checked_add(r.period_secs.checked_mul((r.current_cycle + 1) as u64).ok_or(Error::InvalidDeadline)?)
+            .ok_or(Error::InvalidDeadline)?;
+        if env.ledger().timestamp() >= cycle_end {
+            return Err(Error::DeadlinePassed);
+        }
+        let _ = deliverable_hash;
+        r.current_cycle += 1;
+        let left = r.total_cycles - r.current_cycle;
+        env.storage().persistent().set(&key, &r);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::pay(&env, &r.freelancer, r.period_amount)?;
+        Self::v14_event(&env, "release_retainer", retainer_id, r.freelancer, r.period_amount, left as i128);
+        Ok(left)
+    }
+
+    // Cualquiera reembolsa un ciclo vencido sin liberar y avanza el contador
+    // al siguiente ciclo. El dinero del ciclo perdido vuelve siempre al cliente.
+    pub fn refund_expired_retainer_cycle(env: Env, retainer_id: String) -> Result<u32, Error> {
+        let key = DataKey::Retainer(retainer_id.clone());
+        let mut r: Retainer = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if r.current_cycle >= r.total_cycles {
+            return Err(Error::NotFunded);
+        }
+        let cycle_end = r
+            .start
+            .checked_add(r.period_secs.checked_mul((r.current_cycle + 1) as u64).ok_or(Error::InvalidDeadline)?)
+            .ok_or(Error::InvalidDeadline)?;
+        if env.ledger().timestamp() < cycle_end {
+            return Err(Error::DeadlineNotReached);
+        }
+        r.current_cycle += 1;
+        let left = r.total_cycles - r.current_cycle;
+        env.storage().persistent().set(&key, &r);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::pay(&env, &r.client, r.period_amount)?;
+        Self::v14_event(&env, "refund_retainer", retainer_id, r.client, r.period_amount, left as i128);
+        Ok(left)
+    }
+
+    // Cliente y programador acuerdan cerrar los ciclos restantes del retainer:
+    // todo lo pendiente vuelve al cliente en una sola transferencia.
+    pub fn cancel_retainer(env: Env, retainer_id: String) -> Result<i128, Error> {
+        let key = DataKey::Retainer(retainer_id.clone());
+        let mut r: Retainer = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        r.client.require_auth();
+        r.freelancer.require_auth();
+        if r.current_cycle >= r.total_cycles {
+            return Err(Error::NotFunded);
+        }
+        let remaining_cycles = (r.total_cycles - r.current_cycle) as i128;
+        let refund = r.period_amount.checked_mul(remaining_cycles).ok_or(Error::InvalidAmount)?;
+        r.current_cycle = r.total_cycles;
+        env.storage().persistent().set(&key, &r);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::pay(&env, &r.client, refund)?;
+        Self::v14_event(&env, "cancel_retainer", retainer_id, r.client, refund, remaining_cycles);
         Ok(refund)
     }
 

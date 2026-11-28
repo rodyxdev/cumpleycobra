@@ -99,3 +99,50 @@ fn v14_bounty_multi_ganador_recarga_y_reembolso() {
     );
     assert!(est.c.try_award_bounty(&eid, &est.freelancer, &UNIT, &h(&est.env, 6)).is_err());
 }
+
+#[test]
+fn v14_retainer_ciclos_reembolso_y_cancelacion_mutua() {
+    let ctx = setup(Modo::Libre);
+    let rid = String::from_str(&ctx.env, "ret-1");
+
+    // 3 ciclos de 2 USDC cada uno (1 día por ciclo = 6 USDC).
+    assert_eq!(
+        ctx.c.create_retainer(&ctx.client, &rid, &ctx.freelancer, &(2 * UNIT), &DIA, &3),
+        6 * UNIT
+    );
+    assert_eq!(ctx.c.try_refund_expired_retainer_cycle(&rid), Err(Ok(Error::DeadlineNotReached)));
+
+    // Ciclo 0 se libera antes de vencer -> quedan 2 ciclos.
+    assert_eq!(ctx.c.release_retainer_cycle(&rid, &h(&ctx.env, 10)), 2);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 2 * UNIT);
+
+    // Pasan 2 días: vence ciclo 1 (cycle_end = START_TS + 2*DIA), no se puede liberar, se reembolsa.
+    ctx.env.ledger().set_timestamp(START_TS + 2 * DIA);
+    assert_eq!(
+        ctx.c.try_release_retainer_cycle(&rid, &h(&ctx.env, 11)),
+        Err(Ok(Error::DeadlinePassed))
+    );
+    assert_eq!(ctx.c.refund_expired_retainer_cycle(&rid), 1);
+
+    // Cliente y programador acuerdan cerrar el ciclo 2 restante -> devuelve 2 USDC.
+    assert_eq!(ctx.c.cancel_retainer(&rid), 2 * UNIT);
+    assert_eq!(ctx.c.try_cancel_retainer(&rid), Err(Ok(Error::NotFunded)));
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 2 * UNIT);
+    cuadra(&ctx);
+
+    // Modo estricto: `cancel_retainer` falla si solo firma el cliente (sin el programador).
+    let est = setup(Modo::Estricto);
+    let erid = String::from_str(&est.env, "ret-strict");
+    firma_deposito(
+        &est,
+        &est.client,
+        "create_retainer",
+        (&est.client, &erid, &est.freelancer, UNIT, DIA, 2u32).into_val(&est.env),
+        2 * UNIT,
+    );
+    est.c.create_retainer(&est.client, &erid, &est.freelancer, &UNIT, &DIA, &2);
+    firmas(&est, &[&est.client], "cancel_retainer", (&erid,).into_val(&est.env));
+    assert!(est.c.try_cancel_retainer(&erid).is_err());
+    firmas(&est, &[&est.client, &est.freelancer], "cancel_retainer", (&erid,).into_val(&est.env));
+    assert_eq!(est.c.cancel_retainer(&erid), 2 * UNIT);
+}
