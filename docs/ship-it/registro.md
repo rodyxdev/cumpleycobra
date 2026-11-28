@@ -52,7 +52,7 @@ Del 23 al 27 de noviembre de 2026. Cuentan los commits a `main` por su calidad, 
 | 27 nov | Mainnet · preparación | [`d0ea61d`](https://github.com/rodyxdev/cumpleycobra/commit/d0ea61d), [`ea68482`](https://github.com/rodyxdev/cumpleycobra/commit/ea68482) | Página `/mainnet` (experimental, firma con Freighter), script de despliegue y `docs/mainnet.md` |
 | 27 nov | Suma más · Función nueva | [`00526f6`](https://github.com/rodyxdev/cumpleycobra/commit/00526f6) | Contrato v9: `top_up_stream`, `reassign_stream`, `slash_bond_partial` y `release_with_fee` (113 tests en verde) |
 | 27 nov | Suma más · Función nueva | [`5b9d457`](https://github.com/rodyxdev/cumpleycobra/commit/5b9d457) | v9 desplegado en testnet (`CBFH6QNU…UFSY7`) y corrida real `1795830743` de sus 4 funciones (`scripts/v9_testnet.sh`): saldo final 0 USDC |
-| 27 nov | Suma más · Función nueva | [`3b3c2a9`](https://github.com/rodyxdev/cumpleycobra/commits/main) | Contrato v10 en testnet (`CDNYUAAS…7W3H`): `top_up_bond`, `release_milestone_with_fee` y `transfer_stream_client`, con corrida real (`scripts/v10_testnet.sh`) y 119 tests en verde |
+| 27 nov | Suma más · Función nueva | [`536f5b6`](https://github.com/rodyxdev/cumpleycobra/commit/536f5b6), [`1232cc3`](https://github.com/rodyxdev/cumpleycobra/commit/1232cc3) | Contrato v10 en testnet (`CDNYUAAS…7W3H`): `top_up_bond`, `release_milestone_with_fee` y `transfer_stream_client`, con corrida real (`scripts/v10_testnet.sh`) y 119 tests en verde |
 
 ## Funciones experimentales (por revisar)
 
