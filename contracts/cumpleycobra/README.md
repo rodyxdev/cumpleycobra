@@ -458,3 +458,37 @@ Explorador: https://stellar.expert/explorer/testnet/contract/CB3VPJSLGWIAO3LQNZE
 bash scripts/v8_testnet.sh
 ```
 
+## v9: recarga y relevo de pagos por tiempo, reparto de garantía y pago con comisión (27 de noviembre de 2026)
+
+**Los contratos v1 a v8 desplegados no se modifican:** v9 es otra instancia, con el mismo árbitro y el mismo USDC de testnet.
+
+| | |
+| --- | --- |
+| ID del contrato v9 (testnet) | `CBFH6QNU5JPG3GL2EKHRQVQASYHEODHJGSH6COOC2WVCRW5GNYAUFSY7` |
+| WASM hash (`stellar contract build --optimize`) | `977a15486a9679e147823df261d450c3890c0a3671db25e8265cef48d012f35f` (63 278 bytes) |
+| Despliegue | tx [`3eb5f6f2…`](https://stellar.expert/explorer/testnet/tx/3eb5f6f2d64f1df75b583d907d606983393cd980f20c6bf25933c7659c8af31d) (`--alias cumpleycobra-v9`) |
+| `initialize` | tx [`fbcea942…`](https://stellar.expert/explorer/testnet/tx/fbcea942687d42d3a3433695d4b2a986263984a3c319d901c031fb309dcd6d73) |
+| Tests | `cargo test -p cumpleycobra`: 113 en verde (7 de v9 en `src/test_v9.rs`), 0 advertencias |
+
+**Funciones nuevas:**
+
+| Función | Quién firma | Reglas |
+| --- | --- | --- |
+| `top_up_stream(stream_id, amount) -> u64` | Cliente | Pago activo y sin terminar; el final se recorre `amount × duración / monto` para conservar la tarifa por segundo; tope de 28 días desde ahora; respeta la pausa |
+| `reassign_stream(stream_id, new_freelancer) -> i128` | Cliente + programador actual + programador nuevo | El actual cobra en la misma transacción lo liberado y no retirado; lo que falta fluye al nuevo desde ahora hasta el mismo final |
+| `slash_bond_partial(task_id, client_amount)` | Árbitro | Tarea `Refunded`; `0 < client_amount < garantía`; el resto vuelve al programador |
+| `release_with_fee(task_id, freelancer, code_hash, verdict_hash, fee_to, fee_bps) -> i128` | Árbitro | Reglas de `release`; comisión de 1 a 1000 puntos base (máximo 10%) a `fee_to`, que no puede ser el programador ni el cliente |
+
+**Corrida real en testnet** con [`scripts/v9_testnet.sh`](../../scripts/v9_testnet.sh) (corrida `1795830743`; al final `get_stats` dio `held` 0, igual al saldo real del contrato):
+
+| Función | Quién firmó | Qué pasó | tx |
+| --- | --- | --- | --- |
+| `top_up_stream` | `cyc-client` | +0.01 USDC a un pago de 0.02 en 300 s; el final se recorrió 150 s | [`176a4e08…`](https://stellar.expert/explorer/testnet/tx/176a4e085709b24936cbe0c3c55e7aa8472d48b83940c0a4a1f40205ee897f0a) |
+| `reassign_stream` | `cyc-client` + `cyc-freelancer` + `cyc-third` | `cyc-freelancer` cobró lo ganado y el resto siguió a `cyc-third` | [`30c76499…`](https://stellar.expert/explorer/testnet/tx/30c76499f94e64b380389900f545d6261b875ec913599a1201eabde36e9c6fd4) |
+| `slash_bond_partial` | `cyc-arbiter` | Tarea reembolsada: de la garantía de 0.01, 0.004 al cliente y 0.006 de vuelta al programador | [`05e4e72e…`](https://stellar.expert/explorer/testnet/tx/05e4e72ecfb8596efb5702e716426fc2e635ffd77cae8658b5443508736c9262) |
+| `release_with_fee` | `cyc-arbiter` | 0.02 con 10% de comisión: 0.018 al programador y 0.002 a la plataforma (`cyc-third`) | [`d0223804…`](https://stellar.expert/explorer/testnet/tx/d022380498693010ae56a34a8384e9f322fc4165a35592b6cb77d179bb89cfb2) |
+
+```bash
+bash scripts/v9_testnet.sh
+```
+
