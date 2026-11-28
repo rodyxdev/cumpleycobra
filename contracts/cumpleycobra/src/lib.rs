@@ -79,6 +79,13 @@
 // v12 (27 de noviembre de 2026): aprobación manual parcial del cliente (tarea
 // y hito), garantía del programador para proyectos por hitos y retiro de
 // varios pagos por tiempo a la vez.
+//
+// v13 (27 de noviembre de 2026): aprobación manual con comisión de plataforma
+// (tarea y hito), patrocinio de terceros (un tercero aporta a una tarea, un
+// hito o un pago por tiempo; el reembolso sigue siendo del cliente), aumento de
+// la garantía de proyecto, prórroga de todos los hitos de un proyecto, retiro
+// de un pago por tiempo a otra dirección, reembolso por lote de proyectos
+// vencidos y reparto acordado de todo lo pendiente de un proyecto.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -1015,6 +1022,19 @@ pub struct WithdrawStreamBatchEvent {
     pub freelancer: Address,
     pub count: u32,
     pub total: i128,
+}
+
+// v13: operación genérica de v13 sobre una tarea, hito, proyecto o pago por tiempo.
+#[contractevent(topics = ["v13"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct V13Event {
+    #[topic]
+    pub action: soroban_sdk::Symbol,
+    #[topic]
+    pub id: String,
+    pub who: Address,
+    pub amount: i128,
+    pub extra: i128,
 }
 
 #[contract]
@@ -4306,8 +4326,326 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v13
+    // -----------------------------------------------------------------------
+
+    // Aprobación manual del cliente con comisión de plataforma (1 a 1000
+    // puntos base): el programador recibe el monto menos la comisión, que va a
+    // `fee_to`. Mismas reglas que `client_release` (también tras el plazo).
+    pub fn client_release_with_fee(
+        env: Env,
+        task_id: String,
+        freelancer: Address,
+        fee_to: Address,
+        fee_bps: u32,
+    ) -> Result<i128, Error> {
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        task.client.require_auth();
+        Self::check_assigned(&task, &freelancer)?;
+        let (net, fee) = Self::split_fee(task.amount, fee_bps, &fee_to, &freelancer, &task.client)?;
+        task.status = TaskStatus::Released;
+        task.freelancer = Some(freelancer.clone());
+        Self::save_task(&env, &key, &task);
+        Self::pay(&env, &freelancer, net)?;
+        Self::pay(&env, &fee_to, fee)?;
+        Self::v13_event(&env, "client_fee", task_id, freelancer, net, fee);
+        Ok(net)
+    }
+
+    // Lo mismo para un hito: el cliente aprueba manualmente con comisión.
+    pub fn client_release_milestone_fee(
+        env: Env,
+        task_id: String,
+        index: u32,
+        freelancer: Address,
+        fee_to: Address,
+        fee_bps: u32,
+    ) -> Result<i128, Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        project.client.require_auth();
+        let mut m = Self::funded_milestone(&project, index)?;
+        Self::bind_freelancer(&mut project, &freelancer)?;
+        let (net, fee) = Self::split_fee(m.amount, fee_bps, &fee_to, &freelancer, &project.client)?;
+        m.status = MilestoneStatus::Released;
+        project.milestones.set(index, m);
+        Self::save_project(&env, &key, &project);
+        Self::pay(&env, &freelancer, net)?;
+        Self::pay(&env, &fee_to, fee)?;
+        Self::v13_event(&env, "client_milestone_fee", task_id, freelancer, net, fee);
+        Ok(net)
+    }
+
+    // Un tercero (patrocinador) aporta USDC a una tarea depositada, antes del
+    // plazo. El aporte se suma al pago; si la tarea se reembolsa, todo vuelve
+    // al cliente (el patrocinio es un regalo al acuerdo, no un préstamo).
+    pub fn contribute_task(env: Env, funder: Address, task_id: String, amount: i128) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        funder.require_auth();
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if funder == task.client {
+            return Err(Error::NoChange);
+        }
+        task.amount = task.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        Self::save_task(&env, &key, &task);
+        Self::collect(&env, &funder, amount)?;
+        Self::v13_event(&env, "contribute_task", task_id, funder, amount, task.amount);
+        Ok(task.amount)
+    }
+
+    // Patrocinio de un hito: un tercero aporta a un hito en Funded antes de
+    // su plazo. Lo reembolsado vuelve al cliente del proyecto.
+    pub fn contribute_milestone(
+        env: Env,
+        funder: Address,
+        task_id: String,
+        index: u32,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        funder.require_auth();
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let mut m = Self::funded_milestone(&project, index)?;
+        if env.ledger().timestamp() >= m.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if funder == project.client {
+            return Err(Error::NoChange);
+        }
+        m.amount = m.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        let new_amount = m.amount;
+        project.milestones.set(index, m);
+        Self::save_project(&env, &key, &project);
+        Self::collect(&env, &funder, amount)?;
+        Self::v13_event(&env, "contribute_milestone", task_id, funder, amount, new_amount);
+        Ok(new_amount)
+    }
+
+    // Patrocinio de un pago por tiempo activo: el aporte se reparte en lo que
+    // falta del periodo (el final no cambia, la tarifa sube). El programador
+    // cobra antes lo ya ganado; si se cancela, lo no liberado vuelve al cliente.
+    pub fn contribute_stream(env: Env, funder: Address, stream_id: String, amount: i128) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        funder.require_auth();
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::active_stream(&env, &key)?;
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if funder == stream.client || funder == stream.freelancer {
+            return Err(Error::NoChange);
+        }
+        let (paid, remaining) = Self::settle_earned(&env, &mut stream)?;
+        stream.amount = remaining.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        Self::save_stream(&env, &key, &stream);
+        Self::collect(&env, &funder, amount)?;
+        if paid > 0 {
+            Self::pay(&env, &stream.freelancer, paid)?;
+        }
+        Self::v13_event(&env, "contribute_stream", stream_id, funder, amount, stream.amount);
+        Ok(stream.amount)
+    }
+
+    // El programador aumenta la garantía de un proyecto mientras quede algún
+    // hito con dinero.
+    pub fn top_up_project_bond(env: Env, task_id: String, amount: i128) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        let key = DataKey::ProjectBond(task_id.clone());
+        let mut bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        bond.freelancer.require_auth();
+        let project = Self::load_project(&env, &DataKey::Project(task_id.clone()))?;
+        Self::require_funded_milestone(&project)?;
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        bond.amount = bond.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        env.storage().persistent().set(&key, &bond);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::collect(&env, &bond.freelancer, amount)?;
+        Self::v13_event(&env, "top_up_project_bond", task_id, bond.freelancer, amount, bond.amount);
+        Ok(bond.amount)
+    }
+
+    // El cliente prorroga de una vez todos los hitos de un proyecto que siguen
+    // en Funded, `extra_secs` cada uno (el orden de los plazos se conserva).
+    // Ningún plazo puede quedar a más de 28 días de ahora. Devuelve cuántos.
+    pub fn extend_project_deadlines(env: Env, task_id: String, extra_secs: u64) -> Result<u32, Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        project.client.require_auth();
+        if extra_secs == 0 {
+            return Err(Error::InvalidDeadline);
+        }
+        let max = env
+            .ledger()
+            .timestamp()
+            .checked_add(MAX_MILESTONE_DEADLINE_SECS)
+            .ok_or(Error::InvalidDeadline)?;
+        let mut count: u32 = 0;
+        for i in 0..project.milestones.len() {
+            let mut m = project.milestones.get(i).ok_or(Error::MilestoneNotFound)?;
+            if m.status != MilestoneStatus::Funded {
+                continue;
+            }
+            m.deadline = m.deadline.checked_add(extra_secs).ok_or(Error::InvalidDeadline)?;
+            if m.deadline > max {
+                return Err(Error::InvalidDeadline);
+            }
+            project.milestones.set(i, m);
+            count += 1;
+        }
+        if count == 0 {
+            return Err(Error::NotFunded);
+        }
+        Self::save_project(&env, &key, &project);
+        Self::v13_event(&env, "extend_project", task_id, project.client, count as i128, extra_secs as i128);
+        Ok(count)
+    }
+
+    // El programador retira lo liberado de un pago por tiempo hacia otra
+    // dirección suya (por ejemplo, la de un exchange o la de su empresa).
+    pub fn withdraw_stream_to(env: Env, stream_id: String, to: Address) -> Result<i128, Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::load_stream(&env, &key)?;
+        stream.freelancer.require_auth();
+        if to == stream.freelancer {
+            return Err(Error::NoChange);
+        }
+        let available = Self::vested(&env, &stream)?
+            .checked_sub(stream.withdrawn)
+            .ok_or(Error::InvalidAmount)?;
+        if available <= 0 {
+            return Err(Error::NothingToWithdraw);
+        }
+        stream.withdrawn += available;
+        Self::save_stream(&env, &key, &stream);
+        Self::pay(&env, &to, available)?;
+        Self::v13_event(&env, "withdraw_to", stream_id, to, available, stream.withdrawn);
+        Ok(available)
+    }
+
+    // Cualquiera reembolsa de una vez los hitos vencidos de 1 a 10 proyectos,
+    // cada uno a su cliente. Omite los hitos congelados por disputa y los
+    // proyectos sin nada vencido. Devuelve cuántos hitos reembolsó.
+    pub fn refund_expired_projects_batch(
+        env: Env,
+        task_ids: soroban_sdk::Vec<String>,
+    ) -> Result<u32, Error> {
+        if task_ids.is_empty() || task_ids.len() > 10 {
+            return Err(Error::TooManyItems);
+        }
+        let now = env.ledger().timestamp();
+        let mut total_count: u32 = 0;
+        for task_id in task_ids.iter() {
+            let key = DataKey::Project(task_id.clone());
+            let mut project: Project = match env.storage().persistent().get(&key) {
+                Some(p) => p,
+                None => continue,
+            };
+            let mut refund: i128 = 0;
+            for i in 0..project.milestones.len() {
+                let mut m = project.milestones.get(i).ok_or(Error::MilestoneNotFound)?;
+                if m.status != MilestoneStatus::Funded || now < m.deadline {
+                    continue;
+                }
+                if Self::frozen(&env, &DataKey::MilestoneDispute(task_id.clone(), i), m.deadline)? {
+                    continue;
+                }
+                refund = refund.checked_add(m.amount).ok_or(Error::InvalidAmount)?;
+                m.status = MilestoneStatus::Refunded;
+                project.milestones.set(i, m);
+                total_count += 1;
+            }
+            if refund > 0 {
+                Self::save_project(&env, &key, &project);
+                Self::pay(&env, &project.client, refund)?;
+                Self::v13_event(&env, "refund_projects", task_id, project.client.clone(), refund, 0);
+            }
+        }
+        if total_count == 0 {
+            return Err(Error::DeadlineNotReached);
+        }
+        Ok(total_count)
+    }
+
+    // Cliente y programador fijado cierran un proyecto con un reparto de todo
+    // lo pendiente: `freelancer_amount` al programador y el resto al cliente,
+    // en una transacción. Todos los hitos en Funded quedan cerrados.
+    pub fn mutual_split_project(env: Env, task_id: String, freelancer_amount: i128) -> Result<(), Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let freelancer = Self::project_freelancer(&project)?;
+        project.client.require_auth();
+        freelancer.require_auth();
+        let mut pending: i128 = 0;
+        for i in 0..project.milestones.len() {
+            let mut m = project.milestones.get(i).ok_or(Error::MilestoneNotFound)?;
+            if m.status == MilestoneStatus::Funded {
+                pending = pending.checked_add(m.amount).ok_or(Error::InvalidAmount)?;
+                m.status = MilestoneStatus::Released;
+                project.milestones.set(i, m);
+            }
+        }
+        if pending == 0 {
+            return Err(Error::NotFunded);
+        }
+        if freelancer_amount <= 0 || freelancer_amount >= pending {
+            return Err(Error::InvalidAmount);
+        }
+        Self::save_project(&env, &key, &project);
+        Self::pay(&env, &freelancer, freelancer_amount)?;
+        Self::pay(&env, &project.client, pending - freelancer_amount)?;
+        Self::v13_event(&env, "split_project", task_id, freelancer, freelancer_amount, pending - freelancer_amount);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v13: separa `amount` en lo que recibe el programador y la comisión.
+    fn split_fee(
+        amount: i128,
+        fee_bps: u32,
+        fee_to: &Address,
+        freelancer: &Address,
+        client: &Address,
+    ) -> Result<(i128, i128), Error> {
+        if fee_bps == 0 || fee_bps > MAX_FEE_BPS {
+            return Err(Error::InvalidAmount);
+        }
+        if fee_to == freelancer || fee_to == client {
+            return Err(Error::NoChange);
+        }
+        let fee = amount.checked_mul(fee_bps as i128).ok_or(Error::InvalidAmount)? / 10_000;
+        if fee <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        Ok((amount - fee, fee))
+    }
+
+    fn v13_event(env: &Env, action: &str, id: String, who: Address, amount: i128, extra: i128) {
+        V13Event {
+            action: soroban_sdk::Symbol::new(env, action),
+            id,
+            who,
+            amount,
+            extra,
+        }
+        .publish(env);
+    }
 
     // v12: cuántos hitos hay en Funded, Released y Refunded.
     fn milestone_counts(project: &Project) -> (u32, u32, u32) {
@@ -4623,3 +4961,6 @@ mod test_v11;
 
 // Pruebas de v12.
 mod test_v12;
+
+// Pruebas de v13.
+mod test_v13;
