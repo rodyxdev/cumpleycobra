@@ -86,6 +86,12 @@
 // la garantía de proyecto, prórroga de todos los hitos de un proyecto, retiro
 // de un pago por tiempo a otra dirección, reembolso por lote de proyectos
 // vencidos y reparto acordado de todo lo pendiente de un proyecto.
+//
+// v14 (27 de noviembre de 2026): nuevos mecanismos de escrow en USDC: concursos
+// multi-ganador (`Bounty`), acuerdos por ciclos/retainer (`Retainer`),
+// financiamiento colectivo con reembolso proporcional (`CrowdfundTask`), tareas
+// en equipo con reparto automático en bps (`TeamTask`), pagos por tiempo con
+// cliff (`StreamCliff`) y conversión entre acuerdos activos.
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -242,6 +248,18 @@ pub struct Bond {
     pub amount: i128,
 }
 
+// v14: concurso multi-ganador con fondo abierto. El árbitro premia a distintos
+// ganadores mientras quede saldo y antes del plazo; lo sobrante vuelve al cliente.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bounty {
+    pub bounty_id: String,
+    pub client: Address,
+    pub remaining: i128,
+    pub deadline: u64,
+    pub rules_hash: BytesN<32>,
+}
+
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
@@ -271,6 +289,8 @@ pub enum DataKey {
     StreamDispute(String),
     // v12: garantía del programador sobre un proyecto por hitos (persistente).
     ProjectBond(String),
+    // v14: concurso multi-ganador (persistente).
+    Bounty(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,6 +1048,19 @@ pub struct WithdrawStreamBatchEvent {
 #[contractevent(topics = ["v13"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct V13Event {
+    #[topic]
+    pub action: soroban_sdk::Symbol,
+    #[topic]
+    pub id: String,
+    pub who: Address,
+    pub amount: i128,
+    pub extra: i128,
+}
+
+// v14: operación genérica de v14 sobre concursos, retainers, crowdfunding, equipos y conversiones.
+#[contractevent(topics = ["v14"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct V14Event {
     #[topic]
     pub action: soroban_sdk::Symbol,
     #[topic]
@@ -4612,8 +4645,150 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v14 (lote 1): concursos abiertos multi-ganador (`Bounty`)
+    // -----------------------------------------------------------------------
+
+    // El cliente abre un concurso con un fondo inicial (`amount`), un plazo
+    // y el hash de las reglas. A diferencia de una tarea simple, permite
+    // premiar a múltiples ganadores con montos parciales hasta agotar el fondo.
+    pub fn open_bounty(
+        env: Env,
+        client: Address,
+        bounty_id: String,
+        amount: i128,
+        deadline_secs: u64,
+        rules_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        Self::not_paused(&env)?;
+        client.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if deadline_secs == 0 || deadline_secs > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let key = DataKey::Bounty(bounty_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let deadline = env
+            .ledger()
+            .timestamp()
+            .checked_add(deadline_secs)
+            .ok_or(Error::InvalidDeadline)?;
+        let bounty = Bounty {
+            bounty_id: bounty_id.clone(),
+            client: client.clone(),
+            remaining: amount,
+            deadline,
+            rules_hash,
+        };
+        env.storage().persistent().set(&key, &bounty);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::collect(&env, &client, amount)?;
+        Self::v14_event(&env, "open_bounty", bounty_id, client, amount, deadline as i128);
+        Ok(())
+    }
+
+    // Cualquier patrocinador (incluido el cliente) puede sumar USDC al fondo de
+    // un concurso abierto antes de su plazo y mientras siga con saldo.
+    pub fn top_up_bounty(
+        env: Env,
+        funder: Address,
+        bounty_id: String,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        funder.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let key = DataKey::Bounty(bounty_id.clone());
+        let mut bounty: Bounty = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if bounty.remaining <= 0 {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() >= bounty.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        bounty.remaining = bounty.remaining.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        env.storage().persistent().set(&key, &bounty);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::collect(&env, &funder, amount)?;
+        Self::v14_event(&env, "top_up_bounty", bounty_id, funder, amount, bounty.remaining);
+        Ok(bounty.remaining)
+    }
+
+    // El árbitro premia a un ganador (`amount <= remaining`) antes del plazo,
+    // tras verificar su entrega. Puede llamarse varias veces para distintos
+    // ganadores hasta agotar el fondo. Devuelve el saldo restante del concurso.
+    pub fn award_bounty(
+        env: Env,
+        bounty_id: String,
+        winner: Address,
+        amount: i128,
+        proof_hash: BytesN<32>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+        let key = DataKey::Bounty(bounty_id.clone());
+        let mut bounty: Bounty = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if bounty.remaining <= 0 {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() >= bounty.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if amount <= 0 || amount > bounty.remaining {
+            return Err(Error::InvalidAmount);
+        }
+        let _ = proof_hash;
+        bounty.remaining -= amount;
+        env.storage().persistent().set(&key, &bounty);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::pay(&env, &winner, amount)?;
+        Self::v14_event(&env, "award_bounty", bounty_id, winner, amount, bounty.remaining);
+        Ok(bounty.remaining)
+    }
+
+    // Reembolso sin permisos cuando vence el plazo de un concurso: todo lo que
+    // quedó sin premiar vuelve siempre al cliente que lo abrió.
+    pub fn refund_bounty(env: Env, bounty_id: String) -> Result<i128, Error> {
+        let key = DataKey::Bounty(bounty_id.clone());
+        let mut bounty: Bounty = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if bounty.remaining <= 0 {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() < bounty.deadline {
+            return Err(Error::DeadlineNotReached);
+        }
+        let refund = bounty.remaining;
+        bounty.remaining = 0;
+        env.storage().persistent().set(&key, &bounty);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::pay(&env, &bounty.client, refund)?;
+        Self::v14_event(&env, "refund_bounty", bounty_id, bounty.client, refund, 0);
+        Ok(refund)
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    fn v14_event(env: &Env, action: &str, id: String, who: Address, amount: i128, extra: i128) {
+        V14Event {
+            action: soroban_sdk::Symbol::new(env, action),
+            id,
+            who,
+            amount,
+            extra,
+        }
+        .publish(env);
+    }
 
     // v13: separa `amount` en lo que recibe el programador y la comisión.
     fn split_fee(
@@ -4964,3 +5139,6 @@ mod test_v12;
 
 // Pruebas de v13.
 mod test_v13;
+
+// Pruebas de v14.
+mod test_v14;
