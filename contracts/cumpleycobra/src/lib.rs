@@ -59,6 +59,11 @@
 // deposita una garantía que recupera si la tarea se paga (`post_bond`,
 // `reclaim_bond`) y que pasa al cliente si la tarea termina reembolsada y el
 // árbitro lo decide (`slash_bond`).
+//
+// v9 (27 de noviembre de 2026): `top_up_stream` (agregar dinero a un pago por
+// tiempo sin cambiar su tarifa), `reassign_stream` (otro programador sigue el
+// pago y el anterior cobra lo ganado), `slash_bond_partial` (repartir la
+// garantía) y `release_with_fee` (pago con comisión de plataforma, máximo 10%).
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -95,6 +100,9 @@ const MAX_BATCH_READ: u32 = 20;
 // días después del plazo. Si el árbitro no la resuelve en ese tiempo, el
 // cliente vuelve a poder recuperar su dinero: nadie lo puede retener para siempre.
 const DISPUTE_GRACE_SECS: u64 = 14 * 24 * 60 * 60;
+
+// v9: comisión máxima de plataforma en `release_with_fee`: 1000 puntos base = 10%.
+const MAX_FEE_BPS: u32 = 1000;
 
 // ---------------------------------------------------------------------------
 // Tipos guardados en el contrato
@@ -838,6 +846,55 @@ pub struct SlashBondEvent {
     pub freelancer: Address,
     pub client: Address,
     pub amount: i128,
+}
+
+// v9: el cliente agregó dinero a un pago por tiempo (y se recorrió su final).
+#[contractevent(topics = ["top_up_stream"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopUpStreamEvent {
+    #[topic]
+    pub stream_id: String,
+    pub added: i128,
+    pub new_amount: i128,
+    pub new_end: u64,
+}
+
+// v9: otro programador sigue el pago por tiempo; el anterior cobró lo ganado.
+#[contractevent(topics = ["reassign_stream"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReassignStreamEvent {
+    #[topic]
+    pub stream_id: String,
+    pub old_freelancer: Address,
+    pub new_freelancer: Address,
+    pub paid_to_old: i128,
+    pub remaining: i128,
+}
+
+// v9: el árbitro repartió la garantía entre cliente y programador.
+#[contractevent(topics = ["slash_bond_partial"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlashBondPartialEvent {
+    #[topic]
+    pub task_id: String,
+    pub client: Address,
+    pub client_amount: i128,
+    pub freelancer: Address,
+    pub freelancer_amount: i128,
+}
+
+// v9: pago del árbitro con comisión de plataforma.
+#[contractevent(topics = ["release_with_fee"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseWithFeeEvent {
+    #[topic]
+    pub task_id: String,
+    pub freelancer: Address,
+    pub freelancer_amount: i128,
+    pub fee_to: Address,
+    pub fee_amount: i128,
+    pub code_hash: BytesN<32>,
+    pub verdict_hash: BytesN<32>,
 }
 
 #[contract]
@@ -3292,6 +3349,212 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v9: más operaciones sobre pagos por tiempo, garantías y pagos
+    // -----------------------------------------------------------------------
+
+    // El cliente agrega `amount` a un pago por tiempo activo. Para no cambiar
+    // la tarifa por segundo que se acordó, el final se recorre en proporción:
+    // extra = amount × duración / monto actual. Lo ya liberado no disminuye.
+    // El nuevo final no puede quedar a más de 28 días de ahora.
+    pub fn top_up_stream(env: Env, stream_id: String, amount: i128) -> Result<u64, Error> {
+        Self::not_paused(&env)?;
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::load_stream(&env, &key)?;
+        stream.client.require_auth();
+
+        if stream.status != StreamStatus::Active || env.ledger().timestamp() >= stream.end {
+            return Err(Error::NotFunded);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let duration = (stream.end - stream.start) as i128;
+        let extra = amount
+            .checked_mul(duration)
+            .ok_or(Error::InvalidAmount)?
+            / stream.amount;
+        if extra <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let new_end = stream
+            .end
+            .checked_add(extra as u64)
+            .ok_or(Error::InvalidDeadline)?;
+        let max_end = env
+            .ledger()
+            .timestamp()
+            .checked_add(MAX_MILESTONE_DEADLINE_SECS)
+            .ok_or(Error::InvalidDeadline)?;
+        if new_end > max_end {
+            return Err(Error::InvalidDeadline);
+        }
+
+        stream.amount = stream.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        stream.end = new_end;
+        Self::save_stream(&env, &key, &stream);
+        Self::collect(&env, &stream.client, amount)?;
+
+        TopUpStreamEvent {
+            stream_id,
+            added: amount,
+            new_amount: stream.amount,
+            new_end,
+        }
+        .publish(&env);
+        Ok(new_end)
+    }
+
+    // Otro programador sigue un pago por tiempo activo. Firman el cliente, el
+    // programador actual y el nuevo. En la misma transacción el actual cobra
+    // lo liberado que no había retirado, y lo que falta por liberar sigue
+    // fluyendo hacia el nuevo desde este segundo hasta el mismo final.
+    pub fn reassign_stream(
+        env: Env,
+        stream_id: String,
+        new_freelancer: Address,
+    ) -> Result<i128, Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::load_stream(&env, &key)?;
+        let now = env.ledger().timestamp();
+        if stream.status != StreamStatus::Active || now >= stream.end {
+            return Err(Error::NotFunded);
+        }
+        let old_freelancer = stream.freelancer.clone();
+        if new_freelancer == old_freelancer || new_freelancer == stream.client {
+            return Err(Error::NoChange);
+        }
+        stream.client.require_auth();
+        old_freelancer.require_auth();
+        new_freelancer.require_auth();
+
+        let vested = Self::vested(&env, &stream)?;
+        let paid_to_old = vested.checked_sub(stream.withdrawn).ok_or(Error::InvalidAmount)?;
+        let remaining = stream.amount.checked_sub(vested).ok_or(Error::InvalidAmount)?;
+
+        // El pago sigue con lo que falta, para el nuevo, desde ahora.
+        stream.freelancer = new_freelancer.clone();
+        stream.amount = remaining;
+        stream.withdrawn = 0;
+        stream.start = now;
+        Self::save_stream(&env, &key, &stream);
+
+        if paid_to_old > 0 {
+            Self::pay(&env, &old_freelancer, paid_to_old)?;
+        }
+
+        ReassignStreamEvent {
+            stream_id,
+            old_freelancer,
+            new_freelancer,
+            paid_to_old,
+            remaining,
+        }
+        .publish(&env);
+        Ok(paid_to_old)
+    }
+
+    // El árbitro reparte la garantía de una tarea reembolsada: `client_amount`
+    // al cliente como compensación y el resto de vuelta al programador. Para
+    // darla toda al cliente existe `slash_bond`; aquí el reparto es parcial.
+    pub fn slash_bond_partial(env: Env, task_id: String, client_amount: i128) -> Result<(), Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Bond(task_id.clone());
+        let bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        let task: Task = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Task(task_id.clone()))
+            .ok_or(Error::NotFound)?;
+        if task.status != TaskStatus::Refunded {
+            return Err(Error::NotFunded);
+        }
+        if client_amount <= 0 || client_amount >= bond.amount {
+            return Err(Error::InvalidAmount);
+        }
+        let freelancer_amount = bond
+            .amount
+            .checked_sub(client_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        env.storage().persistent().remove(&key);
+        Self::pay(&env, &task.client, client_amount)?;
+        Self::pay(&env, &bond.freelancer, freelancer_amount)?;
+
+        SlashBondPartialEvent {
+            task_id,
+            client: task.client,
+            client_amount,
+            freelancer: bond.freelancer,
+            freelancer_amount,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // Pago del árbitro con comisión de plataforma: el programador recibe el
+    // monto menos `fee_bps` puntos base (máximo 10%) y la comisión va a
+    // `fee_to`. Mismas reglas que `release`: tarea en Funded, antes del plazo
+    // y, si hay programador registrado, solo a él.
+    pub fn release_with_fee(
+        env: Env,
+        task_id: String,
+        freelancer: Address,
+        code_hash: BytesN<32>,
+        verdict_hash: BytesN<32>,
+        fee_to: Address,
+        fee_bps: u32,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Task(task_id.clone());
+        let mut task = Self::funded_task(&env, &key)?;
+        Self::check_assigned(&task, &freelancer)?;
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if fee_bps == 0 || fee_bps > MAX_FEE_BPS {
+            return Err(Error::InvalidAmount);
+        }
+        if fee_to == freelancer || fee_to == task.client {
+            return Err(Error::NoChange);
+        }
+        let fee_amount = task
+            .amount
+            .checked_mul(fee_bps as i128)
+            .ok_or(Error::InvalidAmount)?
+            / 10_000;
+        if fee_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let freelancer_amount = task
+            .amount
+            .checked_sub(fee_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        task.status = TaskStatus::Released;
+        task.freelancer = Some(freelancer.clone());
+        Self::save_task(&env, &key, &task);
+
+        Self::pay(&env, &freelancer, freelancer_amount)?;
+        Self::pay(&env, &fee_to, fee_amount)?;
+
+        ReleaseWithFeeEvent {
+            task_id,
+            freelancer,
+            freelancer_amount,
+            fee_to,
+            fee_amount,
+            code_hash,
+            verdict_hash,
+        }
+        .publish(&env);
+        Ok(freelancer_amount)
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
 
@@ -3531,3 +3794,6 @@ mod test_v7;
 
 // Pruebas de v8 (pago por tiempo y garantía del programador).
 mod test_v8;
+
+// Pruebas de v9.
+mod test_v9;
