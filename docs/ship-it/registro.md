@@ -53,6 +53,7 @@ Del 23 al 27 de noviembre de 2026. Cuentan los commits a `main` por su calidad, 
 | 27 nov | Suma más · Función nueva | [`00526f6`](https://github.com/rodyxdev/cumpleycobra/commit/00526f6) | Contrato v9: `top_up_stream`, `reassign_stream`, `slash_bond_partial` y `release_with_fee` (113 tests en verde) |
 | 27 nov | Suma más · Función nueva | [`5b9d457`](https://github.com/rodyxdev/cumpleycobra/commit/5b9d457) | v9 desplegado en testnet (`CBFH6QNU…UFSY7`) y corrida real `1795830743` de sus 4 funciones (`scripts/v9_testnet.sh`): saldo final 0 USDC |
 | 27 nov | Suma más · Función nueva | [`536f5b6`](https://github.com/rodyxdev/cumpleycobra/commit/536f5b6), [`1232cc3`](https://github.com/rodyxdev/cumpleycobra/commit/1232cc3) | Contrato v10 en testnet (`CDNYUAAS…7W3H`): `top_up_bond`, `release_milestone_with_fee` y `transfer_stream_client`, con corrida real (`scripts/v10_testnet.sh`) y 119 tests en verde |
+| 27 nov | Suma más · Función nueva | [`649766f`](https://github.com/rodyxdev/cumpleycobra/commit/649766f) y el siguiente | Contrato v11 en testnet (`CANTD5BF…SKJXY`): `extend_stream`, `reduce_stream`, `mutual_split_stream`, `tip_stream`, `open_stream_dispute`, `resolve_stream_dispute`, `batch_deposit_streams`, `cancel_stream_batch`, `release_milestones_batch` y `tip_project`, con corrida real y 127 tests en verde |
 
 ## Funciones experimentales (por revisar)
 

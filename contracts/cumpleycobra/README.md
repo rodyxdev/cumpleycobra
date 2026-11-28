@@ -504,3 +504,22 @@ bash scripts/v9_testnet.sh
 
 Corrida con [`scripts/v10_testnet.sh`](../../scripts/v10_testnet.sh); al final `get_stats` dio `held` 0, igual al saldo real.
 
+## v11: acuerdos y disputa en pagos por tiempo, lotes y propina de proyecto (27 de noviembre de 2026)
+
+**Los contratos v1 a v10 desplegados no se modifican.** v11: `CANTD5BFSEWIAXPQ4HZZMXUZADBS3PIIEUNNMRSPZW55JJNIZCLSKJXY` (despliegue [`c8e32376…`](https://stellar.expert/explorer/testnet/tx/c8e32376b4cd550cd34bb67ee8abef3982e19e316ee1948f50e9348964e542be), `initialize` [`1a639b9d…`](https://stellar.expert/explorer/testnet/tx/1a639b9da41bb978b08871b91b3bf1877fe06e7e417a1c28ba38703616adf363)). `cargo test -p cumpleycobra`: 127 en verde (8 de v11 en `src/test_v11.rs`). En cada acuerdo sobre un pago por tiempo, el programador cobra primero lo ya ganado.
+
+| Función | Quién firma | Reglas | tx (corrida `1795839952`) |
+| --- | --- | --- | --- |
+| `extend_stream` | Cliente + programador | Alarga el pago; el programador cobra lo ganado y lo pendiente se libera hasta el nuevo final | [`35a96469…`](https://stellar.expert/explorer/testnet/tx/35a96469da7b190ec01e70821b263290de928cdc06fd225493c6e5b929f54652) |
+| `reduce_stream` | Cliente + programador | Parte de lo pendiente vuelve al cliente; el resto sigue fluyendo | [`66511b8e…`](https://stellar.expert/explorer/testnet/tx/66511b8e90bcbe11d7d018ee014260fa7bf74957a87e32b460407ad3fb83cbe5) |
+| `mutual_split_stream` | Cliente + programador | Cierra el pago: lo ganado más una parte de lo pendiente al programador, el resto al cliente | [`dd1c4d63…`](https://stellar.expert/explorer/testnet/tx/dd1c4d63de1389d1f9b46638ffb3fdd295b76b10d2362289967b098d2c5669d0) |
+| `tip_stream` | Cliente | Propina directa si el programador ya ganó algo desde el último cambio | [`c23e2fe7…`](https://stellar.expert/explorer/testnet/tx/c23e2fe7239431a3c89ca68c869d29ff64ae2b2c1940690600c3bf3d196e95e5) |
+| `open_stream_dispute` | Cliente o programador | Mientras esté abierta, `cancel_stream` responde `DisputeOpen` | [`def69049…`](https://stellar.expert/explorer/testnet/tx/def69049cd83f9efd0457c875e38263376739fc68426b4fdb02d0c1c9541b4e0) |
+| `resolve_stream_dispute` | Árbitro | Reparte lo pendiente y cierra el pago | [`6b51520e…`](https://stellar.expert/explorer/testnet/tx/6b51520e75a2f6629d459359c79d2b3c588d3ec49b94599d9f248fd1cedb3ce3) |
+| `batch_deposit_streams` | Cliente | 2 a 10 pagos por tiempo en una transferencia | [`9f0f6b33…`](https://stellar.expert/explorer/testnet/tx/9f0f6b332e7617495e5ceac01f4d8e967df990e7226a08fdb4a42dd5ebd550e3) |
+| `cancel_stream_batch` | Cliente | 1 a 20 cancelaciones; omite las que no proceden | [`a2a37c3d…`](https://stellar.expert/explorer/testnet/tx/a2a37c3d3f14ed623fb5a7d57b53410b0fd1dc5d73d5e9dd1d2be45732bda6bf) |
+| `release_milestones_batch` | Árbitro | 2 a 10 hitos en una transferencia; si uno falla, se revierte todo | [`7b80e0a1…`](https://stellar.expert/explorer/testnet/tx/7b80e0a14eabb1247c9fed4f7793ad4619d702c85825034d90b5e2edf86d081a) |
+| `tip_project` | Cliente | Propina directa al programador fijado de un proyecto con un hito pagado | [`184eb949…`](https://stellar.expert/explorer/testnet/tx/184eb94921ef820a27641495053f1e20ab3a1758372a5886243de1389ce8bd40) |
+
+Corrida con [`scripts/v11_testnet.sh`](../../scripts/v11_testnet.sh); al final `get_stats` dio `held` 0, igual al saldo real. **Límite observado en la corrida:** justo después de un cambio, el pago se reinicia desde ese segundo; si la siguiente llamada se simula cuando el programador aún no ganó nada, su pago queda fuera del footprint y la transacción falla sin mover dinero. El script espera unos segundos entre pasos.
+
