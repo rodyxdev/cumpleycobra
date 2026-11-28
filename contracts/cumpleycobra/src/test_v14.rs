@@ -174,3 +174,59 @@ fn v14_crowdfund_colectivo_pago_y_reembolso_individual() {
     assert_eq!(ctx.token.balance(&ctx.third), 3);
     cuadra(&ctx);
 }
+
+#[test]
+fn v14_team_task_reparto_en_bps_y_reembolso() {
+    let ctx = setup(Modo::Libre);
+    let m2 = Address::generate(&ctx.env);
+    let t1 = String::from_str(&ctx.env, "team-ok");
+    let t2 = String::from_str(&ctx.env, "team-ref");
+
+    let members = Vec::from_array(&ctx.env, [ctx.freelancer.clone(), m2.clone()]);
+    let shares = Vec::from_array(&ctx.env, [7000u32, 3000u32]);
+    ctx.c.deposit_team_task(&ctx.client, &t1, &members, &shares, &(10 * UNIT), &DIA, &h(&ctx.env, 30));
+
+    assert_eq!(
+        ctx.c.try_deposit_team_task(
+            &ctx.client,
+            &t2,
+            &members,
+            &Vec::from_array(&ctx.env, [5000u32, 4000u32]),
+            &(2 * UNIT),
+            &DIA,
+            &h(&ctx.env, 31)
+        ),
+        Err(Ok(Error::InvalidAmount))
+    );
+
+    ctx.c.release_team_task(&t1, &h(&ctx.env, 32), &h(&ctx.env, 33));
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 7 * UNIT);
+    assert_eq!(ctx.token.balance(&m2), 3 * UNIT);
+
+    ctx.c.deposit_team_task(&ctx.client, &t2, &members, &shares, &(2 * UNIT), &100, &h(&ctx.env, 34));
+    ctx.env.ledger().set_timestamp(START_TS + 100);
+    assert_eq!(ctx.c.refund_team_task(&t2), 2 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 10 * UNIT);
+    cuadra(&ctx);
+}
+
+#[test]
+fn v14_cliff_stream_bloquea_hasta_cliff_y_desbloquea_retroactivo() {
+    let ctx = setup(Modo::Libre);
+    let s1 = String::from_str(&ctx.env, "cliff-1");
+    let s2 = String::from_str(&ctx.env, "cliff-cancel");
+
+    ctx.c.deposit_cliff_stream(&ctx.client, &s1, &ctx.freelancer, &(10 * UNIT), &(3 * DIA), &(10 * DIA));
+    ctx.env.ledger().set_timestamp(START_TS + 2 * DIA);
+    assert_eq!(ctx.c.try_withdraw_stream(&s1), Err(Ok(Error::NothingToWithdraw)));
+
+    ctx.env.ledger().set_timestamp(START_TS + 3 * DIA);
+    assert_eq!(ctx.c.withdraw_stream(&s1), 3 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 3 * UNIT);
+
+    ctx.c.deposit_cliff_stream(&ctx.client, &s2, &ctx.freelancer, &(5 * UNIT), &(4 * DIA), &(10 * DIA));
+    ctx.c.cancel_stream(&s2);
+    assert_eq!(ctx.token.balance(&ctx.freelancer), 3 * UNIT);
+    assert_eq!(ctx.token.balance(&ctx.client), MINT - 10 * UNIT);
+    cuadra(&ctx);
+}

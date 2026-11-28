@@ -297,6 +297,28 @@ pub struct CrowdfundTask {
     pub status: TaskStatus,
 }
 
+// v14: integrante de una tarea en equipo con su porcentaje en puntos base (bps).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TeamShare {
+    pub member: Address,
+    pub bps: u32,
+}
+
+// v14: tarea asignada a un equipo de 2 a 5 programadores (`TeamTask`). Al
+// aprobarse, el contrato reparte el monto automáticamente entre todos según sus bps.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TeamTask {
+    pub task_id: String,
+    pub client: Address,
+    pub shares: Vec<TeamShare>,
+    pub amount: i128,
+    pub deadline: u64,
+    pub rules_hash: BytesN<32>,
+    pub status: TaskStatus,
+}
+
 // Llaves de almacenamiento.
 // `Arbiter` y `Token` viven en el almacenamiento de instancia (configuración).
 // `Task(task_id)` vive en almacenamiento persistente, una entrada por tarea.
@@ -332,6 +354,10 @@ pub enum DataKey {
     Retainer(String),
     // v14: tarea con financiamiento colectivo y reembolso individual (persistente).
     Crowdfund(String),
+    // v14: tarea en equipo con reparto automático en bps (persistente).
+    TeamTask(String),
+    // v14: fecha de desbloqueo inicial (cliff) de un pago por tiempo (persistente).
+    StreamCliff(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -5105,6 +5131,192 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v14 (lote 4): tareas en equipo (`TeamTask`) y stream con cliff
+    // -----------------------------------------------------------------------
+
+    // El cliente deposita una tarea para un equipo de 2 a 5 programadores cuyas
+    // participaciones en puntos base suman exactamente 10_000 (100%).
+    pub fn deposit_team_task(
+        env: Env,
+        client: Address,
+        task_id: String,
+        members: Vec<Address>,
+        shares_bps: Vec<u32>,
+        amount: i128,
+        deadline_secs: u64,
+        rules_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        Self::not_paused(&env)?;
+        client.require_auth();
+        let count = members.len();
+        if !(2..=5).contains(&count) {
+            return Err(Error::TooManyItems);
+        }
+        if shares_bps.len() != count {
+            return Err(Error::LengthMismatch);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if deadline_secs == 0 || deadline_secs > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let key = DataKey::TeamTask(task_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let mut sum_bps: u32 = 0;
+        let mut shares = Vec::new(&env);
+        for i in 0..count {
+            let member = members.get(i).ok_or(Error::LengthMismatch)?;
+            let bps = shares_bps.get(i).ok_or(Error::LengthMismatch)?;
+            if bps == 0 {
+                return Err(Error::InvalidAmount);
+            }
+            for j in 0..i {
+                if members.get(j).ok_or(Error::LengthMismatch)? == member {
+                    return Err(Error::AlreadyExists);
+                }
+            }
+            sum_bps = sum_bps.checked_add(bps).ok_or(Error::InvalidAmount)?;
+            shares.push_back(TeamShare { member, bps });
+        }
+        if sum_bps != 10_000 {
+            return Err(Error::InvalidAmount);
+        }
+        let deadline = env
+            .ledger()
+            .timestamp()
+            .checked_add(deadline_secs)
+            .ok_or(Error::InvalidDeadline)?;
+        let team_task = TeamTask {
+            task_id: task_id.clone(),
+            client: client.clone(),
+            shares,
+            amount,
+            deadline,
+            rules_hash,
+            status: TaskStatus::Funded,
+        };
+        env.storage().persistent().set(&key, &team_task);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::collect(&env, &client, amount)?;
+        Self::v14_event(&env, "deposit_team", task_id, client, amount, count as i128);
+        Ok(())
+    }
+
+    // El árbitro libera la tarea en equipo antes del plazo y el contrato reparte
+    // automáticamente `amount` entre los 2..5 integrantes en la misma tx.
+    pub fn release_team_task(
+        env: Env,
+        task_id: String,
+        code_hash: BytesN<32>,
+        verdict_hash: BytesN<32>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+        let key = DataKey::TeamTask(task_id.clone());
+        let mut t: TeamTask = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if t.status != TaskStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() >= t.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        let _ = (code_hash, verdict_hash);
+        t.status = TaskStatus::Released;
+        env.storage().persistent().set(&key, &t);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+
+        let n = t.shares.len();
+        let mut paid_total: i128 = 0;
+        for i in 0..n {
+            let s = t.shares.get(i).ok_or(Error::NotFound)?;
+            let part = if i + 1 == n {
+                t.amount - paid_total
+            } else {
+                t.amount.checked_mul(s.bps as i128).ok_or(Error::InvalidAmount)? / 10_000
+            };
+            paid_total += part;
+            if part > 0 {
+                Self::pay(&env, &s.member, part)?;
+            }
+        }
+        Self::v14_event(&env, "release_team", task_id, t.client, t.amount, n as i128);
+        Ok(t.amount)
+    }
+
+    // Reembolso sin permisos de una tarea en equipo cuando vence su plazo.
+    pub fn refund_team_task(env: Env, task_id: String) -> Result<i128, Error> {
+        let key = DataKey::TeamTask(task_id.clone());
+        let mut t: TeamTask = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        if t.status != TaskStatus::Funded {
+            return Err(Error::NotFunded);
+        }
+        if env.ledger().timestamp() < t.deadline {
+            return Err(Error::DeadlineNotReached);
+        }
+        t.status = TaskStatus::Refunded;
+        env.storage().persistent().set(&key, &t);
+        env.storage().persistent().extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::extend_instance(&env);
+        Self::pay(&env, &t.client, t.amount)?;
+        Self::v14_event(&env, "refund_team", task_id, t.client, t.amount, 0);
+        Ok(t.amount)
+    }
+
+    // Pago por tiempo con periodo inicial cerrado (`cliff_secs`): antes de
+    // `start + cliff_secs` el saldo liberado es 0; al cruzar el cliff se
+    // desbloquea retroactivamente todo lo transcurrido de forma lineal.
+    pub fn deposit_cliff_stream(
+        env: Env,
+        client: Address,
+        stream_id: String,
+        freelancer: Address,
+        amount: i128,
+        cliff_secs: u64,
+        duration_secs: u64,
+    ) -> Result<(), Error> {
+        Self::not_paused(&env)?;
+        client.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if freelancer == client {
+            return Err(Error::NoChange);
+        }
+        if cliff_secs == 0 || cliff_secs >= duration_secs || duration_secs > MAX_MILESTONE_DEADLINE_SECS {
+            return Err(Error::InvalidDeadline);
+        }
+        let key = DataKey::Stream(stream_id.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        let start = env.ledger().timestamp();
+        let cliff_ts = start.checked_add(cliff_secs).ok_or(Error::InvalidDeadline)?;
+        let end = start.checked_add(duration_secs).ok_or(Error::InvalidDeadline)?;
+        let stream = Stream {
+            stream_id: stream_id.clone(),
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            amount,
+            withdrawn: 0,
+            start,
+            end,
+            status: StreamStatus::Active,
+        };
+        let ckey = DataKey::StreamCliff(stream_id.clone());
+        env.storage().persistent().set(&ckey, &cliff_ts);
+        env.storage().persistent().extend_ttl(&ckey, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::save_stream(&env, &key, &stream);
+        Self::collect(&env, &client, amount)?;
+        Self::v14_event(&env, "cliff_stream", stream_id, freelancer, amount, cliff_ts as i128);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
 
@@ -5219,11 +5431,21 @@ impl CumpleYCobraContract {
 
     // v8: lo liberado de un pago por tiempo hasta ahora (lineal en el tiempo).
     // Un pago cancelado ya no libera más: su `amount` es lo ganado al cancelar.
+    // v14: si tiene `StreamCliff` y aún no llega a esa fecha, lo liberado es 0.
     fn vested(env: &Env, stream: &Stream) -> Result<i128, Error> {
         if stream.status == StreamStatus::Canceled {
             return Ok(stream.amount);
         }
         let now = env.ledger().timestamp();
+        if let Some(cliff) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::StreamCliff(stream.stream_id.clone()))
+        {
+            if now < cliff {
+                return Ok(0);
+            }
+        }
         if now >= stream.end {
             return Ok(stream.amount);
         }
