@@ -523,3 +523,18 @@ Corrida con [`scripts/v10_testnet.sh`](../../scripts/v10_testnet.sh); al final `
 
 Corrida con [`scripts/v11_testnet.sh`](../../scripts/v11_testnet.sh); al final `get_stats` dio `held` 0, igual al saldo real. **Límite observado en la corrida:** justo después de un cambio, el pago se reinicia desde ese segundo; si la siguiente llamada se simula cuando el programador aún no ganó nada, su pago queda fuera del footprint y la transacción falla sin mover dinero. El script espera unos segundos entre pasos.
 
+## v12: aprobación manual parcial, garantía de proyecto y retiro por lote (27 de noviembre de 2026)
+
+**Los contratos v1 a v11 desplegados no se modifican.** v12: `CAIPLT3HJ23N7UT56Q5XT5VNGDOCKMZOVXLI3CYGRBDJQLBNMF2YCJHH` (despliegue [`95792f61…`](https://stellar.expert/explorer/testnet/tx/95792f619206350188c349be9c6372f1e36d19dfc00c717d6f84bcb6b646b437), `initialize` [`75e9033b…`](https://stellar.expert/explorer/testnet/tx/75e9033b8e5eec417befdf3ae056792dc3b3b69bc07f1645e6ace3fd42cd0f9b)). `cargo test -p cumpleycobra`: 132 en verde (5 de v12 en `src/test_v12.rs`).
+
+| Función | Quién firma | Qué pasó en la corrida `1795840479` | tx |
+| --- | --- | --- | --- |
+| `client_release_partial` | Cliente | Paga 0.01 de una tarea de 0.03; el resto sigue en Funded | [`d6367119…`](https://stellar.expert/explorer/testnet/tx/d636711983fc837ba6545796fcf90897d8cecf454e70e25ad5cfe06eded53340) |
+| `client_release_milestone_partial` | Cliente | Paga 0.01 del hito 0 (0.02) y fija al programador | [`9054df66…`](https://stellar.expert/explorer/testnet/tx/9054df6671f77fb77fe578f4c9fa0bf21b039421accea7bee3c128c1c9074be9) |
+| `post_project_bond` | Programador fijado | Garantía de 0.005 sobre un proyecto | [`42ac6b72…`](https://stellar.expert/explorer/testnet/tx/42ac6b72d3bb968871b266bb3eb0d5e095a3d6d2b912498ea8d39e93731669a2) |
+| `reclaim_project_bond` | Programador | Proyecto pagado: la garantía vuelve | [`38e1f4d6…`](https://stellar.expert/explorer/testnet/tx/38e1f4d6ff7cd729027dd7c9a8b1e69eadb3bc4eaf835501771d725ab61872f5) |
+| `withdraw_stream_batch` | Programador | Retira lo liberado de dos pagos por tiempo en una transferencia | [`ae159526…`](https://stellar.expert/explorer/testnet/tx/ae15952668f6c1c7fa001acd24b9c062a108a181977781edd632d8dd761493a7) |
+| `slash_project_bond` | Árbitro | Proyecto vencido sin entrega: de la garantía, 0.002 al cliente y el resto al programador | [`d762d6ad…`](https://stellar.expert/explorer/testnet/tx/d762d6ad00b0c82a176610f424f408ce16fedb15bcc46df71612d8e29ab16652) |
+
+Corrida con [`scripts/v12_testnet.sh`](../../scripts/v12_testnet.sh); al final `get_stats` dio `held` 0, igual al saldo real.
+
