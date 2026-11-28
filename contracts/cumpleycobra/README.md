@@ -492,3 +492,15 @@ bash scripts/v8_testnet.sh
 bash scripts/v9_testnet.sh
 ```
 
+## v10: aumento de garantía, pago de hito con comisión y cambio de cliente de un pago por tiempo (27 de noviembre de 2026)
+
+**Los contratos v1 a v9 desplegados no se modifican.** v10: `CDNYUAAS6KLJOBCAHGB7DWQOKIPC6AWGRCDXTUIYERMP5ZQZE7UH7W3H` (despliegue [`d9f2700e…`](https://stellar.expert/explorer/testnet/tx/d9f2700eced2838bed87f217a0a5a3b464f9f0845011ca70927b0fcd311829d0), `initialize` [`a5001198…`](https://stellar.expert/explorer/testnet/tx/a50011989ae79270051f19631cbecadec63a11e95902f7bf25f44f6e5fc5d96a)). `cargo test -p cumpleycobra`: 119 en verde (6 de v10 en `src/test_v10.rs`).
+
+| Función | Quién firma | Reglas | tx (corrida `1795838374`) |
+| --- | --- | --- | --- |
+| `top_up_bond(task_id, amount) -> i128` | Programador de la garantía | Tarea `Funded` antes del plazo; `amount > 0`; se recupera completa con `reclaim_bond` | [`ff019382…`](https://stellar.expert/explorer/testnet/tx/ff019382d196859ea2c786c456e8d18c04125c822a8caa8fcfbdb60b46a2ca49) |
+| `release_milestone_with_fee(task_id, index, freelancer, code_hash, verdict_hash, fee_to, fee_bps) -> i128` | Árbitro | Reglas de `release_milestone`; comisión de 1 a 1000 puntos base a `fee_to` | [`4c53240a…`](https://stellar.expert/explorer/testnet/tx/4c53240a8cd4596609be886df289a3b93197423db0b23e5b8762512c8e5f7120) |
+| `transfer_stream_client(stream_id, new_client)` | Cliente actual + cliente nuevo + programador | Pago activo y sin terminar; lo no liberado vuelve al cliente nuevo si se cancela | [`3146f3f9…`](https://stellar.expert/explorer/testnet/tx/3146f3f9443d190e5d1bb9467e4fe1f9b859801e33866693cfdf669772703d84) |
+
+Corrida con [`scripts/v10_testnet.sh`](../../scripts/v10_testnet.sh); al final `get_stats` dio `held` 0, igual al saldo real.
+
