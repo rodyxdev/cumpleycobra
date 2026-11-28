@@ -20,7 +20,8 @@ PASSPHRASE="Public Global Stellar Network ; September 2015"
 # Para un lanzamiento con USDC de Circle: CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75
 TOKEN_SAC=${TOKEN_SAC:-CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA}
 ARBITER_ID=cyc-mainnet-arbiter
-WASM=target/wasm32v1-none/release/cumpleycobra.wasm
+# Edición ligera: solo las funciones de /mainnet (9 KB; el contrato completo cuesta ~77 XLM de subida).
+WASM=target/wasm32v1-none/release/cumpleycobra_mainnet.wasm
 
 if ! stellar network ls | grep -qx "$NET"; then
   stellar network add "$NET" --rpc-url "$RPC" --network-passphrase "$PASSPHRASE"
@@ -34,10 +35,10 @@ echo "   $XLM XLM"
 python -c "import sys; sys.exit(0 if float('$XLM') >= 30 else 1)" || { echo "Faltan XLM: se necesitan al menos 30." >&2; exit 1; }
 
 echo "== Tests del contrato"
-cargo test -p cumpleycobra 2>&1 | grep "test result"
+cargo test -p cumpleycobra-mainnet 2>&1 | grep "test result"
 
 echo "== Compilación optimizada"
-stellar contract build --optimize >/dev/null
+(cd contracts/cumpleycobra-mainnet && stellar contract build --optimize >/dev/null)
 sha256sum "$WASM"
 
 read -r -p "Esto gasta XLM reales en mainnet. Escribe SI para desplegar: " OK

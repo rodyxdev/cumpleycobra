@@ -20,8 +20,8 @@ export const MAINNET = {
   passphrase: Networks.PUBLIC,
   // RPC público de Gateway.fm (gratis, CORS abierto). Respaldo: https://mainnet.sorobanrpc.com
   rpcUrl: "https://soroban-rpc.mainnet.stellar.gateway.fm",
-  // Se llena al desplegar con scripts/mainnet_deploy.sh. Vacío = todavía no desplegado.
-  contractId: "",
+  // Edición ligera (contracts/cumpleycobra-mainnet), desplegada el 27 de noviembre de 2026.
+  contractId: "CAAP6Y242FALZ4M46BAICKABWA5T2HG7VL62E3M6BSVG3XI77SA6IYNX",
   // Token del depósito en la edición experimental: XLM nativo (su SAC), para no exigir
   // trustline ni USDC en Stellar a la wallet de prueba. Mismos 7 decimales que USDC.
   token: { symbol: "XLM", sac: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA" },
