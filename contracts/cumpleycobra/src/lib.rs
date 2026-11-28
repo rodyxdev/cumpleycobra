@@ -64,6 +64,11 @@
 // tiempo sin cambiar su tarifa), `reassign_stream` (otro programador sigue el
 // pago y el anterior cobra lo ganado), `slash_bond_partial` (repartir la
 // garantía) y `release_with_fee` (pago con comisión de plataforma, máximo 10%).
+//
+// v10 (27 de noviembre de 2026): `top_up_bond` (el programador aumenta su
+// garantía), `release_milestone_with_fee` (pago de un hito con comisión de
+// plataforma) y `transfer_stream_client` (un pago por tiempo cambia de cliente
+// con la firma de los tres).
 // Diseño: docs/hitos/diseno.md.
 
 use soroban_sdk::{
@@ -895,6 +900,41 @@ pub struct ReleaseWithFeeEvent {
     pub fee_amount: i128,
     pub code_hash: BytesN<32>,
     pub verdict_hash: BytesN<32>,
+}
+
+// v10: el programador aumentó su garantía.
+#[contractevent(topics = ["top_up_bond"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TopUpBondEvent {
+    #[topic]
+    pub task_id: String,
+    pub added: i128,
+    pub new_amount: i128,
+}
+
+// v10: el árbitro pagó un hito con comisión de plataforma.
+#[contractevent(topics = ["release_milestone_with_fee"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseMilestoneWithFeeEvent {
+    #[topic]
+    pub task_id: String,
+    pub index: u32,
+    pub freelancer: Address,
+    pub freelancer_amount: i128,
+    pub fee_to: Address,
+    pub fee_amount: i128,
+    pub code_hash: BytesN<32>,
+    pub verdict_hash: BytesN<32>,
+}
+
+// v10: un pago por tiempo cambió de cliente.
+#[contractevent(topics = ["transfer_stream_client"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransferStreamClientEvent {
+    #[topic]
+    pub stream_id: String,
+    pub old_client: Address,
+    pub new_client: Address,
 }
 
 #[contract]
@@ -3555,6 +3595,139 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v10
+    // -----------------------------------------------------------------------
+
+    // El programador aumenta su garantía sobre una tarea que sigue en Funded y
+    // antes del plazo (por ejemplo, para dar más confianza al ampliar el
+    // alcance). Solo quien depositó la garantía. Devuelve el nuevo monto.
+    pub fn top_up_bond(env: Env, task_id: String, amount: i128) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        let key = DataKey::Bond(task_id.clone());
+        let mut bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+        bond.freelancer.require_auth();
+
+        let task = Self::funded_task(&env, &DataKey::Task(task_id.clone()))?;
+        if env.ledger().timestamp() >= task.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        bond.amount = bond.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+        env.storage().persistent().set(&key, &bond);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        Self::collect(&env, &bond.freelancer, amount)?;
+
+        TopUpBondEvent {
+            task_id,
+            added: amount,
+            new_amount: bond.amount,
+        }
+        .publish(&env);
+        Ok(bond.amount)
+    }
+
+    // Pago de un hito por el árbitro con comisión de plataforma (1 a 1000
+    // puntos base). Mismas reglas que `release_milestone`: hito en Funded,
+    // antes de su plazo y al programador fijado del proyecto (o lo fija).
+    pub fn release_milestone_with_fee(
+        env: Env,
+        task_id: String,
+        index: u32,
+        freelancer: Address,
+        code_hash: BytesN<32>,
+        verdict_hash: BytesN<32>,
+        fee_to: Address,
+        fee_bps: u32,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        arbiter.require_auth();
+
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        let mut milestone = Self::funded_milestone(&project, index)?;
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
+        if fee_bps == 0 || fee_bps > MAX_FEE_BPS {
+            return Err(Error::InvalidAmount);
+        }
+        if fee_to == freelancer || fee_to == project.client {
+            return Err(Error::NoChange);
+        }
+        Self::bind_freelancer(&mut project, &freelancer)?;
+        let fee_amount = milestone
+            .amount
+            .checked_mul(fee_bps as i128)
+            .ok_or(Error::InvalidAmount)?
+            / 10_000;
+        if fee_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let freelancer_amount = milestone
+            .amount
+            .checked_sub(fee_amount)
+            .ok_or(Error::InvalidAmount)?;
+
+        milestone.status = MilestoneStatus::Released;
+        project.milestones.set(index, milestone);
+        Self::save_project(&env, &key, &project);
+
+        Self::pay(&env, &freelancer, freelancer_amount)?;
+        Self::pay(&env, &fee_to, fee_amount)?;
+
+        ReleaseMilestoneWithFeeEvent {
+            task_id,
+            index,
+            freelancer,
+            freelancer_amount,
+            fee_to,
+            fee_amount,
+            code_hash,
+            verdict_hash,
+        }
+        .publish(&env);
+        Ok(freelancer_amount)
+    }
+
+    // Un pago por tiempo activo cambia de cliente: desde ahí, lo que no se ha
+    // liberado vuelve al cliente nuevo si se cancela, y solo él puede
+    // recargarlo o cancelarlo. Firman el cliente actual, el nuevo y el
+    // programador (cambia con quién está su acuerdo).
+    pub fn transfer_stream_client(
+        env: Env,
+        stream_id: String,
+        new_client: Address,
+    ) -> Result<(), Error> {
+        let key = DataKey::Stream(stream_id.clone());
+        let mut stream = Self::load_stream(&env, &key)?;
+        if stream.status != StreamStatus::Active || env.ledger().timestamp() >= stream.end {
+            return Err(Error::NotFunded);
+        }
+        if new_client == stream.client || new_client == stream.freelancer {
+            return Err(Error::NoChange);
+        }
+        stream.client.require_auth();
+        new_client.require_auth();
+        stream.freelancer.require_auth();
+
+        let old_client = stream.client.clone();
+        stream.client = new_client.clone();
+        Self::save_stream(&env, &key, &stream);
+
+        TransferStreamClientEvent {
+            stream_id,
+            old_client,
+            new_client,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
 
@@ -3797,3 +3970,6 @@ mod test_v8;
 
 // Pruebas de v9.
 mod test_v9;
+
+// Pruebas de v10.
+mod test_v10;
