@@ -107,7 +107,8 @@ export default function MainnetPage() {
 
   // Segundos que faltaban al leer la tarea (se actualiza con «Leer tarea»).
   const secondsLeft = task ? task.deadline - readAt : null;
-  const disabled = !address || !deployed || !taskId.trim() || busy !== null;
+  // Con la edición cerrada, ninguna función se puede firmar: el contrato está pausado y sin árbitro.
+  const disabled = MAINNET.closed || !address || !deployed || !taskId.trim() || busy !== null;
 
   return (
     <div className="space-y-8">
@@ -119,6 +120,20 @@ export default function MainnetPage() {
           que usas aquí con tu propia wallet y {MAINNET.token.symbol} real.
         </p>
       </div>
+
+      {MAINNET.closed && (
+        <div className="surface space-y-1 p-4 text-sm">
+          <p className="font-semibold">Edición experimental cerrada (28 de noviembre de 2026).</p>
+          <p className="text-muted-foreground">
+            Terminó el reto Ship It: el contrato quedó pausado (
+            <a className="underline" href={txUrl(MAINNET.closedTxs.pause)} target="_blank" rel="noreferrer">pause</a>
+            ), sin saldo y sin árbitro (
+            <a className="underline" href={txUrl(MAINNET.closedTxs.arbiterMerge)} target="_blank" rel="noreferrer">cuenta cerrada</a>
+            ). Ya no se puede depositar ni firmar aquí; las transacciones de la prueba siguen en stellar.expert y en
+            {" "}<a className="underline" href="https://github.com/rodyxdev/cumpleycobra/blob/main/docs/mainnet.md" target="_blank" rel="noreferrer">docs/mainnet.md</a>.
+          </p>
+        </div>
+      )}
 
       <div className="alert-panel flex gap-3 text-sm">
         <AlertTriangle className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
@@ -143,7 +158,7 @@ export default function MainnetPage() {
           {address ? (
             <p className="text-sm">Conectado: <span className="font-mono break-all">{address}</span></p>
           ) : (
-            <Button className="min-h-10" onClick={connect}><Wallet /> Conectar Freighter (Mainnet)</Button>
+            <Button className="min-h-10" onClick={connect} disabled={MAINNET.closed}><Wallet /> Conectar Freighter (Mainnet)</Button>
           )}
           <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
             <div className="space-y-2">

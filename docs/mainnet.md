@@ -2,6 +2,8 @@
 
 Misión especial de Ship It (27 de noviembre de 2026): llevar el contrato a la red principal de Stellar y usar desde el frontend sus cinco funciones más importantes.
 
+> **Estado: cerrada el 28 de noviembre de 2026.** El contrato quedó pausado ([`26160e55…`](https://stellar.expert/explorer/public/tx/26160e55d3b61ab67d4068523365e168d9f6ccd55036ff70de618d32d7826073)), con saldo 0 y sin árbitro: la cuenta del árbitro se cerró y sus 1.52 XLM volvieron a la wallet del equipo ([`b6bc0702…`](https://stellar.expert/explorer/public/tx/b6bc07024c7b4024721e38ed832cb70e1dfecb748a82a021471e7e1623ba991f)). Ya nadie puede depositar ni reanudarlo. La página `/mainnet` quedó de solo lectura.
+
 > **Experimental, sin auditoría.** Se usa con montos mínimos y con la wallet propia del equipo. No acepta fondos de terceros. El flujo normal de Cumple&Cobra sigue en testnet. Es una excepción acotada a la regla 16 de `CLAUDE.md` (nada de mainnet todavía): la llave del árbitro de mainnet es nueva y distinta de la de testnet, y el contrato se pausa al terminar el reto.
 
 ## Qué se desplegó
@@ -49,6 +51,8 @@ Firmadas con Freighter desde `/mainnet` el 27 de noviembre de 2026 por la wallet
 En mainnet, la subida del contrato completo de 63 KB se simuló en 77 XLM; la edición ligera de 9 KB costó 12.5 XLM y su `initialize` 0.03 XLM. En testnet, al subir v8: subir el código costó 5.72 XLM, crear el contrato 0.002 XLM e `initialize` 18.75 XLM (incluye la renta de 30 días del código). Cada llamada costó entre 0.001 y 0.05 XLM. Con las reservas mínimas de las cuentas, el presupuesto es de unos 30 XLM más centavos de USDC, que vuelven a la wallet al cerrar las tareas.
 
 ## Cómo se cierra después del reto
+
+Hecho el 28 de noviembre de 2026: pasos 1 a 3 (la página se dejó visible en solo lectura con el aviso de cierre). Además se cerró la cuenta del árbitro con *account merge*, así que el contrato ya no se puede reanudar.
 
 Un contrato desplegado no se puede borrar de la red. La edición experimental se cierra así:
 

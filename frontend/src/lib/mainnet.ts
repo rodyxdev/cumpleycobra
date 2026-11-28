@@ -22,6 +22,13 @@ export const MAINNET = {
   rpcUrl: "https://soroban-rpc.mainnet.stellar.gateway.fm",
   // Edición ligera (contracts/cumpleycobra-mainnet), desplegada el 27 de noviembre de 2026.
   contractId: "CAAP6Y242FALZ4M46BAICKABWA5T2HG7VL62E3M6BSVG3XI77SA6IYNX",
+  // Edición cerrada el 28 de noviembre de 2026: contrato pausado, sin saldo y sin árbitro.
+  // La página queda de solo lectura (las transacciones siguen visibles en stellar.expert).
+  closed: true,
+  closedTxs: {
+    pause: "26160e55d3b61ab67d4068523365e168d9f6ccd55036ff70de618d32d7826073",
+    arbiterMerge: "b6bc07024c7b4024721e38ed832cb70e1dfecb748a82a021471e7e1623ba991f",
+  },
   // Token del depósito en la edición experimental: XLM nativo (su SAC), para no exigir
   // trustline ni USDC en Stellar a la wallet de prueba. Mismos 7 decimales que USDC.
   token: { symbol: "XLM", sac: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA" },
