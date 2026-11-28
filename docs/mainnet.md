@@ -34,13 +34,15 @@ Todo vive en la página **`/mainnet`** ([`frontend/src/app/mainnet/page.tsx`](..
 
 ## Transacciones en mainnet
 
+Firmadas con Freighter desde `/mainnet` el 27 de noviembre de 2026 por la wallet `GB2LDCQY…Y7N46` (tareas `mn-mwzs2n6k`, `-b` y `-c`).
+
 | Función | Transacción |
 | --- | --- |
-| `deposit` | _pendiente_ |
-| `top_up_task` | _pendiente_ |
-| `extend_deadline` | _pendiente_ |
-| `client_release` | _pendiente_ |
-| `timeout_refund` | _pendiente_ |
+| `deposit` | [`fe22884a…`](https://stellar.expert/explorer/public/tx/fe22884aaa267db308d9e319f6d3e61e733f1acf6bf2a35bca4f65f99696fe41) |
+| `top_up_task` | [`c2e026d9…`](https://stellar.expert/explorer/public/tx/c2e026d97ad5f1eda9f7e36fc6b7a866b8b440216590041507ceabb08715ece6) |
+| `extend_deadline` | [`6e8488a8…`](https://stellar.expert/explorer/public/tx/6e8488a8576e4371b0ead52dd809f480f24f2f0d06413aaedf1b7b7f79345dcb) |
+| `client_release` | [`a63c7051…`](https://stellar.expert/explorer/public/tx/a63c7051d08d120dbac24e3f56e959b230e4d67653267da1687f9d5c3e86fc90) |
+| `timeout_refund` | [`5a447bf3…`](https://stellar.expert/explorer/public/tx/5a447bf3594c1ce2268d9a886249525f730c4976c02bc5aa73087589e89ef69f) |
 
 ## Costos medidos
 
