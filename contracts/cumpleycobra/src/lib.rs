@@ -5317,8 +5317,223 @@ impl CumpleYCobraContract {
     }
 
     // -----------------------------------------------------------------------
+    // v15 (28 de noviembre de 2026): operaciones por lote. Cada elemento sigue
+    // las reglas de su función individual; si uno falla, se revierte el lote.
+    // -----------------------------------------------------------------------
+
+    // El cliente aprueba manualmente de 2 a 10 tareas suyas, cada una a su
+    // programador (el registrado, si lo hay). Devuelve el total pagado.
+    pub fn client_release_batch(
+        env: Env,
+        client: Address,
+        task_ids: soroban_sdk::Vec<String>,
+        freelancers: soroban_sdk::Vec<Address>,
+    ) -> Result<i128, Error> {
+        client.require_auth();
+        let n = Self::batch_len(task_ids.len())?;
+        if freelancers.len() != n {
+            return Err(Error::LengthMismatch);
+        }
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let id = task_ids.get(i).ok_or(Error::LengthMismatch)?;
+            let freelancer = freelancers.get(i).ok_or(Error::LengthMismatch)?;
+            let key = DataKey::Task(id.clone());
+            let mut task = Self::funded_task(&env, &key)?;
+            if task.client != client {
+                return Err(Error::NotParty);
+            }
+            Self::check_assigned(&task, &freelancer)?;
+            task.status = TaskStatus::Released;
+            task.freelancer = Some(freelancer.clone());
+            Self::save_task(&env, &key, &task);
+            Self::pay(&env, &freelancer, task.amount)?;
+            total = total.checked_add(task.amount).ok_or(Error::InvalidAmount)?;
+            Self::v13_event(&env, "client_release_batch", id, freelancer, task.amount, 0);
+        }
+        Ok(total)
+    }
+
+    // El cliente aprueba manualmente de 2 a 10 hitos de un proyecto en una
+    // sola transferencia al programador (fijo desde el primer pago).
+    pub fn client_release_milestones_batch(
+        env: Env,
+        task_id: String,
+        indices: soroban_sdk::Vec<u32>,
+        freelancer: Address,
+    ) -> Result<i128, Error> {
+        let key = DataKey::Project(task_id.clone());
+        let mut project = Self::load_project(&env, &key)?;
+        project.client.require_auth();
+        let n = Self::batch_len(indices.len())?;
+        Self::bind_freelancer(&mut project, &freelancer)?;
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let index = indices.get(i).ok_or(Error::LengthMismatch)?;
+            let mut m = Self::funded_milestone(&project, index)?;
+            m.status = MilestoneStatus::Released;
+            total = total.checked_add(m.amount).ok_or(Error::InvalidAmount)?;
+            project.milestones.set(index, m);
+        }
+        Self::save_project(&env, &key, &project);
+        Self::pay(&env, &freelancer, total)?;
+        Self::v13_event(&env, "client_release_ms_batch", task_id, freelancer, total, n as i128);
+        Ok(total)
+    }
+
+    // El cliente prorroga de 2 a 10 tareas suyas, `extra_secs` cada una (tope
+    // de 28 días desde ahora, como `extend_deadline`).
+    pub fn extend_deadlines_batch(
+        env: Env,
+        client: Address,
+        task_ids: soroban_sdk::Vec<String>,
+        extra_secs: u64,
+    ) -> Result<u32, Error> {
+        client.require_auth();
+        let n = Self::batch_len(task_ids.len())?;
+        if extra_secs == 0 {
+            return Err(Error::InvalidDeadline);
+        }
+        let max = env
+            .ledger()
+            .timestamp()
+            .checked_add(MAX_MILESTONE_DEADLINE_SECS)
+            .ok_or(Error::InvalidDeadline)?;
+        for i in 0..n {
+            let id = task_ids.get(i).ok_or(Error::LengthMismatch)?;
+            let key = DataKey::Task(id.clone());
+            let mut task = Self::funded_task(&env, &key)?;
+            if task.client != client {
+                return Err(Error::NotParty);
+            }
+            task.deadline = task.deadline.checked_add(extra_secs).ok_or(Error::InvalidDeadline)?;
+            if task.deadline > max {
+                return Err(Error::InvalidDeadline);
+            }
+            Self::save_task(&env, &key, &task);
+            Self::v13_event(&env, "extend_deadlines_batch", id, client.clone(), task.deadline as i128, extra_secs as i128);
+        }
+        Ok(n)
+    }
+
+    // El cliente recarga de 2 a 10 tareas suyas en una sola transferencia,
+    // cada una antes de su plazo. Devuelve el total agregado.
+    pub fn top_up_tasks_batch(
+        env: Env,
+        client: Address,
+        task_ids: soroban_sdk::Vec<String>,
+        amounts: soroban_sdk::Vec<i128>,
+    ) -> Result<i128, Error> {
+        Self::not_paused(&env)?;
+        client.require_auth();
+        let n = Self::batch_len(task_ids.len())?;
+        if amounts.len() != n {
+            return Err(Error::LengthMismatch);
+        }
+        let now = env.ledger().timestamp();
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let id = task_ids.get(i).ok_or(Error::LengthMismatch)?;
+            let amount = amounts.get(i).ok_or(Error::LengthMismatch)?;
+            let key = DataKey::Task(id.clone());
+            let mut task = Self::funded_task(&env, &key)?;
+            if task.client != client {
+                return Err(Error::NotParty);
+            }
+            if amount <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            if now >= task.deadline {
+                return Err(Error::DeadlinePassed);
+            }
+            task.amount = task.amount.checked_add(amount).ok_or(Error::InvalidAmount)?;
+            Self::save_task(&env, &key, &task);
+            total = total.checked_add(amount).ok_or(Error::InvalidAmount)?;
+            Self::v13_event(&env, "top_up_tasks_batch", id, client.clone(), amount, task.amount);
+        }
+        Self::collect(&env, &client, total)?;
+        Ok(total)
+    }
+
+    // El programador recupera de 2 a 10 garantías de tareas ya pagadas en una
+    // sola transferencia (reglas de `reclaim_bond` con la tarea Released).
+    pub fn reclaim_bonds_batch(
+        env: Env,
+        freelancer: Address,
+        task_ids: soroban_sdk::Vec<String>,
+    ) -> Result<i128, Error> {
+        freelancer.require_auth();
+        let n = Self::batch_len(task_ids.len())?;
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let id = task_ids.get(i).ok_or(Error::LengthMismatch)?;
+            let key = DataKey::Bond(id.clone());
+            let bond: Bond = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+            if bond.freelancer != freelancer {
+                return Err(Error::NotParty);
+            }
+            let task: Task = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Task(id.clone()))
+                .ok_or(Error::NotFound)?;
+            if task.status != TaskStatus::Released {
+                return Err(Error::NotFunded);
+            }
+            env.storage().persistent().remove(&key);
+            total = total.checked_add(bond.amount).ok_or(Error::InvalidAmount)?;
+            Self::v13_event(&env, "reclaim_bonds_batch", id, freelancer.clone(), bond.amount, 0);
+        }
+        Self::pay(&env, &freelancer, total)?;
+        Ok(total)
+    }
+
+    // Cliente y árbitro cancelan de 2 a 10 tareas sin programador antes de su
+    // plazo (reglas de `cancel_unassigned_task`), con un solo reembolso.
+    pub fn cancel_unassigned_tasks_batch(
+        env: Env,
+        client: Address,
+        task_ids: soroban_sdk::Vec<String>,
+    ) -> Result<i128, Error> {
+        let arbiter = Self::arbiter(&env)?;
+        client.require_auth();
+        arbiter.require_auth();
+        let n = Self::batch_len(task_ids.len())?;
+        let now = env.ledger().timestamp();
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let id = task_ids.get(i).ok_or(Error::LengthMismatch)?;
+            let key = DataKey::Task(id.clone());
+            let mut task = Self::funded_task(&env, &key)?;
+            if task.client != client {
+                return Err(Error::NotParty);
+            }
+            if task.freelancer.is_some() {
+                return Err(Error::AlreadyAssigned);
+            }
+            if now >= task.deadline {
+                return Err(Error::DeadlinePassed);
+            }
+            task.status = TaskStatus::Refunded;
+            Self::save_task(&env, &key, &task);
+            total = total.checked_add(task.amount).ok_or(Error::InvalidAmount)?;
+            Self::v13_event(&env, "cancel_unassigned_batch", id, client.clone(), task.amount, 0);
+        }
+        Self::pay(&env, &client, total)?;
+        Ok(total)
+    }
+
+    // -----------------------------------------------------------------------
     // Funciones internas (no se exponen en el contrato)
     // -----------------------------------------------------------------------
+
+    // v15: tamaño válido de un lote (2 a 10).
+    fn batch_len(n: u32) -> Result<u32, Error> {
+        if !(2..=10).contains(&n) {
+            return Err(Error::TooManyItems);
+        }
+        Ok(n)
+    }
 
     fn v14_event(env: &Env, action: &str, id: String, who: Address, amount: i128, extra: i128) {
         V14Event {
@@ -5693,3 +5908,6 @@ mod test_v13;
 
 // Pruebas de v14.
 mod test_v14;
+
+// Pruebas de v15: operaciones por lote (aprobar, prorrogar, recargar, garantías y cancelar).
+mod test_v15;
