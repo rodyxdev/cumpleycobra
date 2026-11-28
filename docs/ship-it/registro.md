@@ -56,7 +56,11 @@ Del 23 al 27 de noviembre de 2026. Cuentan los commits a `main` por su calidad, 
 | 27 nov | Suma más · Función nueva | [`649766f`](https://github.com/rodyxdev/cumpleycobra/commit/649766f) y el siguiente | Contrato v11 en testnet (`CANTD5BF…SKJXY`): `extend_stream`, `reduce_stream`, `mutual_split_stream`, `tip_stream`, `open_stream_dispute`, `resolve_stream_dispute`, `batch_deposit_streams`, `cancel_stream_batch`, `release_milestones_batch` y `tip_project`, con corrida real y 127 tests en verde |
 | 27 nov | Suma más · Función nueva | [`8846e5a`](https://github.com/rodyxdev/cumpleycobra/commit/8846e5a) y el siguiente | Contrato v12 en testnet (`CAIPLT3H…CJHH`): `client_release_partial`, `client_release_milestone_partial`, `post_project_bond`, `reclaim_project_bond`, `slash_project_bond` y `withdraw_stream_batch`, con corrida real y 132 tests en verde |
 | 27 nov | Suma más · Función nueva | [`055aeb3`](https://github.com/rodyxdev/cumpleycobra/commit/055aeb3), [`93f0ddc`](https://github.com/rodyxdev/cumpleycobra/commit/93f0ddc) | Contrato v13 en testnet (`CANNTLUP…IFHF`): 10 funciones nuevas (`client_release_with_fee`, `client_release_milestone_fee`, `contribute_*`, `top_up_project_bond`, `extend_project_deadlines`, `withdraw_stream_to`, `refund_expired_projects_batch`, `mutual_split_project`) y 137 tests en verde |
-| 27 nov | Suma más · Función nueva | [`07a9325`](https://github.com/rodyxdev/cumpleycobra/commit/07a9325), [`bf30606`](https://github.com/rodyxdev/cumpleycobra/commit/bf30606), [`45d45a4`](https://github.com/rodyxdev/cumpleycobra/commit/45d45a4), [`a48d4a2`](https://github.com/rodyxdev/cumpleycobra/commit/a48d4a2) y este commit | Contrato v14 en testnet (`CCRL3UWL…FJJT`): 16 funciones nuevas en 4 lotes (concursos multi-ganador `Bounty`, ciclos `Retainer`, financiamiento colectivo `CrowdfundTask`, tareas en equipo `TeamTask` y `deposit_cliff_stream`), corrida real `1795845176` (`held` 0) y 142 tests en verde |
+| 27 nov | Suma más · Función nueva | [`07a9325`](https://github.com/rodyxdev/cumpleycobra/commit/07a9325), [`bf30606`](https://github.com/rodyxdev/cumpleycobra/commit/bf30606), [`45d45a4`](https://github.com/rodyxdev/cumpleycobra/commit/45d45a4), [`a48d4a2`](https://github.com/rodyxdev/cumpleycobra/commit/a48d4a2), [`b0c8ad3`](https://github.com/rodyxdev/cumpleycobra/commit/b0c8ad3) | Contrato v14 en testnet (`CCRL3UWL…FJJT`): 16 funciones nuevas en 4 lotes (concursos multi-ganador `Bounty`, ciclos `Retainer`, financiamiento colectivo `CrowdfundTask`, tareas en equipo `TeamTask` y `deposit_cliff_stream`), corrida real `1795845176` (`held` 0) y 142 tests en verde |
+| 27 nov | Mainnet · misión especial | [`45ce658`](https://github.com/rodyxdev/cumpleycobra/commit/45ce658), [`52aabca`](https://github.com/rodyxdev/cumpleycobra/commit/52aabca) | Contrato ligero desplegado en mainnet (`CAAP6Y24…6IYNX`, 12.5 XLM de subida) y las 5 funciones de `/mainnet` firmadas con Freighter: `deposit`, `top_up_task`, `extend_deadline`, `client_release` y `timeout_refund` (`docs/mainnet.md`). Misión entregada (+150) y «Ya estoy en mainnet» reclamado |
+| 27 nov | 05 · Ship it | [`ca1410d`](https://github.com/rodyxdev/cumpleycobra/commit/ca1410d) y el release [`v1.0.0`](https://github.com/rodyxdev/cumpleycobra/releases/tag/v1.0.0) | README con la edición en mainnet y release `v1.0.0` publicado antes de las 9:00 p. m. (+10); con todas las misiones y mainnet, Golden Ticket |
+| 28 nov | Suma más · Función nueva | [`078bbab`](https://github.com/rodyxdev/cumpleycobra/commit/078bbab), [`d6954e7`](https://github.com/rodyxdev/cumpleycobra/commit/d6954e7) | Contrato v15 en testnet (`CAQUWYA5…V3BC`): 6 funciones por lote, desplegadas y con corrida real (147 tests). **No se reclamaron:** el formulario de reclamos ya estaba cerrado |
+| 28 nov | Mainnet · cierre | [`0b3359c`](https://github.com/rodyxdev/cumpleycobra/commit/0b3359c) | Contrato de mainnet pausado ([`26160e55…`](https://stellar.expert/explorer/public/tx/26160e55d3b61ab67d4068523365e168d9f6ccd55036ff70de618d32d7826073)), saldo 0, cuenta del árbitro cerrada y sus 1.52 XLM devueltos ([`b6bc0702…`](https://stellar.expert/explorer/public/tx/b6bc07024c7b4024721e38ed832cb70e1dfecb748a82a021471e7e1623ba991f)); `/mainnet` en solo lectura |
 
 ## Funciones experimentales (por revisar)
 
@@ -98,3 +102,19 @@ Las funciones siguen en los contratos y sus tests siguen en el repositorio: solo
 | `mutual_cancel_project` | Alto | Es el `mutual_cancel` de proyectos, y `mutual_cancel` se rechazó |
 | `cancel_dispute`, `cancel_milestone_dispute` | Alto | Solo borran un valor guardado |
 | `get_milestone_dispute`, `get_projects` | No reclamar | Solo lectura |
+
+## Resultado final (leaderboard congelado, 28 de noviembre de 2026)
+
+| # | Proyecto | Puntos |
+| --- | --- | --- |
+| 01 | TrustTix | 1,896 |
+| 02 | Budi para Stellar | 1,825 |
+| 03 | TesorerIA | 1,411 |
+| **04** | **Cumple&Cobra** (mainnet + misiones, Golden Ticket) | **1,231** |
+| 05 | QRUTA | 1,121 |
+
+- **Golden Ticket** al Ship It Brunch (lunes 30 de noviembre, 9:00 a. m., CDMX): misiones 00 a 05 completas y mainnet.
+- **Funciones en testnet:** contratos v2 a v15. La última revisión del contrato v13 aprobó 6 de 10; las 4 rechazadas cayeron en una regla nueva del revisor: **cada operación cuenta una sola vez**, así que una variante firmada por otra parte (`client_release_with_fee`, `client_release_milestone_fee`), hacia otro destino (`withdraw_stream_to`) o un lote de un lote (`refund_expired_projects_batch`) no suma. Las 6 de v15 no se alcanzaron a reclamar.
+- **Mainnet:** edición experimental cerrada y sin fondos; ver `docs/mainnet.md`.
+- **Pendiente después del reto:** revisar qué funciones de v2 a v15 se integran al producto y cuáles se quedan como experimento (ninguna cambia los contratos ya desplegados ni el flujo en producción, que sigue usando v1).
+
