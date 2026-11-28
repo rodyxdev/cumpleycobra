@@ -14,7 +14,7 @@ El 27 de noviembre de 2026 lanzamos para todos, en la testnet de Stellar, la **v
 - **Cualquiera lo puede probar en 3 minutos** en https://cumpleycobra.vercel.app/probar, sin instalar nada y sin dinero real.
 - **Con evidencia:** un video de 60 a 90 segundos con una entrega rechazada y otra aprobada y pagada, y las transacciones verificables en stellar.expert.
 
-Mainnet todavía no: antes hay que separar la llave del árbitro de staging y de producción, auditar el contrato y revisar lo legal y lo fiscal.
+**En mainnet, edición experimental:** el 27 de noviembre desplegamos en la red principal de Stellar una edición ligera del contrato ([`CAAP6Y24…6IYNX`](https://stellar.expert/explorer/public/contract/CAAP6Y242FALZ4M46BAICKABWA5T2HG7VL62E3M6BSVG3XI77SA6IYNX)) con su propio árbitro. Se usa desde https://cumpleycobra.vercel.app/mainnet firmando con Freighter: `deposit`, `top_up_task`, `extend_deadline`, `client_release` y `timeout_refund`, con montos mínimos de XLM. Cómo usa el frontend cada función y sus transacciones: [`docs/mainnet.md`](docs/mainnet.md). El producto sigue en testnet: un lanzamiento real en mainnet exige auditar el contrato y revisar lo legal y lo fiscal.
 
 **Demo en línea:** https://cumpleycobra.vercel.app (backend: https://cumpleycobra-api-1017372721585.us-central1.run.app)
 
